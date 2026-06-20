@@ -1,0 +1,13 @@
+{
+  "name": "posturefixx-coaching",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "coaching-engine.js",
+  "scripts": {
+    "start": "node coaching-engine.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "@anthropic-ai/sdk": "^0.32.1"
+  }
+}
