@@ -24,8 +24,10 @@ const CLINICS = {
 };
 const APP_DETAILS = process.env.PHUB_APP_DETAILS || "posturefixx-coaching=dr.alexanderyu@gmail.com";
 
-// Generic GET against one clinic's PracticeHub. Returns the parsed JSON.
-async function phub(clinicName, path, params = {}) {
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Generic GET against one clinic's PracticeHub. Retries on 429 (rate limit).
+async function phub(clinicName, path, params = {}, attempt = 0) {
   const c = CLINICS[clinicName];
   if (!c) throw new Error(`unknown clinic "${clinicName}"`);
   if (!c.key) throw new Error(`no API key set for ${clinicName} (add PHUB_${clinicName.toUpperCase()}_KEY in Render)`);
@@ -38,6 +40,12 @@ async function phub(clinicName, path, params = {}) {
       "Accept": "application/json",
     },
   });
+  if (res.status === 429 && attempt < 5) {
+    const retryAfter = parseInt(res.headers.get("retry-after")) || 0;
+    const wait = retryAfter ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 8000); // backoff: 1s,2s,4s,8s
+    await sleep(wait);
+    return phub(clinicName, path, params, attempt + 1);
+  }
   const body = await res.text();
   if (!res.ok) throw new Error(`${clinicName} ${path} → HTTP ${res.status}: ${body.slice(0, 300)}`);
   try { return JSON.parse(body); } catch { throw new Error(`${clinicName} ${path} returned non-JSON: ${body.slice(0, 200)}`); }
@@ -51,15 +59,17 @@ function lastDaysRange(days = 14) {
   return `between:${f(start)},${f(end)}`;
 }
 
-// Pull ALL pages of a list endpoint (PracticeHub caps pages ~100 rows).
+// Pull ALL pages of a list endpoint — big pages, one at a time, gentle pace.
 async function phubAll(clinic, path, params = {}) {
-  let page = 1, all = [], guard = 0;
-  while (guard++ < 60) {
-    const r = await phub(clinic, path, { ...params, page });
+  let page = 1, all = [], pageLen = null, guard = 0;
+  while (guard++ < 200) {
+    const r = await phub(clinic, path, { ...params, page, page_size: 200 });
     const rows = r.data || r || [];
+    if (pageLen === null) pageLen = rows.length; // effective page size (API may cap below 200)
     all = all.concat(rows);
-    if (rows.length < 100) break; // last page
+    if (rows.length === 0 || rows.length < pageLen) break; // last page
     page++;
+    await sleep(350); // stay under the rate limit
   }
   return all;
 }
@@ -77,11 +87,10 @@ async function practitionerMap(clinic) {
 //  • status "processed" = a real visit; "cancelled" (or a cancelDate) = not.
 //  • de-duplicate by appointment id (same slot can appear twice, e.g. a cancel).
 async function computeKpis(clinic, days = 30) {
-  const [names, appts, types] = await Promise.all([
-    practitionerMap(clinic),
-    phubAll(clinic, "/appointments", { start: lastDaysRange(days) }),
-    phubAll(clinic, "/appointment_types", {}).catch(() => []),
-  ]);
+  // Sequential (not parallel) — a burst of simultaneous calls is what trips the rate limit.
+  const names = await practitionerMap(clinic);
+  const types = await phubAll(clinic, "/appointment_types", {}).catch(() => []);
+  const appts = await phubAll(clinic, "/appointments", { start: lastDaysRange(days) });
 
   // identify which appointment types are "intakes" (new-patient visits) by name
   const intakeTypeIds = new Set(
