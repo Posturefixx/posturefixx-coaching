@@ -151,11 +151,13 @@ async function computeKpis(clinic, days = 30) {
 // ── Simple password gate (these pages show patient data) ─────────────────────
 // Set DASHBOARD_PASSWORD in Render to lock the pages. Any username works.
 function gate(req, res, next) {
-  const pw = process.env.DASHBOARD_PASSWORD;
-  if (!pw) return next(); // not set yet → open, but you'll see a reminder on the page
+  const pw = process.env.DASHBOARD_PASSWORD;   // owner (Alex)
+  const mpw = process.env.MANAGER_PASSWORD;     // manager (Renata) — her own login
+  if (!pw && !mpw) return next(); // none set yet → open, but you'll see a reminder on the page
   const hdr = req.headers.authorization || "";
   const got = Buffer.from(hdr.split(" ")[1] || "", "base64").toString().split(":")[1];
-  if (got === pw) return next();
+  if (pw && got === pw)   { req.role = "owner";   return next(); }
+  if (mpw && got === mpw) { req.role = "manager"; return next(); }
   res.set("WWW-Authenticate", 'Basic realm="Posturefixx"').status(401).send("Password required");
 }
 
@@ -457,152 +459,227 @@ app.get("/kpi", gate, async (req, res) => {
 });
 
 // ── PLAN DATA — one PracticeHub pull, returns each chiro's real numbers as JSON ─
-// the /plan page calls this once, then the slider recomputes goals in the browser.
-const PLAN_DAYS = {            // days worked per week → a soft weekly-visit cap
-  Myles: 3.5, Lara: 3.5, Matthew: 4, Alex: 3,
-};
-const CAP_PER_DAY = 9;        // ~comfortable patients per working day (tune anytime)
+const PLAN_DAYS = { Myles: 3.5, Lara: 3.5, Matthew: 4, Alex: 3 }; // days worked/week
+const MAX_PER_DAY = 45;   // a chiro can realistically see ~40-50/day — change here anytime
 
 app.get("/plan/data", gate, async (_req, res) => {
   try {
-    const base = await chiroBaselines(30);  // sequential = rate-limit safe
+    const base = await chiroBaselines(30);
     res.json({
       price: PRICE_PER_VISIT,
+      maxPerDay: MAX_PER_DAY,
       chiros: base.map(b => ({
         n: b.n, clinics: b.clinics, visits: b.visits, intakes: b.intakes,
         pva: b.pva, nowWeekly: Math.round(b.visits / 4.33),
         days: PLAN_DAYS[b.n] || 3.5,
-        capWeekly: Math.round((PLAN_DAYS[b.n] || 3.5) * CAP_PER_DAY),
         phone: !!b.phone, smsClinic: b.smsClinic,
       })),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── PLAN — the dashboard: slider → projection stats + per-chiro goals + send ───
-app.get("/plan", gate, (_req, res) => {
+// Embedded P&L (bank-derived, operating basis) + 2026 monthly revenue for the trajectory
+const PL = {"Amstelveen": {"2025": {"rev": 336619, "op": 92859, "exp": {"Personnel \u00b7 staff": 46691, "Other/Misc": 46449, "Personnel \u00b7 contractor chiro": 42924, "Marketing": 34786, "Rent": 33958, "Bank/Payment fees": 15741, "Travel/Transport": 6274, "Accounting/Professional": 5716, "Supplies/Retail": 4738, "Insurance": 3662, "Software/SaaS": 2711}, "below": {"Intercompany/Owner": 59519, "Tax": 10513, "Financing/Loan repay": 15496, "Internal \u00b7 transfer/loan in": -1432}}, "2026": {"rev": 167304, "op": 46401, "exp": {"Personnel \u00b7 staff": 34567, "Personnel \u00b7 contractor chiro": 18697, "Rent": 14821, "Marketing": 12676, "Other/Misc": 10575, "Accounting/Professional": 8295, "Bank/Payment fees": 7815, "Supplies/Retail": 5795, "Travel/Transport": 4865, "Insurance": 1567, "Software/SaaS": 1224}, "below": {"Financing/Loan repay": 6825, "Intercompany/Owner": 19500, "Internal \u00b7 transfer/loan in": -286, "Tax": 12123}}}, "Utrecht": {"2025": {"rev": 230704, "op": 45155, "exp": {"Personnel \u00b7 contractor chiro": 63660, "Personnel \u00b7 staff": 52861, "Marketing": 20327, "Other/Misc": 15133, "Bank/Payment fees": 13054, "Accounting/Professional": 9229, "Rent": 3944, "Supplies/Retail": 3538, "Software/SaaS": 1450, "Travel/Transport": 1305, "Insurance": 699, "Energy/Utilities": 210}, "below": {"Tax": 16855, "Financing/Loan repay": 629, "Intercompany/Owner": 31954}}, "2026": {"rev": 108567, "op": 17336, "exp": {"Personnel \u00b7 staff": 37926, "Personnel \u00b7 contractor chiro": 22782, "Marketing": 8966, "Bank/Payment fees": 6664, "Accounting/Professional": 6448, "Other/Misc": 4429, "Rent": 1294, "Supplies/Retail": 1020, "Travel/Transport": 667, "Software/SaaS": 646, "Insurance": 305}, "below": {"Financing/Loan repay": 358, "Tax": 11447, "Intercompany/Owner": 1500}}}, "Bussum": {"2025": {"rev": 167853, "op": 55260, "exp": {"Personnel \u00b7 contractor chiro": 38246, "Personnel \u00b7 staff": 25666, "Marketing": 15233, "Bank/Payment fees": 10135, "Accounting/Professional": 6676, "Other/Misc": 5143, "Energy/Utilities": 3596, "Travel/Transport": 3011, "Rent": 2377, "Supplies/Retail": 1494, "Software/SaaS": 785, "Insurance": 231}, "below": {"Financing/Loan repay": 37979, "Tax": 10596, "Intercompany/Owner": 3555, "Internal \u00b7 transfer/loan in": -1000}}, "2026": {"rev": 69072, "op": 26883, "exp": {"Personnel \u00b7 staff": 11068, "Personnel \u00b7 contractor chiro": 10622, "Marketing": 6110, "Bank/Payment fees": 4452, "Accounting/Professional": 3151, "Other/Misc": 2200, "Travel/Transport": 2099, "Energy/Utilities": 1581, "Software/SaaS": 364, "Insurance": 231, "Rent": 200}, "below": {"Financing/Loan repay": 12290, "Tax": 5255, "Intercompany/Owner": 7500}}}, "Rotterdam": {"2025": {"rev": 32828, "op": -18862, "exp": {"Supplies/Retail": 22514, "Personnel \u00b7 staff": 12921, "Rent": 7154, "Other/Misc": 5271, "Marketing": 2295, "Accounting/Professional": 862, "Software/SaaS": 495}, "below": {"Tax": 3994, "Financing/Loan repay": 1030, "Intercompany/Owner": 1150, "Internal \u00b7 transfer/loan in": -25320}}, "2026": {"rev": 79551, "op": 34444, "exp": {"Personnel \u00b7 staff": 12899, "Marketing": 10246, "Rent": 8821, "Other/Misc": 5905, "Accounting/Professional": 3842, "Supplies/Retail": 2327, "Bank/Payment fees": 422, "Software/SaaS": 214}, "below": {"Financing/Loan repay": 2527, "Intercompany/Owner": 14900, "Tax": 4947}}}, "Holding": {"2025": {"rev": 161243, "op": 94981, "exp": {"Personnel \u00b7 contractor chiro": 28680, "Supplies/Retail": 16734, "Other/Misc": 10478, "Accounting/Professional": 4037, "Marketing": 2622, "Travel/Transport": 1432, "Rent": 1431, "Bank/Payment fees": 772}, "below": {"Intercompany/Owner": 48010, "Tax": 18904, "Financing/Loan repay": 27488}}, "2026": {"rev": 107336, "op": 51569, "exp": {"Personnel \u00b7 contractor chiro": 37736, "Other/Misc": 10678, "Personnel \u00b7 staff": 4229, "Accounting/Professional": 1516, "Travel/Transport": 1120, "Rent": 250}, "below": {"Tax": 14895, "Intercompany/Owner": 20339, "Financing/Loan repay": 4883}}}};
+const PL_ORDER = ["Amstelveen", "Utrecht", "Bussum", "Rotterdam", "Holding"];
+const PL_LABEL = {"Holding": "Notable (holding)"};
+const DATA_ASOF = "Jun 2026";
+const MONTHLY_2026 = [71488, 65154, 80199, 75479, 78357];
+const PACE = MONTHLY_2026.reduce((a,b)=>a+b,0)/MONTHLY_2026.length;
+
+app.get("/plan", gate, (req, res) => {
+  const role = req.role || "owner";
   res.send(`<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Posturefixx — Plan</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Posturefixx — Plan</title>
 <style>
   :root{--ink:#16202E;--mut:#6B7686;--line:#E5E9F0;--blue:#2563EB;--ok:#16A34A;--str:#D97706;--over:#DC2626;--bg:#F7F9FC}
-  *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);margin:0;padding:32px 18px;line-height:1.5}
-  .wrap{max-width:760px;margin:0 auto}
-  h1{font-size:22px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 24px;font-size:14px}
+  *{box-sizing:border-box} body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);margin:0;padding:28px 16px;line-height:1.5}
+  .wrap{max-width:780px;margin:0 auto} h1{font-size:22px;margin:0 0 2px} .sub{color:var(--mut);margin:0 0 18px;font-size:14px}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+  .tab{padding:8px 14px;border:1px solid var(--line);background:#fff;border-radius:999px;cursor:pointer;font-size:13px;font-weight:600;color:var(--mut)}
+  .tab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
   .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+  .advice{background:linear-gradient(180deg,#fff,#FBFCFE);border:1px solid var(--line);border-left:4px solid var(--blue)}
+  .advice h3{margin:0 0 10px;font-size:15px} .advice ul{margin:0;padding:0;list-style:none}
+  .advice li{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px;display:flex;gap:10px}
+  .advice li:last-child{border-bottom:none} .advice .ic{flex:none;width:20px;text-align:center}
   .slider-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
-  .target{font-size:30px;font-weight:700}
-  input[type=range]{width:100%;accent-color:var(--blue);height:6px}
+  .target{font-size:30px;font-weight:700} input[type=range]{width:100%;accent-color:var(--blue);height:6px}
   .ticks{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin-top:4px}
   .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:8px}
-  .stat{background:var(--bg);border-radius:10px;padding:12px}
-  .stat .v{font-size:20px;font-weight:700} .stat .l{color:var(--mut);font-size:12px}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line)}
-  th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
-  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .stat{background:var(--bg);border-radius:10px;padding:12px} .stat .v{font-size:20px;font-weight:700} .stat .l{color:var(--mut);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:14px} th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em} td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
   .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
   .tag.ok{background:#DCFCE7;color:var(--ok)} .tag.stretch{background:#FEF3C7;color:var(--str)} .tag.over{background:#FEE2E2;color:var(--over)}
-  .arrow{color:var(--mut)}
-  .btn{display:inline-block;border:none;background:var(--blue);color:#fff;font-size:15px;font-weight:600;padding:13px 22px;border-radius:10px;cursor:pointer;text-decoration:none}
-  .btn.ghost{background:#fff;color:var(--blue);border:1px solid var(--blue)}
-  .bars{margin-top:8px}
-  .barrow{display:flex;align-items:center;gap:10px;margin:7px 0}
-  .barrow .nm{width:64px;font-size:13px;font-weight:600}
-  .track{flex:1;background:var(--bg);border-radius:6px;position:relative;height:22px}
-  .bar{position:absolute;left:0;top:0;height:100%;border-radius:6px;background:#BFD3FF}
-  .bar.goal{background:var(--blue);opacity:.85}
-  .cap{position:absolute;top:-3px;height:28px;width:2px;background:var(--over)}
-  .legend{color:var(--mut);font-size:12px;margin-top:6px}
-  #err{color:var(--over);font-size:14px}
-  .loading{color:var(--mut)}
+  .arrow{color:var(--mut)} .btn{display:inline-block;border:none;background:var(--blue);color:#fff;font-size:15px;font-weight:600;padding:13px 22px;border-radius:10px;cursor:pointer;text-decoration:none}
+  .legend{color:var(--mut);font-size:12.5px;margin-top:10px;line-height:1.6} .legend b{color:var(--ink)}
+  .err{color:var(--over);font-size:14px} .loading{color:var(--mut)}
+  .pl-op{font-weight:700} .pl-op td{border-top:2px solid var(--ink)} .memo td{color:var(--mut);font-size:13px} .pos{color:var(--ok)} .neg{color:var(--over)}
+  svg text{font-family:inherit}
 </style></head><body><div class="wrap">
   <h1>Posturefixx — Plan</h1>
-  <p class="sub">Live numbers from PracticeHub. Move the slider to set a yearly revenue target; everyone's weekly goal updates. Review the messages, then send by SMS.</p>
-  <div id="lock"></div>
+  <p class="sub">${role==="manager"?"Manager view · ":""}Live PracticeHub numbers and bank-derived P&amp;L · figures as of ${DATA_ASOF}.</p>
+  <div class="tabs" id="tabs"></div>
 
-  <div class="card">
-    <div class="slider-row"><div>Yearly revenue target</div><div class="target" id="tgt">€1.10M</div></div>
-    <input type="range" id="slider" min="700000" max="1500000" step="25000" value="1100000">
-    <div class="ticks"><span>€0.70M</span><span>€1.10M</span><span>€1.50M</span></div>
-    <div class="stats">
-      <div class="stat"><div class="v" id="s-now">–</div><div class="l">visits / month now</div></div>
-      <div class="stat"><div class="v" id="s-need">–</div><div class="l">visits / month needed</div></div>
-      <div class="stat"><div class="v" id="s-gap">–</div><div class="l">monthly gap</div></div>
+  <section data-tab="Plan">
+    <div class="card advice">
+      <h3>What to focus on</h3>
+      <ul id="advice"><li><span class="ic">⏳</span><span>Reading your numbers…</span></li></ul>
     </div>
-  </div>
+    <div class="card">
+      <div class="slider-row"><div>Yearly revenue target</div><div class="target" id="tgt">€1.10M</div></div>
+      <input type="range" id="slider" min="700000" max="1500000" step="25000" value="1100000">
+      <div class="ticks"><span>€0.70M</span><span>€1.10M</span><span>€1.50M</span></div>
+      <div class="stats">
+        <div class="stat"><div class="v" id="s-pace">–</div><div class="l">on current pace (yr)</div></div>
+        <div class="stat"><div class="v" id="s-need">–</div><div class="l">visits / month needed</div></div>
+        <div class="stat"><div class="v" id="s-gap">–</div><div class="l">monthly visit gap</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <b>Revenue trajectory</b>
+      <p class="sub" style="margin:4px 0 6px">Solid = where this year lands if you hold your current pace. Dashed = the path to the target on the slider.</p>
+      <svg id="traj" viewBox="0 0 700 260" width="100%"></svg>
+    </div>
+    <div class="card">
+      <b>Per-chiropractor goals</b><div class="err" id="err"></div>
+      <table id="tbl"><thead><tr><th>Chiro</th><th class="num">Now /day</th><th class="num">Goal /day</th><th class="num">Days</th><th class="num">PVA → goal</th><th>Load</th></tr></thead>
+        <tbody><tr><td colspan="6" class="loading">Loading live PracticeHub numbers… (first load ~30s on the free tier)</td></tr></tbody></table>
+      <div class="bars" id="bars"></div>
+      <div class="legend">
+        <b>How to read it:</b> these are visits <b>per working day</b>. A chiro can comfortably see up to ~<b>${MAX_PER_DAY}/day</b> (the <b style="color:var(--over)">red line</b>),
+        so capacity is rarely the limit — most of your team sits well under it. That means the constraint on growth isn't your chiros' capacity,
+        it's <b>filling their days</b> (more intakes converting to care + better retention). <span class="tag over">Over</span> only shows if a goal would push someone past a realistic full day.
+      </div>
+    </div>
+    <div class="card">
+      <b>Push coaching to the team</b>
+      <p class="sub" style="margin:6px 0 14px">Opens the review screen at your chosen target — you see each drafted message and confirm before anything sends.</p>
+      <a class="btn" id="send" href="/coach">Review &amp; send via SMS →</a>
+    </div>
+  </section>
 
-  <div class="card">
-    <b>Per-chiropractor goals</b>
-    <div id="err"></div>
-    <table id="tbl"><thead><tr>
-      <th>Chiro</th><th class="num">Now /wk</th><th class="num">Goal /wk</th><th class="num">PVA now → goal</th><th>Load</th>
-    </tr></thead><tbody><tr><td colspan="5" class="loading">Loading live PracticeHub numbers… (first load can take ~30s on the free tier)</td></tr></tbody></table>
-    <div class="bars" id="bars"></div>
-    <div class="legend">Light bar = now · Blue bar = goal · Red line = comfortable weekly capacity (${CAP_PER_DAY}/day × days worked)</div>
-  </div>
-
-  <div class="card">
-    <b>Push coaching to the team</b>
-    <p class="sub" style="margin:6px 0 14px">Opens the review screen at your chosen target — you'll see each drafted message and confirm before anything sends.</p>
-    <a class="btn" id="send" href="#">Review &amp; send via SMS →</a>
-    <a class="btn ghost" href="/coach" style="margin-left:8px">Open coach page</a>
-  </div>
-  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/coach">/coach</a> · <a href="/kpi?clinic=Rotterdam">/kpi</a> · <a href="/phub-test">/phub-test</a></p>
+  <div id="pl-tabs"></div>
+  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/coach">/coach</a> · <a href="/kpi?clinic=Rotterdam">/kpi</a></p>
 </div>
 <script>
+  var PL={"Amstelveen": {"2025": {"rev": 336619, "op": 92859, "exp": {"Personnel \u00b7 staff": 46691, "Other/Misc": 46449, "Personnel \u00b7 contractor chiro": 42924, "Marketing": 34786, "Rent": 33958, "Bank/Payment fees": 15741, "Travel/Transport": 6274, "Accounting/Professional": 5716, "Supplies/Retail": 4738, "Insurance": 3662, "Software/SaaS": 2711}, "below": {"Intercompany/Owner": 59519, "Tax": 10513, "Financing/Loan repay": 15496, "Internal \u00b7 transfer/loan in": -1432}}, "2026": {"rev": 167304, "op": 46401, "exp": {"Personnel \u00b7 staff": 34567, "Personnel \u00b7 contractor chiro": 18697, "Rent": 14821, "Marketing": 12676, "Other/Misc": 10575, "Accounting/Professional": 8295, "Bank/Payment fees": 7815, "Supplies/Retail": 5795, "Travel/Transport": 4865, "Insurance": 1567, "Software/SaaS": 1224}, "below": {"Financing/Loan repay": 6825, "Intercompany/Owner": 19500, "Internal \u00b7 transfer/loan in": -286, "Tax": 12123}}}, "Utrecht": {"2025": {"rev": 230704, "op": 45155, "exp": {"Personnel \u00b7 contractor chiro": 63660, "Personnel \u00b7 staff": 52861, "Marketing": 20327, "Other/Misc": 15133, "Bank/Payment fees": 13054, "Accounting/Professional": 9229, "Rent": 3944, "Supplies/Retail": 3538, "Software/SaaS": 1450, "Travel/Transport": 1305, "Insurance": 699, "Energy/Utilities": 210}, "below": {"Tax": 16855, "Financing/Loan repay": 629, "Intercompany/Owner": 31954}}, "2026": {"rev": 108567, "op": 17336, "exp": {"Personnel \u00b7 staff": 37926, "Personnel \u00b7 contractor chiro": 22782, "Marketing": 8966, "Bank/Payment fees": 6664, "Accounting/Professional": 6448, "Other/Misc": 4429, "Rent": 1294, "Supplies/Retail": 1020, "Travel/Transport": 667, "Software/SaaS": 646, "Insurance": 305}, "below": {"Financing/Loan repay": 358, "Tax": 11447, "Intercompany/Owner": 1500}}}, "Bussum": {"2025": {"rev": 167853, "op": 55260, "exp": {"Personnel \u00b7 contractor chiro": 38246, "Personnel \u00b7 staff": 25666, "Marketing": 15233, "Bank/Payment fees": 10135, "Accounting/Professional": 6676, "Other/Misc": 5143, "Energy/Utilities": 3596, "Travel/Transport": 3011, "Rent": 2377, "Supplies/Retail": 1494, "Software/SaaS": 785, "Insurance": 231}, "below": {"Financing/Loan repay": 37979, "Tax": 10596, "Intercompany/Owner": 3555, "Internal \u00b7 transfer/loan in": -1000}}, "2026": {"rev": 69072, "op": 26883, "exp": {"Personnel \u00b7 staff": 11068, "Personnel \u00b7 contractor chiro": 10622, "Marketing": 6110, "Bank/Payment fees": 4452, "Accounting/Professional": 3151, "Other/Misc": 2200, "Travel/Transport": 2099, "Energy/Utilities": 1581, "Software/SaaS": 364, "Insurance": 231, "Rent": 200}, "below": {"Financing/Loan repay": 12290, "Tax": 5255, "Intercompany/Owner": 7500}}}, "Rotterdam": {"2025": {"rev": 32828, "op": -18862, "exp": {"Supplies/Retail": 22514, "Personnel \u00b7 staff": 12921, "Rent": 7154, "Other/Misc": 5271, "Marketing": 2295, "Accounting/Professional": 862, "Software/SaaS": 495}, "below": {"Tax": 3994, "Financing/Loan repay": 1030, "Intercompany/Owner": 1150, "Internal \u00b7 transfer/loan in": -25320}}, "2026": {"rev": 79551, "op": 34444, "exp": {"Personnel \u00b7 staff": 12899, "Marketing": 10246, "Rent": 8821, "Other/Misc": 5905, "Accounting/Professional": 3842, "Supplies/Retail": 2327, "Bank/Payment fees": 422, "Software/SaaS": 214}, "below": {"Financing/Loan repay": 2527, "Intercompany/Owner": 14900, "Tax": 4947}}}, "Holding": {"2025": {"rev": 161243, "op": 94981, "exp": {"Personnel \u00b7 contractor chiro": 28680, "Supplies/Retail": 16734, "Other/Misc": 10478, "Accounting/Professional": 4037, "Marketing": 2622, "Travel/Transport": 1432, "Rent": 1431, "Bank/Payment fees": 772}, "below": {"Intercompany/Owner": 48010, "Tax": 18904, "Financing/Loan repay": 27488}}, "2026": {"rev": 107336, "op": 51569, "exp": {"Personnel \u00b7 contractor chiro": 37736, "Other/Misc": 10678, "Personnel \u00b7 staff": 4229, "Accounting/Professional": 1516, "Travel/Transport": 1120, "Rent": 250}, "below": {"Tax": 14895, "Intercompany/Owner": 20339, "Financing/Loan repay": 4883}}}}, ORDER=["Amstelveen", "Utrecht", "Bussum", "Rotterdam", "Holding"], LABEL={"Holding": "Notable (holding)"}, MONTHLY=[71488, 65154, 80199, 75479, 78357], PACE=74135.4, ASOF="Jun 2026";
   var DATA=null;
   var fmtM=function(n){return "€"+(n/1e6).toFixed(2)+"M"};
-  function recompute(){
-    if(!DATA) return;
-    var target=+document.getElementById('slider').value;
-    document.getElementById('tgt').textContent=fmtM(target);
-    document.getElementById('send').href='/coach?target='+target;
-    var sumV=DATA.chiros.reduce(function(s,b){return s+b.visits},0)||1;
-    var needMonthly=(target/12)/DATA.price;
-    var scale=needMonthly/sumV;
-    document.getElementById('s-now').textContent=Math.round(sumV);
-    document.getElementById('s-need').textContent=Math.round(needMonthly);
-    var gap=Math.round(needMonthly-sumV);
-    document.getElementById('s-gap').textContent=(gap>=0?'+':'')+gap;
-    var rows='',bars='';
-    var maxBar=0;
-    DATA.chiros.forEach(function(b){
-      var goalMonthly=b.visits*scale;
-      var goalWeekly=Math.round(goalMonthly/4.33);
-      maxBar=Math.max(maxBar,goalWeekly,b.nowWeekly,b.capWeekly);
-    });
-    DATA.chiros.forEach(function(b){
-      var goalMonthly=b.visits*scale;
-      var goalWeekly=Math.round(goalMonthly/4.33);
-      var goalPva=b.intakes?(goalMonthly/b.intakes):0;
-      var load='ok',lab='OK';
-      if(goalWeekly>b.capWeekly){load='over';lab='Over capacity'}
-      else if(goalWeekly>0.85*b.capWeekly){load='stretch';lab='Stretch'}
-      rows+='<tr><td><b>'+b.n+'</b><br><span class="arrow" style="font-size:12px">'+b.clinics.join(' + ')+'</span></td>'+
-            '<td class="num">'+b.nowWeekly+'</td>'+
-            '<td class="num"><b>'+goalWeekly+'</b></td>'+
-            '<td class="num">'+b.pva+' <span class="arrow">→</span> '+goalPva.toFixed(1)+'</td>'+
-            '<td><span class="tag '+load+'">'+lab+'</span></td></tr>';
-      var pctNow=(b.nowWeekly/maxBar*100),pctGoal=(goalWeekly/maxBar*100),pctCap=(b.capWeekly/maxBar*100);
-      bars+='<div class="barrow"><div class="nm">'+b.n+'</div><div class="track">'+
-            '<div class="bar" style="width:'+pctNow+'%"></div>'+
-            '<div class="bar goal" style="width:'+pctGoal+'%"></div>'+
-            '<div class="cap" style="left:'+pctCap+'%"></div></div></div>';
-    });
-    document.querySelector('#tbl tbody').innerHTML=rows;
-    document.getElementById('bars').innerHTML=bars;
+  var eur=function(n){return (n<0?"-":"")+"€"+Math.abs(Math.round(n)).toLocaleString("en-US")};
+
+  var tabNames=["Plan"].concat(ORDER.map(function(e){return LABEL[e]||e}));
+  var tabsEl=document.getElementById("tabs");
+  function show(name){
+    Array.prototype.forEach.call(document.querySelectorAll("[data-tab]"),function(s){s.style.display=(s.getAttribute("data-tab")===name)?"":"none"});
+    Array.prototype.forEach.call(tabsEl.children,function(b){b.className="tab"+(b.textContent===name?" on":"")});
+    if(name==="Plan") drawTraj();
   }
-  document.getElementById('slider').addEventListener('input',recompute);
-  fetch('/plan/data').then(function(r){return r.json()}).then(function(d){
-    if(d.error){document.getElementById('err').textContent='PracticeHub error: '+d.error;
-      document.querySelector('#tbl tbody').innerHTML='';return;}
-    DATA=d;
-    if(d.chiros.some(function(c){return !c.phone})) 
-      document.getElementById('lock').innerHTML='';
-    recompute();
-  }).catch(function(e){document.getElementById('err').textContent='Could not load: '+e});
+  tabNames.forEach(function(name){var b=document.createElement("div");b.className="tab";b.textContent=name;b.onclick=function(){show(name)};tabsEl.appendChild(b);});
+
+  // ---- P&L tabs ----
+  var plWrap=document.getElementById("pl-tabs");
+  ORDER.forEach(function(e){
+    var d=PL[e], sec=document.createElement("section"); sec.setAttribute("data-tab",LABEL[e]||e); sec.style.display="none";
+    function col(y){
+      var p=d[y]; if(!p) return "";
+      var rows="<tr><td>Revenue</td><td class='num'><b>"+eur(p.rev)+"</b></td></tr>";
+      Object.keys(p.exp).forEach(function(k){ rows+="<tr><td style='padding-left:16px;color:var(--mut)'>"+k+"</td><td class='num'>"+eur(-p.exp[k])+"</td></tr>"; });
+      rows+="<tr class='pl-op'><td>Operating profit</td><td class='num "+(p.op>=0?"pos":"neg")+"'>"+eur(p.op)+"</td></tr>";
+      var below=Object.keys(p.below||{});
+      if(below.length){ rows+="<tr class='memo'><td colspan='2' style='padding-top:10px'><i>Below the line (not in operating profit):</i></td></tr>";
+        below.forEach(function(k){ rows+="<tr class='memo'><td style='padding-left:16px'>"+k+"</td><td class='num'>"+eur(-p.below[k])+"</td></tr>"; }); }
+      return "<div class='card' style='flex:1;min-width:280px'><b>"+y+(y==="2026"?" (YTD)":"")+"</b><table style='margin-top:8px'>"+rows+"</table></div>";
+    }
+    sec.innerHTML="<h2 style='font-size:18px;margin:4px 0 2px'>"+(LABEL[e]||e)+" — P&L</h2>"+
+      "<p class='sub'>Operating basis from your bank data (as of "+ASOF+"). Excludes owner draws, tax and loan repayments (shown below the line). "+(e==="Holding"?"Note: Notable's revenue is mostly intra-group management fees + table sales, so don't add it to the clinics.":"")+"</p>"+
+      "<div style='display:flex;gap:14px;flex-wrap:wrap'>"+col("2026")+col("2025")+"</div>";
+    plWrap.appendChild(sec);
+  });
+
+  // ---- trajectory ----
+  function drawTraj(){
+    var target=+document.getElementById("slider").value, W=700,H=260,padL=54,padR=16,padT=14,padB=28,n=12;
+    var actual=MONTHLY.slice();
+    var curCum=[],t=0; for(var m=0;m<n;m++){ t+=(m<actual.length?actual[m]:PACE); curCum.push(t); }
+    var tgtCum=[],s=0,tm=target/12; for(var m=0;m<n;m++){ s+=tm; tgtCum.push(s); }
+    var maxY=Math.max(curCum[n-1],tgtCum[n-1])*1.05;
+    var x=function(i){return padL+(W-padL-padR)*i/(n-1)}, y=function(v){return H-padB-(H-padT-padB)*v/maxY};
+    var path=function(arr){return arr.map(function(v,i){return (i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1)}).join(" ")};
+    var MN=["J","F","M","A","M","J","J","A","S","O","N","D"],g="";
+    for(var k=0;k<=4;k++){ var gv=maxY*k/4,gy=y(gv); g+="<line x1='"+padL+"' y1='"+gy+"' x2='"+(W-padR)+"' y2='"+gy+"' stroke='#EEF1F5'/>"+
+      "<text x='"+(padL-8)+"' y='"+(gy+4)+"' text-anchor='end' font-size='11' fill='#9AA4B2'>€"+Math.round(gv/1000)+"k</text>"; }
+    for(var i=0;i<n;i++){ g+="<text x='"+x(i)+"' y='"+(H-8)+"' text-anchor='middle' font-size='11' fill='#9AA4B2'>"+MN[i]+"</text>"; }
+    var solid=curCum.slice(0,actual.length), off=actual.length-1, proj=curCum.slice(off);
+    g+="<path d='"+("M"+x(0)+" "+y(curCum[0])+" "+solid.map(function(v,i){return "L"+x(i).toFixed(1)+" "+y(v).toFixed(1)}).join(" "))+"' fill='none' stroke='#16202E' stroke-width='2.5'/>";
+    g+="<path d='"+proj.map(function(v,i){var ii=i+off;return (i?"L":"M")+x(ii).toFixed(1)+" "+y(v).toFixed(1)}).join(" ")+"' fill='none' stroke='#16202E' stroke-width='2' stroke-dasharray='2 4' opacity='.5'/>";
+    g+="<path d='"+path(tgtCum)+"' fill='none' stroke='#2563EB' stroke-width='2' stroke-dasharray='6 5'/>";
+    g+="<text x='"+(W-padR)+"' y='"+(y(curCum[n-1])-6)+"' text-anchor='end' font-size='12' font-weight='700' fill='#16202E'>pace "+fmtM(curCum[n-1])+"</text>";
+    g+="<text x='"+(W-padR)+"' y='"+(y(tgtCum[n-1])-6)+"' text-anchor='end' font-size='12' font-weight='700' fill='#2563EB'>target "+fmtM(tgtCum[n-1])+"</text>";
+    document.getElementById("traj").innerHTML=g;
+  }
+
+  // ---- advice (rules-based, from P&L + live chiros + trajectory) ----
+  function buildAdvice(target){
+    var out=[];
+    var paceYr=PACE*12, gapYr=target-paceYr;
+    if(gapYr>15000) out.push(["📈","On current pace you'll land near <b>"+fmtM(paceYr)+"</b>. Your <b>"+fmtM(target)+"</b> target needs about <b>"+Math.round((gapYr/12)/59)+" more visits/month</b> — push it through retention, not just new intakes."]);
+    else out.push(["✅","You're tracking at <b>"+fmtM(paceYr)+"</b> — at or above the <b>"+fmtM(target)+"</b> target. Hold the line; protect retention so it sticks."]);
+    // thinnest-margin clinic (exclude Holding)
+    var worst=null;
+    ORDER.forEach(function(e){ if(e==="Holding")return; var p=PL[e]&&PL[e]["2026"]; if(!p||p.rev<=0)return; var m=p.op/p.rev; if(!worst||m<worst.m) worst={e:e,m:m,p:p}; });
+    if(worst){ var topCost=Object.keys(worst.p.exp)[0]; out.push(["🩺","<b>"+worst.e+"</b> is your thinnest margin (<b>"+Math.round(worst.m*100)+"%</b> operating). Its biggest cost is "+topCost+". This is the clinic to fix first — coverage and conversion, not more ad spend."]); }
+    // live chiro signals
+    if(DATA){
+      var low=DATA.chiros.slice().sort(function(a,b){return a.pva-b.pva})[0];
+      if(low) out.push(["🔁","Lowest retention is <b>"+low.n+"</b> (PVA <b>"+low.pva+"</b>) at "+low.clinics.join(" + ")+". Lifting that one number is the cheapest growth you have — every point is free visits."]);
+      var sumV=DATA.chiros.reduce(function(s,b){return s+b.visits},0)||1, need=(target/12)/DATA.price, scale=need/sumV;
+      var anyOver=DATA.chiros.some(function(b){return (b.visits*scale/4.33)/b.days > 0.9*DATA.maxPerDay;});
+      if(anyOver) out.push(["⚠️","At this target someone is pushed past a realistic full day — add a chiropractor (Amstelveen is the likeliest spot) rather than overloading."]);
+      else out.push(["🟢","Your team has headroom — these goals sit well under a full day. The job is <b>filling the days</b>: intake→care conversion (the CA track) and retention."]);
+    }
+    return out;
+  }
+  function renderAdvice(target){
+    var ul=document.getElementById("advice"); if(!ul) return;
+    ul.innerHTML=buildAdvice(target).map(function(a){return "<li><span class='ic'>"+a[0]+"</span><span>"+a[1]+"</span></li>"}).join("");
+  }
+
+  // ---- slider recompute ----
+  function recompute(){
+    document.getElementById("tgt").textContent=fmtM(+slider.value);
+    document.getElementById("send").href="/coach?target="+slider.value;
+    document.getElementById("s-pace").textContent=fmtM(PACE*12);
+    drawTraj(); renderAdvice(+slider.value);
+    if(!DATA) return;
+    var target=+slider.value, MAX=DATA.maxPerDay;
+    var sumV=DATA.chiros.reduce(function(s,b){return s+b.visits},0)||1, needMonthly=(target/12)/DATA.price, scale=needMonthly/sumV;
+    document.getElementById("s-need").textContent=Math.round(needMonthly);
+    var gap=Math.round(needMonthly-sumV); document.getElementById("s-gap").textContent=(gap>=0?"+":"")+gap;
+    var rows="",bars="";
+    DATA.chiros.forEach(function(b){
+      var goalWeekly=b.visits*scale/4.33, nowDay=b.nowWeekly/b.days, goalDay=goalWeekly/b.days;
+      var goalPva=b.intakes?(b.visits*scale/b.intakes):0;
+      var load="ok",lab="OK"; if(goalDay>0.9*MAX){load="over";lab="Over"} else if(goalDay>0.7*MAX){load="stretch";lab="Stretch"}
+      rows+="<tr><td><b>"+b.n+"</b><br><span class='arrow' style='font-size:12px'>"+b.clinics.join(" + ")+"</span></td>"+
+            "<td class='num'>"+nowDay.toFixed(0)+"</td><td class='num'><b>"+goalDay.toFixed(0)+"</b></td><td class='num'>"+b.days+"</td>"+
+            "<td class='num'>"+b.pva+" <span class='arrow'>→</span> "+goalPva.toFixed(1)+"</td><td><span class='tag "+load+"'>"+lab+"</span></td></tr>";
+      var pN=nowDay/MAX*100,pG=goalDay/MAX*100;
+      bars+="<div style='display:flex;align-items:center;gap:10px;margin:7px 0'><div style='width:64px;font-size:13px;font-weight:600'>"+b.n+"</div>"+
+            "<div style='flex:1;background:var(--bg);border-radius:6px;position:relative;height:22px'>"+
+            "<div style='position:absolute;left:0;top:0;height:100%;border-radius:6px;background:#BFD3FF;width:"+Math.min(100,pN)+"%'></div>"+
+            "<div style='position:absolute;left:0;top:0;height:100%;border-radius:6px;background:#2563EB;opacity:.85;width:"+Math.min(100,pG)+"%'></div>"+
+            "<div style='position:absolute;top:-3px;height:28px;width:2px;background:#DC2626;left:100%'></div></div>"+
+            "<div style='width:54px;font-size:11px;color:var(--mut);text-align:right'>of ~"+MAX+"</div></div>";
+    });
+    document.querySelector("#tbl tbody").innerHTML=rows; document.getElementById("bars").innerHTML=bars;
+  }
+  var slider=document.getElementById("slider"); slider.addEventListener("input",recompute);
+  show("Plan"); recompute();
+  fetch("/plan/data").then(function(r){return r.json()}).then(function(d){
+    if(d.error){document.getElementById("err").textContent="PracticeHub error: "+d.error;document.querySelector("#tbl tbody").innerHTML="";return;}
+    DATA=d; recompute();
+  }).catch(function(e){document.getElementById("err").textContent="Could not load: "+e});
 </script></body></html>`);
 });
 
