@@ -705,7 +705,6 @@ const CAS = [
   { name: "Anne",      phoneVar: "PHONE_ANNE" },
   { name: "Alexandra", phoneVar: "PHONE_ALEXANDRA" },
   { name: "Archana",   phoneVar: "PHONE_ARCHANA" },
-  { name: "Renata",    phoneVar: "PHONE_RENATA" },
 ];
 
 function caPhone(name) {
@@ -726,7 +725,7 @@ function normalizeCA(raw) {
     alexandra: "Alexandra",
     archana: "Archana",
     renata: "Renata",  // Renata herself sometimes takes intakes
-    szandi: "Alexandra",  // Szandi and Alexandra are the same person
+    szandi: "Szandi",  // Utrecht CA
   };
   return map[s] || String(raw).trim();
 }
@@ -1087,5 +1086,305 @@ ${phoneBlock}
 </body></html>`;
 }
 
+
+
+// ============================================================================
+//  /pva — PVA & earnings dashboard (manager-gated). Added module.
+// ============================================================================
+// ── Config ──────────────────────────────────────────────────────────────────
+const PVA_SHEET_2026 = "1_oZ1Y3IizjZdQ5MwPZm--WgbEyNQ0-JlNKEys_wbJJU"; // PVA + earnings
+const PVA_SHEET_2025 = "1xRJ1vRT1GREkwDGuabo8w-Gquny0PY5rgxNaGZz7WmA"; // YoY (PVA only)
+
+// gviz fetches ONE tab at a time, BY NAME. If your PVA matrix and the earnings
+// table live on different tabs, list every tab to scan here. "" = the first tab.
+// You can override without editing code via Render env vars (comma-separated).
+const PVA_TABS_2026 = (process.env.PVA_TABS_2026 || "").split(",").map(s => s.trim()); // e.g. "PVA,Earnings"
+const PVA_TABS_2025 = (process.env.PVA_TABS_2025 || "").split(",").map(s => s.trim());
+
+// PVA colour thresholds (the brief): green ≥10, amber 7–10, red <7.
+const PVA_GREEN = 10, PVA_AMBER = 7;
+const C_GREEN = "#16a34a", C_AMBER = "#f59e0b", C_RED = "#dc2626", C_INK = "#16202E", C_MUT = "#94a3b8";
+const pvaColor = (v) => v == null ? C_MUT : v >= PVA_GREEN ? C_GREEN : v >= PVA_AMBER ? C_AMBER : C_RED;
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// ── Robust number parsing ────────────────────────────────────────────────────
+// The sheets mix en-US (8.68, €8,620.00) and Dutch (11,41) formats, plus
+// "#DIV/0!", "-", "\-" and blanks. This coerces all of them to a number|null.
+function pvaNum(raw) {
+  if (raw == null) return null;
+  let s = String(raw).trim().replace(/[€\s]/g, "");
+  if (!s || s === "-" || s === "\\-" || /^#/.test(s)) return null; // blank / placeholder / #DIV/0!
+  const hasDot = s.includes("."), hasComma = s.includes(",");
+  if (hasDot && hasComma) s = s.replace(/,/g, "");          // 8,620.00 → 8620.00 (comma = thousands)
+  else if (hasComma)      s = s.replace(",", ".");          // 11,41    → 11.41   (comma = decimal)
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ── Chiro-location identity ──────────────────────────────────────────────────
+// Maps the many header spellings ("Alex (Amstel)", "alex bussum", "Alex Rdam",
+// "Lara Amstelveen", "Matt Bussum", "Myles") onto one canonical key + label.
+const LOC_TOKENS = [
+  [/amstel/i,            "Amstelveen"],
+  [/bussum/i,            "Bussum"],
+  [/utrecht|\bu\b/i,     "Utrecht"],
+  [/rdam|rotterdam|r.?dam/i, "Rotterdam"],
+];
+// Bare names with no location in the header → assume their home clinic.
+const BARE_LOC = { Myles: "Amstelveen", Annefloor: "Amstelveen", Nick: "Bussum", Holly: "Amstelveen", Courtney: "Amstelveen" };
+
+function parseChiroLoc(header) {
+  if (!header) return null;
+  const h = String(header).trim();
+  if (!h || /^(month|average|avg|total|intake|all totals|operational|difference|weekly)/i.test(h)) return null;
+  if (/intake/i.test(h)) return null; // skip the interleaved intake columns
+  const chiroM = h.match(/^([A-Za-z]+)/);
+  if (!chiroM) return null;
+  const chiro = chiroM[1][0].toUpperCase() + chiroM[1].slice(1).toLowerCase();
+  let loc = null;
+  for (const [re, name] of LOC_TOKENS) if (re.test(h.slice(chiro.length))) { loc = name; break; }
+  if (!loc) loc = BARE_LOC[chiro] || null;
+  if (!loc) return null;
+  return { chiro, loc, key: `${chiro}·${loc}`, label: `${chiro} · ${loc}` };
+}
+
+// ── Block-aware table extraction ─────────────────────────────────────────────
+// Scans ALL rows (across whatever tabs we fetched) and pulls out:
+//   • PVA matrix   — a "Month" header whose other columns are chiro-locations
+//   • Earnings     — a "month" header that also contains "operational expense"
+function findTables(rows) {
+  const monthIdx = (cells) => cells.findIndex(c => /^month$/i.test((c||"").trim()));
+  let pvaHeader = null, earnHeader = null;
+  const pva = {}, earn = {};
+
+  // locate header rows
+  const headers = [];
+  rows.forEach((r, i) => {
+    const cells = (r||[]).map(c => (c||"").trim());
+    if (monthIdx(cells) === 0) headers.push({ i, cells });
+  });
+  for (const hd of headers) {
+    const isEarn = hd.cells.some(c => /operational expense|all totals/i.test(c));
+    if (isEarn && !earnHeader) earnHeader = hd;
+    else if (!isEarn && !pvaHeader) pvaHeader = hd;
+  }
+
+  const readBlock = (hd, store, asMoney) => {
+    if (!hd) return;
+    const colMap = {}; // colIndex → key
+    hd.cells.forEach((c, idx) => {
+      if (idx === 0) return;
+      const cl = parseChiroLoc(c);
+      if (cl) { colMap[idx] = cl; store._labels = (store._labels||{}); store._labels[cl.key] = cl.label; }
+    });
+    for (let r = hd.i + 1; r < rows.length; r++) {
+      const cells = (rows[r]||[]).map(c => (c||"").trim());
+      const mIdx = MONTHS.findIndex(m => new RegExp("^"+m, "i").test(cells[0]||""));
+      if ((cells[0]||"") === "" && cells.slice(1).every(c => c === "")) continue;
+      if (mIdx < 0) { if (/^month$/i.test(cells[0]||"")) break; else continue; }
+      for (const [idx, cl] of Object.entries(colMap)) {
+        const v = pvaNum(cells[idx]);
+        if (v == null) continue;
+        (store[cl.key] ||= Array(12).fill(null))[mIdx] = v;
+      }
+    }
+  };
+  readBlock(pvaHeader, pva, false);
+  readBlock(earnHeader, earn, true);
+  return { pva, earn, found: { pva: !!pvaHeader, earn: !!earnHeader } };
+}
+
+// ── Load + shape everything ──────────────────────────────────────────────────
+async function loadTabs(sheetId, tabs) {
+  const out = [];
+  const list = (tabs && tabs.length && tabs.some(t => t)) ? tabs : [""]; // [""] = first tab
+  for (const t of list) {
+    try {
+      // fetchSheetCSV adds &sheet=; for the first-tab default we call gviz directly.
+      const csv = t
+        ? await fetchSheetCSV(sheetId, t)
+        : await (await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`)).text();
+      out.push(...parseCSV(csv));
+    } catch (e) { out._err = (out._err || []); out._err.push(`${t || "first tab"}: ${e.message}`); }
+  }
+  return out;
+}
+
+async function loadPvaData() {
+  const errors = [];
+  const rows26 = await loadTabs(PVA_SHEET_2026, PVA_TABS_2026);
+  const rows25 = await loadTabs(PVA_SHEET_2025, PVA_TABS_2025);
+  if (rows26._err) errors.push(...rows26._err.map(e => `2026 ${e}`));
+  if (rows25._err) errors.push(...rows25._err.map(e => `2025 ${e}`));
+
+  const t26 = findTables(rows26);
+  const t25 = findTables(rows25);
+
+  const labels = { ...(t26.pva._labels||{}), ...(t26.earn._labels||{}), ...(t25.pva._labels||{}) };
+  delete t26.pva._labels; delete t26.earn._labels; delete t25.pva._labels; delete t25.earn._labels;
+
+  const keys = [...new Set([...Object.keys(t26.pva), ...Object.keys(t25.pva), ...Object.keys(t26.earn)])].sort();
+
+  const pva = {}, earn = {};
+  for (const k of keys) {
+    pva[k]  = { 2025: t25.pva[k] || Array(12).fill(null), 2026: t26.pva[k] || Array(12).fill(null) };
+    earn[k] = { 2025: t25.earn[k] || Array(12).fill(null), 2026: t26.earn[k] || Array(12).fill(null) };
+  }
+  return { keys, labels, pva, earn, errors, found: { y2026: t26.found, y2025: t25.found } };
+}
+
+// ── Live current-month PVA from PracticeHub (per chiro-location) ──────────────
+async function livePvaByChiroLoc() {
+  const dayOfMonth = new Date().getDate(); // "this month so far"
+  const clinics = [...new Set(CHIROS.flatMap(c => c.clinics))];
+  const live = {}; const errors = [];
+  for (const clinic of clinics) {
+    try {
+      const k = await computeKpis(clinic, Math.max(1, dayOfMonth));
+      for (const row of k.rows) {
+        const ch = CHIROS.find(c => row.name.toLowerCase().includes(c.n.toLowerCase()) && c.clinics.includes(clinic));
+        if (!ch) continue;
+        live[`${ch.n}·${clinic}`] = { pva: row.pva, visits: row.visits, intakes: row.intakes };
+      }
+    } catch (e) { errors.push(`${clinic}: ${e.message}`); }
+  }
+  return { live, errors, days: dayOfMonth };
+}
+
+// ── tiny SVG chart helpers (hand-rolled, no library) ─────────────────────────
+const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+function ytdAvg(arr) { const v = (arr||[]).filter(x => x != null); return v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; }
+
+function svgBars(items, live) { // items: [{label, key, val2026, val2025}]
+  const W=Math.max(560, items.length*78+80), H=300, P={l:42,r:16,t:16,b:78};
+  const max=Math.max(12, ...items.map(i=>Math.max(i.val2026||0,i.val2025||0,(live[i.key]||{}).pva||0)))*1.1;
+  const bw=(W-P.l-P.r)/items.length, y=v=>H-P.b-(v/max)*(H-P.t-P.b);
+  let g="";
+  for (const t of [0,5,10,15,20].filter(t=>t<=max)) g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#eef2f7"/><text x="${P.l-6}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="${C_MUT}">${t}</text>`;
+  // threshold guides
+  g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(PVA_GREEN)}" y2="${y(PVA_GREEN)}" stroke="${C_GREEN}" stroke-dasharray="3 3" opacity=".5"/>`;
+  items.forEach((it,i)=>{
+    const x=P.l+i*bw, cw=bw*0.5, cx=x+bw/2;
+    if (it.val2026!=null){ g+=`<rect x="${cx-cw/2}" y="${y(it.val2026)}" width="${cw}" height="${H-P.b-y(it.val2026)}" rx="3" fill="${pvaColor(it.val2026)}"><title>${esc(it.label)} 2026 YTD: ${it.val2026.toFixed(1)}</title></rect>`; }
+    if (it.val2025!=null){ g+=`<line x1="${cx-cw/2-2}" x2="${cx+cw/2+2}" y1="${y(it.val2025)}" y2="${y(it.val2025)}" stroke="${C_INK}" stroke-width="2"><title>${esc(it.label)} 2025 avg: ${it.val2025.toFixed(1)}</title></line>`; }
+    const lv=(live[it.key]||{}).pva;
+    if (lv!=null){ g+=`<circle cx="${cx}" cy="${y(lv)}" r="3.5" fill="#fff" stroke="${C_INK}" stroke-width="2"><title>${esc(it.label)} live now: ${lv.toFixed(1)}</title></circle>`; }
+    const [c,l]=it.label.split(" · ");
+    g+=`<text x="${cx}" y="${H-P.b+14}" text-anchor="end" font-size="10" fill="${C_INK}" transform="rotate(-40 ${cx} ${H-P.b+14})">${esc(c)} ${esc(l[0])}${esc(l.slice(1,3))}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg>
+    <div class="legend"><b>Bars</b> = 2026 YTD avg PVA · <b>black tick</b> = 2025 full-year avg (YoY) · <b>hollow dot</b> = live this month. Green ≥${PVA_GREEN}, amber ${PVA_AMBER}–${PVA_GREEN}, red &lt;${PVA_AMBER}.</div>`;
+}
+
+function svgLines(keys, labels, pva) {
+  const W=720,H=320,P={l:34,r:120,t:14,b:28};
+  const max=Math.max(15, ...keys.flatMap(k=>(pva[k][2026]||[]).filter(v=>v!=null)))*1.1;
+  const x=m=>P.l+(m/11)*(W-P.l-P.r), y=v=>H-P.b-(v/max)*(H-P.t-P.b);
+  const palette=["#2563eb","#16a34a","#dc2626","#9333ea","#0891b2","#ea580c","#65a30d","#db2777","#475569","#ca8a04"];
+  let g="";
+  for (const t of [0,5,10,15].filter(t=>t<=max)) g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#eef2f7"/><text x="${P.l-6}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="${C_MUT}">${t}</text>`;
+  MONTHS.forEach((m,i)=>g+=`<text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="9" fill="${C_MUT}">${m}</text>`);
+  g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(PVA_GREEN)}" y2="${y(PVA_GREEN)}" stroke="${C_GREEN}" stroke-dasharray="3 3" opacity=".4"/>`;
+  keys.forEach((k,ki)=>{
+    const col=palette[ki%palette.length]; const pts=[];
+    (pva[k][2026]||[]).forEach((v,m)=>{ if(v!=null) pts.push(`${x(m)},${y(v)}`); });
+    if(pts.length) g+=`<polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="2"/>`;
+    (pva[k][2026]||[]).forEach((v,m)=>{ if(v!=null) g+=`<circle cx="${x(m)}" cy="${y(v)}" r="2.5" fill="${col}"><title>${esc(labels[k])} ${MONTHS[m]}: ${v.toFixed(1)}</title></circle>`; });
+    g+=`<text x="${W-P.r+6}" y="${14+ki*15}" font-size="10" fill="${col}">${esc(labels[k])}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg><div class="legend">2026 monthly PVA per chiro-location. Hover a point for the value.</div>`;
+}
+
+function svgScatter(keys, labels, pva, earn) {
+  const pts=[];
+  for (const k of keys) for (let m=0;m<12;m++){ const p=pva[k][2026]?.[m], e=earn[k][2026]?.[m]; if(p!=null&&e!=null) pts.push({k,m,p,e}); }
+  const W=720,H=320,P={l:60,r:16,t:14,b:40};
+  if(!pts.length) return `<div class="legend">No paired PVA + earnings points yet. This lights up once monthly earnings exist alongside PVA (currently 2026 Jan–May; add a 2025 earnings tab for YoY points).</div>`;
+  const maxP=Math.max(15,...pts.map(p=>p.p))*1.1, maxE=Math.max(...pts.map(p=>p.e))*1.1;
+  const x=v=>P.l+(v/maxP)*(W-P.l-P.r), y=v=>H-P.b-(v/maxE)*(H-P.t-P.b);
+  let g="";
+  for (const t of [0,5,10,15].filter(t=>t<=maxP)) g+=`<text x="${x(t)}" y="${H-P.b+16}" text-anchor="middle" font-size="10" fill="${C_MUT}">${t}</text><line x1="${x(t)}" x2="${x(t)}" y1="${P.t}" y2="${H-P.b}" stroke="#f4f7fb"/>`;
+  for (let e=0;e<=maxE;e+=5000) g+=`<text x="${P.l-8}" y="${y(e)+3}" text-anchor="end" font-size="9" fill="${C_MUT}">€${(e/1000)|0}k</text><line x1="${P.l}" x2="${W-P.r}" y1="${y(e)}" y2="${y(e)}" stroke="#f4f7fb"/>`;
+  g+=`<line x1="${x(PVA_GREEN)}" x2="${x(PVA_GREEN)}" y1="${P.t}" y2="${H-P.b}" stroke="${C_GREEN}" stroke-dasharray="3 3" opacity=".5"/>`;
+  for (const p of pts) g+=`<circle cx="${x(p.p)}" cy="${y(p.e)}" r="4" fill="${pvaColor(p.p)}" opacity=".8"><title>${esc(labels[p.k])} ${MONTHS[p.m]} · PVA ${p.p.toFixed(1)} · €${Math.round(p.e).toLocaleString("en-US")}</title></circle>`;
+  g+=`<text x="${(W)/2}" y="${H-4}" text-anchor="middle" font-size="10" fill="${C_MUT}">PVA →</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg><div class="legend">Each dot = one chiro-location in one month: PVA (x) vs euros brought in (y), coloured by PVA band.</div>`;
+}
+
+// ── Page ─────────────────────────────────────────────────────────────────────
+function renderPvaPage(d, debug) {
+  const items = d.keys
+    .map(k => ({ key:k, label:d.labels[k]||k, val2026: ytdAvg(d.pva[k][2026]), val2025: ytdAvg(d.pva[k][2025]) }))
+    .filter(it => it.val2026 != null || it.val2025 != null)
+    .sort((a,b) => (b.val2026||0) - (a.val2026||0));
+  const liveKeys = d.keys.filter(k => (d.pva[k][2026]||[]).some(v=>v!=null));
+  const earnTotalByChiro = {};
+  for (const k of d.keys) { const [chiro]=k.split("·"); const sum=(d.earn[k][2026]||[]).filter(v=>v!=null).reduce((a,b)=>a+b,0); if(sum) earnTotalByChiro[chiro]=(earnTotalByChiro[chiro]||0)+sum; }
+  const earnRows = Object.entries(earnTotalByChiro).sort((a,b)=>b[1]-a[1])
+    .map(([c,v])=>`<tr><td>${esc(c)}</td><td class="num">€${Math.round(v).toLocaleString("en-US")}</td></tr>`).join("") || `<tr><td colspan="2" style="color:#888">No 2026 earnings parsed yet</td></tr>`;
+
+  const err = d.errors.length ? `<div class="warn">Some data couldn't load: ${d.errors.map(esc).join(" · ")}</div>` : "";
+  const foundNote = (!d.found.y2026.pva || !d.found.y2026.earn)
+    ? `<div class="warn">Heads up: ${!d.found.y2026.pva?"PVA matrix":""}${(!d.found.y2026.pva&&!d.found.y2026.earn)?" and ":""}${!d.found.y2026.earn?"earnings table":""} not found in the 2026 tab(s). Set <code>PVA_TABS_2026</code> in Render to the right tab name(s), or open <a href="/pva?debug=1">/pva?debug=1</a>.</div>` : "";
+
+  const debugBlock = debug ? `<pre class="dbg">${esc(JSON.stringify({
+    keysFound: d.keys, labels: d.labels, found: d.found, errors: d.errors,
+    sample: d.keys.slice(0,3).reduce((o,k)=>(o[k]={pva:d.pva[k],earn:d.earn[k]},o),{})
+  }, null, 2))}</pre>` : "";
+
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>PVA — Posturefixx</title>
+<style>
+ :root{--ink:#16202E;--mut:#64748b;--blue:#2563EB;--line:#e5e7eb}
+ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:840px;margin:24px auto;padding:0 16px;color:var(--ink)}
+ h1{font-size:22px;margin:0 0 2px} .sub{color:var(--mut);font-size:13px;margin-bottom:18px}
+ .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+ .tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}
+ .tab.on{background:var(--ink);color:#fff}
+ .card{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+ .card b{font-size:14px} table{border-collapse:collapse;width:100%;font-size:14px;margin-top:8px}
+ td{padding:8px;border-bottom:1px solid #f1f5f9} .num{text-align:right;font-variant-numeric:tabular-nums}
+ .legend{color:var(--mut);font-size:12px;margin-top:10px;line-height:1.5}
+ .warn{background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+ .dbg{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;font-size:11px;overflow:auto;max-height:420px}
+ svg text{font-family:inherit} a{color:var(--blue)} code{background:#f1f5f9;padding:1px 5px;border-radius:4px}
+</style></head><body>
+ <h1>PVA & earnings</h1>
+ <div class="sub">Historical from the PVA sheets · live this-month from PracticeHub · manager view</div>
+ ${err}${foundNote}
+ <div class="tabs" id="tabs"></div>
+ <section data-tab="YTD PVA"><div class="card"><b>YTD PVA per chiro-location</b><div id="bars">${svgBars(items, {})}</div></div></section>
+ <section data-tab="Month-to-month" style="display:none"><div class="card"><b>Monthly PVA — 2026</b>${svgLines(liveKeys, d.labels, d.pva)}</div></section>
+ <section data-tab="PVA vs earnings" style="display:none"><div class="card"><b>PVA vs monthly earnings</b>${svgScatter(d.keys, d.labels, d.pva, d.earn)}</div>
+   <div class="card"><b>2026 earnings by chiropractor (all locations)</b><table><tbody>${earnRows}</tbody></table>
+   <div class="legend">Per-location split and 2025 figures appear here once a 2025 earnings tab exists.</div></div></section>
+ ${debugBlock}
+ <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/ca">/ca</a> · <a href="/pva?debug=1">debug</a></p>
+ <script>
+  var tabs=["YTD PVA","Month-to-month","PVA vs earnings"],el=document.getElementById("tabs");
+  function show(n){Array.prototype.forEach.call(document.querySelectorAll("[data-tab]"),function(s){s.style.display=s.getAttribute("data-tab")===n?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===n?" on":"")})}
+  tabs.forEach(function(n){var b=document.createElement("div");b.className="tab";b.textContent=n;b.onclick=function(){show(n)};el.appendChild(b)});show(tabs[0]);
+  // pull live this-month PVA and overlay onto the bars
+  fetch("/pva/live.json").then(function(r){return r.json()}).then(function(j){
+    if(!j||!j.live)return; var box=document.getElementById("bars");
+    box.insertAdjacentHTML("afterbegin","<div class='legend'>Live this month ("+j.days+" days in): "+Object.keys(j.live).map(function(k){return k.replace('·',' ')+" "+(j.live[k].pva||0).toFixed(1)}).join(" · ")+"</div>");
+  }).catch(function(){});
+ </script>
+</body></html>`;
+}
+
+// ── Routes (manager-gated via your existing gate) ────────────────────────────
+app.get("/pva", gate, async (req, res) => {
+  try {
+    const data = await loadPvaData();
+    res.send(renderPvaPage(data, req.query.debug === "1"));
+  } catch (e) { res.status(500).send(`<pre style="white-space:pre-wrap;font-family:sans-serif;max-width:680px;margin:40px auto">PVA page error: ${e.message}</pre>`); }
+});
+
+app.get("/pva/live.json", gate, async (_req, res) => {
+  try { res.json(await livePvaByChiroLoc()); }
+  catch (e) { res.json({ live: {}, errors: [e.message] }); }
+});
 
 app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
