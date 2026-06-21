@@ -683,4 +683,408 @@ app.get("/plan", gate, (req, res) => {
 </script></body></html>`);
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — open /plan"));
+// ============================================================
+// CA DASHBOARD — Renata's view (added to coaching-engine.js)
+// ============================================================
+
+// Doorplannen tracker (Google Sheet, link-shared, no auth needed)
+const DOORPLANNEN_SHEET = "1foXa-E8AGFKnqXZG2vt_-RBOK8oANah7xvLy8uexCCU";
+const INTAKE_TABS = {
+  Amstelveen: "Intakes Amstelveen",
+  Bussum:     "Intakes Bussum",
+  Rotterdam:  "Intakes Rotterdam",
+  Utrecht:    "Intakes Utrecht",
+};
+
+// CA roster — name + which env var holds their phone
+const CAS = [
+  { name: "Csabi",     phoneVar: "PHONE_CSABA" },
+  { name: "Samantha",  phoneVar: "PHONE_SAMANTHA" },
+  { name: "Dolly",     phoneVar: "PHONE_DOLLY" },
+  { name: "Vivian",    phoneVar: "PHONE_VIVIAN" },
+  { name: "Anne",      phoneVar: "PHONE_ANNE" },
+  { name: "Alexandra", phoneVar: "PHONE_ALEXANDRA" },
+  { name: "Archana",   phoneVar: "PHONE_ARCHANA" },
+];
+
+function caPhone(name) {
+  const ca = CAS.find(c => c.name === name);
+  return ca ? process.env[ca.phoneVar] : null;
+}
+
+// Normalize how names appear in the sheet (Sam → Samantha, etc.)
+function normalizeCA(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase();
+  const map = {
+    csabi: "Csabi", csaba: "Csabi",
+    samantha: "Samantha", sam: "Samantha",
+    dolly: "Dolly",
+    vivian: "Vivian",
+    anne: "Anne",
+    alexandra: "Alexandra",
+    archana: "Archana",
+    renata: "Renata",  // Renata herself sometimes takes intakes
+    szandi: "Szandi",  // Utrecht CA
+  };
+  return map[s] || String(raw).trim();
+}
+
+// ---------- Sheet fetching & CSV parsing ----------
+async function fetchSheetCSV(sheetId, tabName) {
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Sheet fetch failed (${res.status}) for tab "${tabName}"`);
+  return res.text();
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuote) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') { inQuote = false; }
+      else { field += c; }
+    } else {
+      if (c === '"') { inQuote = true; }
+      else if (c === ',') { row.push(field); field = ""; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (c !== '\r') { field += c; }
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Each Intakes tab has stacked "blocks" — one per week — each starting with a
+// header row containing Name / CA / Appointments / Package / Meta / Chiro / Notes.
+function parseIntakesCSV(csvText, clinic) {
+  const rows = parseCSV(csvText);
+  const intakes = [];
+  let cols = null;
+  for (const r of rows) {
+    if (!r || !r.length) continue;
+    const cells = r.map(c => (c || "").trim());
+    // Detect header row
+    const hasName = cells.some(c => c === "Name");
+    const hasCA = cells.some(c => c === "CA");
+    const hasAppt = cells.some(c => c === "Appointments");
+    if (hasName && hasCA && hasAppt) {
+      cols = cells;
+      continue;
+    }
+    if (!cols) continue;
+    // Build the row object
+    const obj = { _clinic: clinic };
+    cols.forEach((h, idx) => { if (h) obj[h] = cells[idx] || ""; });
+    // Only count rows that have BOTH a name and a CA assigned
+    if (obj.Name && obj.CA && obj.Name !== "Name") {
+      obj.CA = normalizeCA(obj.CA);
+      intakes.push(obj);
+    }
+  }
+  return intakes;
+}
+
+async function loadAllIntakes() {
+  const all = [];
+  const errors = [];
+  for (const [clinic, tab] of Object.entries(INTAKE_TABS)) {
+    try {
+      const csv = await fetchSheetCSV(DOORPLANNEN_SHEET, tab);
+      const items = parseIntakesCSV(csv, clinic);
+      all.push(...items);
+    } catch (e) {
+      errors.push(`${clinic}: ${e.message}`);
+    }
+  }
+  return { intakes: all, errors };
+}
+
+// ---------- Per-CA stats ----------
+function computeCAStats(intakes) {
+  const stats = {};
+  for (const i of intakes) {
+    const name = i.CA;
+    if (!name) continue;
+    if (!stats[name]) {
+      stats[name] = {
+        name, intakes: 0, packages: 0, totalAppts: 0,
+        doorplannen: 0, meta: 0, byClinic: {},
+      };
+    }
+    const s = stats[name];
+    s.intakes++;
+    const apts = parseInt(i.Appointments, 10);
+    const aptsNum = isNaN(apts) ? 0 : apts;
+    s.totalAppts += aptsNum;
+    if (aptsNum >= 3) s.doorplannen++;
+    if ((i.Package || "").toLowerCase() === "yes") s.packages++;
+    if ((i.Meta || "").toLowerCase() === "yes") s.meta++;
+    const cl = i._clinic || "Unknown";
+    if (!s.byClinic[cl]) s.byClinic[cl] = { intakes: 0, packages: 0, doorplannen: 0 };
+    s.byClinic[cl].intakes++;
+    if (aptsNum >= 3) s.byClinic[cl].doorplannen++;
+    if ((i.Package || "").toLowerCase() === "yes") s.byClinic[cl].packages++;
+  }
+  // Compute percentages
+  for (const name in stats) {
+    const s = stats[name];
+    s.doorplannenPct = s.intakes ? (s.doorplannen / s.intakes) * 100 : 0;
+    s.packagePct    = s.intakes ? (s.packages / s.intakes) * 100 : 0;
+    s.metaPct       = s.intakes ? (s.meta / s.intakes) * 100 : 0;
+    s.avgAppts      = s.intakes ? s.totalAppts / s.intakes : 0;
+  }
+  return stats;
+}
+
+// ---------- CA coaching voice ----------
+const CA_VOICE = `
+You are writing as Alex Yu, owner of Posturefixx, sending a short WhatsApp coaching note to a Clinic Assistant. Tone: warm, direct, specific, like a manager who notices effort and cares about the person.
+Structure: 1) acknowledge what they're doing 2) one concrete observation about their numbers 3) one specific suggestion they can act on this week.
+Hard rules: maximum 4 sentences. No emojis. No motivational fluff. The CA's main job is converting intakes into care packages and getting patients to book the full first month (doorplannen = 3+ appointments at intake). They've already role-played the package script with Renata, so you can refer back to the script naturally.
+`;
+
+function caEvaluateSignals(s) {
+  const out = [];
+  if (s.doorplannenPct < 50 && s.intakes >= 3) {
+    out.push({ w: 3, text: `Doorplannen at ${Math.round(s.doorplannenPct)}% — below the 50% target. Focus on confidently booking the full first month at intake.` });
+  } else if (s.doorplannenPct >= 70) {
+    out.push({ w: 0, text: `Strong doorplannen at ${Math.round(s.doorplannenPct)}% — keep that energy.` });
+  }
+  if (s.packagePct < 30 && s.intakes >= 3) {
+    out.push({ w: 2, text: `Package conversion is ${Math.round(s.packagePct)}%. The package script you role-played with Renata is the right tool here — walk through the value plan, then offer the package as the natural next step.` });
+  }
+  if (s.avgAppts < 3 && s.intakes >= 3) {
+    out.push({ w: 1, text: `Average visits per intake is ${s.avgAppts.toFixed(1)}. Try the "send the schedule when they book a lot of appointments" reminder Samantha flagged in the team meeting.` });
+  }
+  if (s.intakes < 3) {
+    out.push({ w: 1, text: `Only ${s.intakes} intake${s.intakes === 1 ? "" : "s"} in this period — not enough to draw conclusions yet. Stay consistent with the script.` });
+  }
+  out.sort((a, b) => b.w - a.w);
+  return out.slice(0, 2);
+}
+
+async function draftCACoaching(name, s) {
+  const signals = caEvaluateSignals(s);
+  const clinicLines = Object.entries(s.byClinic)
+    .map(([cl, d]) => `  ${cl}: ${d.intakes} intakes, ${d.doorplannen} doorplannen, ${d.packages} packages`)
+    .join("\n");
+  const prompt = `Coach ${name} based on this performance period:
+- Total intakes: ${s.intakes}
+- Doorplannen (3+ appts at intake): ${s.doorplannen} of ${s.intakes} = ${Math.round(s.doorplannenPct)}%
+- Package conversion: ${s.packages} of ${s.intakes} = ${Math.round(s.packagePct)}%
+- Average appointments: ${s.avgAppts.toFixed(1)}
+- Meta source rate: ${Math.round(s.metaPct)}%
+Per clinic:
+${clinicLines}
+
+What to address (most important first):
+${signals.map(x => "- " + x.text).join("\n")}
+
+Write one WhatsApp message to ${name} in Alex's voice (max 4 sentences).`;
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 300,
+    system: CA_VOICE,
+    messages: [{ role: "user", content: prompt }],
+  });
+  return response.content.map(c => c.text || "").join("").trim();
+}
+
+// ---------- Routes ----------
+app.get("/ca/data", gate, async (_req, res) => {
+  try {
+    const { intakes, errors } = await loadAllIntakes();
+    const stats = computeCAStats(intakes);
+    const ordered = Object.values(stats).sort((a, b) => b.intakes - a.intakes);
+    res.json({ ok: true, totalIntakes: intakes.length, perCA: ordered, errors });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/ca", gate, async (_req, res) => {
+  let data;
+  try {
+    const { intakes, errors } = await loadAllIntakes();
+    const stats = computeCAStats(intakes);
+    data = {
+      ok: true,
+      totalIntakes: intakes.length,
+      perCA: Object.values(stats).sort((a, b) => b.intakes - a.intakes),
+      errors,
+    };
+  } catch (e) {
+    data = { ok: false, error: e.message, perCA: [], totalIntakes: 0, errors: [] };
+  }
+  res.send(renderCAPage(data));
+});
+
+app.get("/ca/coach", gate, async (req, res) => {
+  const target = req.query.target;
+  if (!target) return res.status(400).send("Add ?target=Csabi (or any CA name)");
+  try {
+    const { intakes } = await loadAllIntakes();
+    const stats = computeCAStats(intakes);
+    const s = stats[target];
+    if (!s) return res.status(404).send(`No intake data found for "${target}"`);
+    const draft = await draftCACoaching(target, s);
+    const phone = caPhone(target);
+    res.send(renderCACoachPage(target, s, draft, phone));
+  } catch (e) {
+    res.status(500).send("Error: " + e.message);
+  }
+});
+
+app.post("/ca/coach/send", gate, async (req, res) => {
+  try {
+    const { target, text } = req.body || {};
+    if (!target || !text) return res.status(400).json({ ok: false, error: "Missing target or text" });
+    const phone = caPhone(target);
+    if (!phone) return res.status(400).json({ ok: false, error: `No phone configured for ${target}. Set ${CAS.find(c => c.name === target)?.phoneVar || ""} in Render.` });
+    // Send via the Rotterdam GHL sub-account (same path the chiro coach uses)
+    const result = await sendSms("Rotterdam", phone, target, text);
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---------- HTML rendering ----------
+function pctBar(pct, color) {
+  const w = Math.max(0, Math.min(100, pct));
+  return `<div style="background:#eee;border-radius:6px;overflow:hidden;height:8px;width:120px;display:inline-block;vertical-align:middle"><div style="background:${color};height:100%;width:${w}%"></div></div>`;
+}
+
+function renderCAPage(data) {
+  const rows = (data.perCA || []).map(s => {
+    const clinicBreak = Object.entries(s.byClinic)
+      .map(([cl, d]) => `${cl}: ${d.intakes}`)
+      .join(" · ");
+    const phoneSet = !!caPhone(s.name);
+    return `
+      <tr>
+        <td style="font-weight:600">${s.name}${phoneSet ? "" : ' <span style="color:#c00;font-size:11px">(no phone)</span>'}</td>
+        <td style="text-align:right">${s.intakes}</td>
+        <td>${pctBar(s.doorplannenPct, "#2563eb")} <span style="margin-left:6px">${Math.round(s.doorplannenPct)}%</span> <span style="color:#888;font-size:11px">(${s.doorplannen}/${s.intakes})</span></td>
+        <td>${pctBar(s.packagePct, "#16a34a")} <span style="margin-left:6px">${Math.round(s.packagePct)}%</span> <span style="color:#888;font-size:11px">(${s.packages}/${s.intakes})</span></td>
+        <td style="text-align:right">${s.avgAppts.toFixed(1)}</td>
+        <td style="text-align:right">${Math.round(s.metaPct)}%</td>
+        <td style="font-size:12px;color:#555">${clinicBreak}</td>
+        <td><a href="/ca/coach?target=${encodeURIComponent(s.name)}" style="background:#16202E;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-size:12px">Coach ${s.name}</a></td>
+      </tr>`;
+  }).join("");
+
+  const total = data.totalIntakes || 0;
+  const overall = (data.perCA || []).reduce((a, s) => {
+    a.intakes += s.intakes; a.doorplannen += s.doorplannen; a.packages += s.packages;
+    return a;
+  }, { intakes: 0, doorplannen: 0, packages: 0 });
+  const overallDoor = overall.intakes ? Math.round((overall.doorplannen / overall.intakes) * 100) : 0;
+  const overallPkg  = overall.intakes ? Math.round((overall.packages / overall.intakes) * 100) : 0;
+
+  const errBlock = (data.errors && data.errors.length) ? `<div style="background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#92400e">Some sheets couldn't load: ${data.errors.join(" · ")}</div>` : "";
+
+  return `<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CA Performance — Posturefixx</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 16px; color: #16202E; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 20px; }
+  .stat-row { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat { background: #f8fafc; padding: 14px 18px; border-radius: 10px; min-width: 130px; }
+  .stat-val { font-size: 24px; font-weight: 700; }
+  .stat-lbl { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #e5e7eb; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: #555; }
+  td { padding: 10px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+</style></head><body>
+<h1>CA Performance</h1>
+<div class="sub">From doorplannen sheet · Intakes across all 4 clinics</div>
+${errBlock}
+<div class="stat-row">
+  <div class="stat"><div class="stat-val">${total}</div><div class="stat-lbl">Total intakes</div></div>
+  <div class="stat"><div class="stat-val">${overallDoor}%</div><div class="stat-lbl">Avg doorplannen</div></div>
+  <div class="stat"><div class="stat-val">${overallPkg}%</div><div class="stat-lbl">Avg package conv.</div></div>
+</div>
+<table>
+  <thead><tr>
+    <th>CA</th><th style="text-align:right">Intakes</th>
+    <th>Doorplannen %</th><th>Package %</th>
+    <th style="text-align:right">Avg appts</th><th style="text-align:right">Meta %</th>
+    <th>By clinic</th><th></th>
+  </tr></thead>
+  <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:40px;color:#888">No intake data loaded</td></tr>'}</tbody>
+</table>
+<div style="margin-top:24px;font-size:12px;color:#888">Tip: open <a href="/plan">/plan</a> for the chiropractor coaching dashboard.</div>
+</body></html>`;
+}
+
+function renderCACoachPage(name, s, draft, phone) {
+  const phoneBlock = phone
+    ? `<div style="font-size:12px;color:#666;margin-bottom:8px">Will send to: <code>${phone}</code> via Rotterdam GHL sub-account</div>`
+    : `<div style="background:#fee2e2;padding:10px;border-radius:6px;color:#991b1b;font-size:13px;margin-bottom:12px">No phone number configured for ${name}. Set <code>${CAS.find(c => c.name === name)?.phoneVar || ""}</code> in Render env vars before sending.</div>`;
+  const safeName = name.replace(/'/g, "\\'");
+  const safeDraft = draft.replace(/</g, "&lt;");
+  return `<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coach ${name}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px; color: #16202E; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 20px; }
+  .box { background: #f8fafc; padding: 14px 18px; border-radius: 10px; margin-bottom: 16px; }
+  .num { display: inline-block; margin-right: 18px; font-size: 13px; }
+  .num b { font-size: 18px; display: block; }
+  textarea { width: 100%; min-height: 160px; font-family: inherit; font-size: 15px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; }
+  button { background: #16202E; color: #fff; border: 0; padding: 12px 24px; border-radius: 8px; font-size: 15px; cursor: pointer; margin-top: 8px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  a { color: #2563eb; }
+</style></head><body>
+<a href="/ca">← Back to CA dashboard</a>
+<h1>Coach ${name}</h1>
+<div class="sub">Drafted by Claude · Edit before sending</div>
+<div class="box">
+  <span class="num"><b>${s.intakes}</b>intakes</span>
+  <span class="num"><b>${Math.round(s.doorplannenPct)}%</b>doorplannen</span>
+  <span class="num"><b>${Math.round(s.packagePct)}%</b>package conv.</span>
+  <span class="num"><b>${s.avgAppts.toFixed(1)}</b>avg appts</span>
+</div>
+${phoneBlock}
+<textarea id="msg">${safeDraft}</textarea>
+<button id="send" ${phone ? "" : "disabled"}>Send via WhatsApp/SMS</button>
+<div id="result" style="margin-top:14px;font-size:13px"></div>
+<script>
+  document.getElementById('send').addEventListener('click', async () => {
+    const btn = document.getElementById('send');
+    const result = document.getElementById('result');
+    btn.disabled = true; btn.textContent = 'Sending...';
+    try {
+      const r = await fetch('/ca/coach/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: '${safeName}', text: document.getElementById('msg').value }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        result.innerHTML = '<span style="color:#16a34a">✓ Sent to ${safeName}</span>';
+        btn.textContent = 'Sent';
+      } else {
+        result.innerHTML = '<span style="color:#c00">Error: ' + (j.error || 'unknown') + '</span>';
+        btn.disabled = false; btn.textContent = 'Try again';
+      }
+    } catch (e) {
+      result.innerHTML = '<span style="color:#c00">Network error: ' + e.message + '</span>';
+      btn.disabled = false; btn.textContent = 'Try again';
+    }
+  });
+</script>
+</body></html>`;
+}
+
+
+app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
