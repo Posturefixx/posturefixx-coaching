@@ -82,20 +82,36 @@ async function practitionerMap(clinic) {
   return m;
 }
 
+// ── APPOINTMENT-TYPE CLASSIFICATION (edit these rules in plain English) ──────
+// Matched on the TYPE NAME, so it works across all four clinics even though
+// their type ID numbers differ. Tweak the words below any time.
+const isPhone   = (n) => /telefon|telephone/i.test(n);                 // phone advice, not a visit
+const isIntake  = (n) => /intake|new patient|nieuwe pati/i.test(n) && !isPhone(n);
+const notAVisit = (n) =>                                               // exclude from the visit count
+  isPhone(n) ||
+  /afzeg|gemiste afspraak|no.?show/i.test(n) ||   // Afzegging binnen 24h / missed
+  /evaluatie/i.test(n) ||                          // Evaluatie
+  /\brof\b|report of findings/i.test(n) ||         // ROF 1 / ROF 2 / Report of Findings
+  /progress report/i.test(n);                      // Progress Report
+
 // ── THE KPI LAYER — turn raw appointments into per-chiro numbers ─────────────
 // Rules learned from the live data:
-//  • status "processed" = a real visit; "cancelled" (or a cancelDate) = not.
+//  • status "processed" = a real visit; "cancelled"/"missed"/"pending" don't count.
 //  • de-duplicate by appointment id (same slot can appear twice, e.g. a cancel).
+//  • exclude non-treatment types above. PVA = qualifying visits ÷ intakes.
 async function computeKpis(clinic, days = 30) {
   // Sequential (not parallel) — a burst of simultaneous calls is what trips the rate limit.
   const names = await practitionerMap(clinic);
   const types = await phubAll(clinic, "/appointment_types", {}).catch(() => []);
   const appts = await phubAll(clinic, "/appointments", { start: lastDaysRange(days) });
 
-  // identify which appointment types are "intakes" (new-patient visits) by name
-  const intakeTypeIds = new Set(
-    types.filter(t => /intake|nieuw|new|eerste|first/i.test(t.name || "")).map(t => t.id)
-  );
+  // classify every type once
+  const typeName = {}, intakeIds = new Set(), excludedIds = new Set();
+  for (const t of types) {
+    typeName[t.id] = t.name || "";
+    if (isIntake(t.name || "")) intakeIds.add(t.id);
+    if (notAVisit(t.name || "")) excludedIds.add(t.id);
+  }
 
   // de-dupe by id, keep the non-cancelled version if both exist
   const byId = new Map();
@@ -106,28 +122,30 @@ async function computeKpis(clinic, days = 30) {
   }
 
   const statusTally = {};
-  const per = {}; // practitioner_id → kpi accumulator
+  const per = {};
   for (const a of byId.values()) {
     statusTally[a.status || "?"] = (statusTally[a.status || "?"] || 0) + 1;
-    if (a.cancelled || a.status !== "processed") continue; // only real visits count
+    if (a.cancelled || a.status !== "processed") continue;  // only completed visits
+    if (excludedIds.has(a.appointment_type_id)) continue;   // skip ROF / evaluatie / afzeg / phone
     const pid = a.practitioner_id;
     (per[pid] ||= { name: names[pid] || `#${pid}`, visits: 0, patients: new Set(), intakes: 0 });
     per[pid].visits++;
     per[pid].patients.add(a.patient_id);
-    if (intakeTypeIds.has(a.appointment_type_id)) per[pid].intakes++;
+    if (intakeIds.has(a.appointment_type_id)) per[pid].intakes++;
   }
 
   const rows = Object.entries(per).map(([pid, k]) => ({
-    practitionerId: pid,
-    name: k.name,
-    visits: k.visits,
-    uniquePatients: k.patients.size,
-    pva: k.patients.size ? +(k.visits / k.patients.size).toFixed(2) : 0,
-    intakes: k.intakes,
+    practitionerId: pid, name: k.name,
+    visits: k.visits, uniquePatients: k.patients.size, intakes: k.intakes,
+    pva: k.intakes ? +(k.visits / k.intakes).toFixed(1) : 0,  // visits per new patient
   })).sort((a, b) => b.visits - a.visits);
 
-  return { clinic, days, rows, statusTally, intakeTypesFound: [...intakeTypeIds].length,
-           appointmentTypes: types.map(t => ({ id: t.id, name: t.name })) };
+  return {
+    clinic, days, rows, statusTally,
+    appointmentTypes: types.map(t => ({ id: t.id, name: t.name })),
+    intakeNames: [...intakeIds].map(id => typeName[id]),
+    excludedNames: [...excludedIds].map(id => typeName[id]),
+  };
 }
 
 // ── Simple password gate (these pages show patient data) ─────────────────────
@@ -201,24 +219,87 @@ async function draftMessage(kpi) {
   return { ok: true, name: kpi.name, clinic: kpi.clinic, message: text, wins, focus };
 }
 
-// ── SEND — via your GHL Rotterdam sub-account (only after you approve) ────────
-async function sendViaGHL(toNumber, text) {
-  const res = await fetch("https://services.leadconnectorhq.com/conversations/messages", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GHL_API_KEY_ROTTERDAM}`,
-      "Version": "2021-07-28",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      type: "WhatsApp", // or "SMS"
-      locationId: process.env.GHL_LOCATION_ID_ROTTERDAM,
-      contactId: toNumber, // GHL needs a contactId — map chiro → contact once
-      message: text,
-    }),
+// ── CHIROPRACTORS — who gets coached, their phone, and which clinics they cover ─
+// Phone numbers are kept in Render env vars (PHONE_<NAME>), not in the code.
+// "smsClinic" picks which GHL sub-account sends the SMS.
+const CHIROS = [
+  { n: "Myles",   clinics: ["Amstelveen"],            phone: process.env.PHONE_MYLES,   smsClinic: "Amstelveen" },
+  { n: "Lara",    clinics: ["Amstelveen", "Bussum"],  phone: process.env.PHONE_LARA,    smsClinic: "Bussum" },
+  { n: "Matthew", clinics: ["Utrecht", "Bussum"],     phone: process.env.PHONE_MATTHEW, smsClinic: "Utrecht" },
+  { n: "Alex",    clinics: ["Rotterdam"],             phone: process.env.PHONE_ALEX,    smsClinic: "Rotterdam" },
+];
+
+// GHL credentials per clinic (falls back to a single shared GHL_TOKEN / GHL_LOCATION).
+function ghlFor(clinic) {
+  const C = clinic.toUpperCase();
+  return {
+    token: process.env[`GHL_TOKEN_${C}`] || process.env.GHL_TOKEN,
+    location: process.env[`GHL_LOCATION_${C}`] || process.env.GHL_LOCATION,
+  };
+}
+
+// ── SEND SMS via GHL: upsert the contact by phone, then send the message ──────
+async function sendSms(clinic, phone, name, text) {
+  const { token, location } = ghlFor(clinic);
+  if (!token || !location) throw new Error(`no GHL token/location for ${clinic} (set GHL_TOKEN_${clinic.toUpperCase()} & GHL_LOCATION_${clinic.toUpperCase()})`);
+  const headers = { Authorization: `Bearer ${token}`, Version: "2021-07-28", "Content-Type": "application/json", Accept: "application/json" };
+
+  // 1) upsert contact → get contactId
+  const up = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
+    method: "POST", headers,
+    body: JSON.stringify({ locationId: location, phone, name }),
   });
-  if (!res.ok) throw new Error(`GHL send failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  const upBody = await up.json();
+  if (!up.ok) throw new Error(`GHL upsert failed (${up.status}): ${JSON.stringify(upBody).slice(0, 200)}`);
+  const contactId = upBody.contact?.id || upBody.id;
+  if (!contactId) throw new Error(`GHL upsert returned no contactId`);
+
+  // 2) send the SMS
+  const send = await fetch("https://services.leadconnectorhq.com/conversations/messages", {
+    method: "POST", headers,
+    body: JSON.stringify({ type: "SMS", contactId, message: text }),
+  });
+  const sendBody = await send.json();
+  if (!send.ok) throw new Error(`GHL send failed (${send.status}): ${JSON.stringify(sendBody).slice(0, 200)}`);
+  return { contactId, ...sendBody };
+}
+
+// ── Pull each chiro's REAL current numbers from PracticeHub (across their clinics) ─
+async function chiroBaselines(days = 30) {
+  const clinics = [...new Set(CHIROS.flatMap(c => c.clinics))];
+  const byClinic = {};
+  for (const c of clinics) byClinic[c] = await computeKpis(c, days); // sequential = rate-limit safe
+  return CHIROS.map(ch => {
+    let visits = 0, intakes = 0;
+    for (const c of ch.clinics)
+      for (const r of byClinic[c].rows)
+        if (r.name.toLowerCase().includes(ch.n.toLowerCase())) { visits += r.visits; intakes += r.intakes; }
+    return { ...ch, visits, intakes, pva: intakes ? +(visits / intakes).toFixed(1) : 0 };
+  });
+}
+
+// ── Turn a revenue target into each chiro's visit + PVA goal ──────────────────
+const PRICE_PER_VISIT = 59;
+function chiroGoals(target, baselines) {
+  const sumV = baselines.reduce((s, b) => s + b.visits, 0) || 1;
+  const reqMonthlyVisits = (target / 12) / PRICE_PER_VISIT;
+  const scale = reqMonthlyVisits / sumV;
+  return baselines.map(b => {
+    const goalV = b.visits * scale;
+    return { ...b, goalWeekly: Math.round(goalV / 4.33), goalPva: b.intakes ? +(goalV / b.intakes).toFixed(1) : 0,
+             nowWeekly: Math.round(b.visits / 4.33) };
+  });
+}
+
+// ── Draft one chiro's message toward their goal, in your voice ────────────────
+async function draftCoaching(g) {
+  const prompt =
+    `Chiropractor: ${g.n}. This month so far: ~${g.nowWeekly} visits/week, PVA ${g.pva}.\n` +
+    `Their goal for the week ahead: about ${g.goalWeekly} visits, lifting PVA toward ${g.goalPva}.\n` +
+    `Write a short, warm SMS encouraging them toward that goal.`;
+  const res = await anthropic.messages.create({ model: MODEL, max_tokens: 250, system: VOICE,
+    messages: [{ role: "user", content: prompt }] });
+  return res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
 }
 
 // ── Sample data so you can SEE it working before PracticeHub is wired ────────
@@ -252,18 +333,62 @@ app.get("/preview", gate, async (_req, res) => {
 });
 
 // Later: POST real KPIs here to draft (still no send) — your dashboard/approval screen calls this:
-app.post("/draft", async (req, res) => {
-  const out = [];
-  for (const k of req.body.chiros || []) out.push(await draftMessage(k));
-  res.json(out);
+// ── SMS TEST — sends ONE real SMS so you can verify delivery (default: Alex) ──
+// e.g. /sms-test?to=Alex
+app.get("/sms-test", gate, async (req, res) => {
+  const who = req.query.to || "Alex";
+  const ch = CHIROS.find(c => c.n.toLowerCase() === who.toLowerCase());
+  if (!ch) return res.status(400).send(`unknown chiro "${who}"`);
+  if (!ch.phone) return res.status(400).send(`no phone set for ${ch.n} (add PHONE_${ch.n.toUpperCase()} in Render)`);
+  try {
+    await sendSms(ch.smsClinic, ch.phone, ch.n, `Test from Posturefixx coaching — if you got this, SMS is working. (you can ignore this)`);
+    res.send(`<body style="font-family:sans-serif;max-width:600px;margin:40px auto"><h2>✅ Test SMS sent to ${ch.n}</h2><p>via the ${ch.smsClinic} GHL sub-account. Check the phone.</p></body>`);
+  } catch (e) {
+    res.status(500).send(`<body style="font-family:sans-serif;max-width:600px;margin:40px auto"><h2>❌ SMS failed</h2><pre style="background:#f4f4f4;padding:16px;border-radius:8px;white-space:pre-wrap">${e.message}</pre></body>`);
+  }
 });
 
-// Later: POST approved messages here to actually send:
-app.post("/send", async (req, res) => {
+// ── COACH — draft real messages toward a revenue target (NO send) ─────────────
+// e.g. /coach?target=1100000
+app.get("/coach", gate, async (req, res) => {
+  const target = Math.max(700000, Math.min(1500000, parseInt(req.query.target) || 1100000));
   try {
-    const r = await sendViaGHL(req.body.contactId, req.body.message);
-    res.json({ sent: true, r });
-  } catch (e) { res.status(500).json({ sent: false, error: e.message }); }
+    const goals = chiroGoals(target, await chiroBaselines(30));
+    const cards = [];
+    for (const g of goals) {
+      const msg = await draftCoaching(g);
+      cards.push(`<div style="border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0">
+        <b>${g.n}</b> — now ~${g.nowWeekly}/wk · PVA ${g.pva} → goal ~${g.goalWeekly}/wk · PVA ${g.goalPva}
+        <p style="white-space:pre-wrap;line-height:1.5;margin:10px 0 0">${msg}</p>
+        <small style="color:#888">→ ${g.phone || "no phone set"} via ${g.smsClinic}</small></div>`);
+    }
+    res.send(`<body style="font-family:sans-serif;max-width:680px;margin:40px auto">${lockNote()}
+      <h2>Coaching drafts — target €${(target/1e6).toFixed(2)}M</h2>
+      ${cards.join("")}
+      <form method="POST" action="/coach/send?target=${target}" onsubmit="return confirm('Send these SMS to all four chiros?')">
+        <button style="border:none;background:#2563EB;color:#fff;font-size:15px;font-weight:600;padding:12px 22px;border-radius:8px;cursor:pointer">Approve &amp; send all by SMS</button>
+      </form>
+      <p style="color:#888;margin-top:10px">Targets: <a href="?target=1000000">€1.0M</a> · <a href="?target=1100000">€1.1M</a> · <a href="?target=1200000">€1.2M</a></p>
+    </body>`);
+  } catch (e) { res.status(500).send(`<pre style="white-space:pre-wrap">Error: ${e.message}</pre>`); }
+});
+
+// ── COACH SEND — drafts again and actually sends via SMS ──────────────────────
+app.post("/coach/send", gate, async (req, res) => {
+  const target = parseInt(req.query.target) || 1100000;
+  try {
+    const goals = chiroGoals(target, await chiroBaselines(30));
+    const results = [];
+    for (const g of goals) {
+      if (!g.phone) { results.push(`${g.n}: skipped (no phone)`); continue; }
+      try {
+        const msg = await draftCoaching(g);
+        await sendSms(g.smsClinic, g.phone, g.n, msg);
+        results.push(`${g.n}: sent ✅`);
+      } catch (e) { results.push(`${g.n}: failed — ${e.message}`); }
+    }
+    res.send(`<body style="font-family:sans-serif;max-width:600px;margin:40px auto"><h2>Send results</h2><p>${results.join("<br>")}</p></body>`);
+  } catch (e) { res.status(500).send(`<pre style="white-space:pre-wrap">Error: ${e.message}</pre>`); }
 });
 
 // ── CONNECTION TEST — open in a browser to prove PracticeHub is reachable ────
@@ -309,23 +434,20 @@ app.get("/kpi", gate, async (req, res) => {
   try {
     const k = await computeKpis(clinic, days);
     const rows = k.rows.map(r =>
-      `<tr><td>${r.name}</td><td style="text-align:right">${r.visits}</td><td style="text-align:right">${r.uniquePatients}</td>
-       <td style="text-align:right"><b>${r.pva}</b></td><td style="text-align:right">${r.intakes}</td></tr>`).join("");
+      `<tr><td>${r.name}</td><td style="text-align:right">${r.visits}</td><td style="text-align:right">${r.intakes}</td>
+       <td style="text-align:right"><b>${r.pva}</b></td><td style="text-align:right">${r.uniquePatients}</td></tr>`).join("");
     const status = Object.entries(k.statusTally).map(([s, n]) => `${s}: ${n}`).join(" · ");
-    const intakeNote = k.intakeTypesFound
-      ? `Intakes counted from ${k.intakeTypesFound} appointment type(s) detected by name.`
-      : `⚠️ No "intake" appointment type auto-detected — tell me which type name = a new-patient intake and I'll wire it.`;
-    const typeList = k.appointmentTypes.map(t => `#${t.id} ${t.name}`).join("<br>");
     res.send(`<body style="max-width:760px;margin:40px auto;font-family:sans-serif">${lockNote()}
       <h2>${clinic} — last ${days} days</h2>
       <table border="1" cellpadding="8" style="border-collapse:collapse;width:100%">
-        <tr style="background:#f4f4f4"><th align="left">Chiropractor</th><th>Visits</th><th>Patients</th><th>PVA</th><th>Intakes</th></tr>
-        ${rows || `<tr><td colspan="5">no processed visits in range</td></tr>`}
+        <tr style="background:#f4f4f4"><th align="left">Chiropractor</th><th>Visits</th><th>Intakes</th><th>PVA</th><th>Patients</th></tr>
+        ${rows || `<tr><td colspan="5">no qualifying visits in range</td></tr>`}
       </table>
-      <p style="color:#555;margin-top:10px"><b>PVA</b> = visits ÷ unique patients. Only <b>processed</b> visits counted; cancelled and duplicates removed.</p>
-      <p style="color:#888">Status mix in range: ${status}</p>
-      <p style="color:#888">${intakeNote}</p>
-      <details style="margin-top:10px;color:#888"><summary>Appointment types at this clinic</summary><p>${typeList}</p></details>
+      <p style="color:#555;margin-top:10px"><b>PVA</b> = qualifying visits ÷ intakes (avg visits per new patient). Only <b>processed</b> visits; cancelled, missed, pending, and duplicates removed.</p>
+      <p style="color:#555"><b>Excluded from visits:</b> ${k.excludedNames.join(", ") || "none"}.</p>
+      <p style="color:#555"><b>Counted as intakes:</b> ${k.intakeNames.join(", ") || "none"}.</p>
+      <p style="color:#888">Status mix: ${status}</p>
+      <details style="margin-top:10px;color:#888"><summary>All appointment types at this clinic</summary><p>${k.appointmentTypes.map(t => `#${t.id} ${t.name}`).join("<br>")}</p></details>
       <p style="color:#888;margin-top:16px">Switch: <a href="?clinic=Amstelveen&days=${days}">Amstelveen</a> · <a href="?clinic=Utrecht&days=${days}">Utrecht</a> · <a href="?clinic=Rotterdam&days=${days}">Rotterdam</a> · <a href="?clinic=Bussum&days=${days}">Bussum</a>
       &nbsp;|&nbsp; range: <a href="?clinic=${clinic}&days=7">7d</a> · <a href="?clinic=${clinic}&days=30">30d</a> · <a href="?clinic=${clinic}&days=90">90d</a></p>
     </body>`);
