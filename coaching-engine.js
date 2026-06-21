@@ -456,4 +456,154 @@ app.get("/kpi", gate, async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — open /preview"));
+// ── PLAN DATA — one PracticeHub pull, returns each chiro's real numbers as JSON ─
+// the /plan page calls this once, then the slider recomputes goals in the browser.
+const PLAN_DAYS = {            // days worked per week → a soft weekly-visit cap
+  Myles: 3.5, Lara: 3.5, Matthew: 4, Alex: 3,
+};
+const CAP_PER_DAY = 9;        // ~comfortable patients per working day (tune anytime)
+
+app.get("/plan/data", gate, async (_req, res) => {
+  try {
+    const base = await chiroBaselines(30);  // sequential = rate-limit safe
+    res.json({
+      price: PRICE_PER_VISIT,
+      chiros: base.map(b => ({
+        n: b.n, clinics: b.clinics, visits: b.visits, intakes: b.intakes,
+        pva: b.pva, nowWeekly: Math.round(b.visits / 4.33),
+        days: PLAN_DAYS[b.n] || 3.5,
+        capWeekly: Math.round((PLAN_DAYS[b.n] || 3.5) * CAP_PER_DAY),
+        phone: !!b.phone, smsClinic: b.smsClinic,
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PLAN — the dashboard: slider → projection stats + per-chiro goals + send ───
+app.get("/plan", gate, (_req, res) => {
+  res.send(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Posturefixx — Plan</title>
+<style>
+  :root{--ink:#16202E;--mut:#6B7686;--line:#E5E9F0;--blue:#2563EB;--ok:#16A34A;--str:#D97706;--over:#DC2626;--bg:#F7F9FC}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);margin:0;padding:32px 18px;line-height:1.5}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 24px;font-size:14px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+  .slider-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
+  .target{font-size:30px;font-weight:700}
+  input[type=range]{width:100%;accent-color:var(--blue);height:6px}
+  .ticks{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin-top:4px}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:8px}
+  .stat{background:var(--bg);border-radius:10px;padding:12px}
+  .stat .v{font-size:20px;font-weight:700} .stat .l{color:var(--mut);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .tag.ok{background:#DCFCE7;color:var(--ok)} .tag.stretch{background:#FEF3C7;color:var(--str)} .tag.over{background:#FEE2E2;color:var(--over)}
+  .arrow{color:var(--mut)}
+  .btn{display:inline-block;border:none;background:var(--blue);color:#fff;font-size:15px;font-weight:600;padding:13px 22px;border-radius:10px;cursor:pointer;text-decoration:none}
+  .btn.ghost{background:#fff;color:var(--blue);border:1px solid var(--blue)}
+  .bars{margin-top:8px}
+  .barrow{display:flex;align-items:center;gap:10px;margin:7px 0}
+  .barrow .nm{width:64px;font-size:13px;font-weight:600}
+  .track{flex:1;background:var(--bg);border-radius:6px;position:relative;height:22px}
+  .bar{position:absolute;left:0;top:0;height:100%;border-radius:6px;background:#BFD3FF}
+  .bar.goal{background:var(--blue);opacity:.85}
+  .cap{position:absolute;top:-3px;height:28px;width:2px;background:var(--over)}
+  .legend{color:var(--mut);font-size:12px;margin-top:6px}
+  #err{color:var(--over);font-size:14px}
+  .loading{color:var(--mut)}
+</style></head><body><div class="wrap">
+  <h1>Posturefixx — Plan</h1>
+  <p class="sub">Live numbers from PracticeHub. Move the slider to set a yearly revenue target; everyone's weekly goal updates. Review the messages, then send by SMS.</p>
+  <div id="lock"></div>
+
+  <div class="card">
+    <div class="slider-row"><div>Yearly revenue target</div><div class="target" id="tgt">€1.10M</div></div>
+    <input type="range" id="slider" min="700000" max="1500000" step="25000" value="1100000">
+    <div class="ticks"><span>€0.70M</span><span>€1.10M</span><span>€1.50M</span></div>
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-now">–</div><div class="l">visits / month now</div></div>
+      <div class="stat"><div class="v" id="s-need">–</div><div class="l">visits / month needed</div></div>
+      <div class="stat"><div class="v" id="s-gap">–</div><div class="l">monthly gap</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Per-chiropractor goals</b>
+    <div id="err"></div>
+    <table id="tbl"><thead><tr>
+      <th>Chiro</th><th class="num">Now /wk</th><th class="num">Goal /wk</th><th class="num">PVA now → goal</th><th>Load</th>
+    </tr></thead><tbody><tr><td colspan="5" class="loading">Loading live PracticeHub numbers… (first load can take ~30s on the free tier)</td></tr></tbody></table>
+    <div class="bars" id="bars"></div>
+    <div class="legend">Light bar = now · Blue bar = goal · Red line = comfortable weekly capacity (${CAP_PER_DAY}/day × days worked)</div>
+  </div>
+
+  <div class="card">
+    <b>Push coaching to the team</b>
+    <p class="sub" style="margin:6px 0 14px">Opens the review screen at your chosen target — you'll see each drafted message and confirm before anything sends.</p>
+    <a class="btn" id="send" href="#">Review &amp; send via SMS →</a>
+    <a class="btn ghost" href="/coach" style="margin-left:8px">Open coach page</a>
+  </div>
+  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/coach">/coach</a> · <a href="/kpi?clinic=Rotterdam">/kpi</a> · <a href="/phub-test">/phub-test</a></p>
+</div>
+<script>
+  var DATA=null;
+  var fmtM=function(n){return "€"+(n/1e6).toFixed(2)+"M"};
+  function recompute(){
+    if(!DATA) return;
+    var target=+document.getElementById('slider').value;
+    document.getElementById('tgt').textContent=fmtM(target);
+    document.getElementById('send').href='/coach?target='+target;
+    var sumV=DATA.chiros.reduce(function(s,b){return s+b.visits},0)||1;
+    var needMonthly=(target/12)/DATA.price;
+    var scale=needMonthly/sumV;
+    document.getElementById('s-now').textContent=Math.round(sumV);
+    document.getElementById('s-need').textContent=Math.round(needMonthly);
+    var gap=Math.round(needMonthly-sumV);
+    document.getElementById('s-gap').textContent=(gap>=0?'+':'')+gap;
+    var rows='',bars='';
+    var maxBar=0;
+    DATA.chiros.forEach(function(b){
+      var goalMonthly=b.visits*scale;
+      var goalWeekly=Math.round(goalMonthly/4.33);
+      maxBar=Math.max(maxBar,goalWeekly,b.nowWeekly,b.capWeekly);
+    });
+    DATA.chiros.forEach(function(b){
+      var goalMonthly=b.visits*scale;
+      var goalWeekly=Math.round(goalMonthly/4.33);
+      var goalPva=b.intakes?(goalMonthly/b.intakes):0;
+      var load='ok',lab='OK';
+      if(goalWeekly>b.capWeekly){load='over';lab='Over capacity'}
+      else if(goalWeekly>0.85*b.capWeekly){load='stretch';lab='Stretch'}
+      rows+='<tr><td><b>'+b.n+'</b><br><span class="arrow" style="font-size:12px">'+b.clinics.join(' + ')+'</span></td>'+
+            '<td class="num">'+b.nowWeekly+'</td>'+
+            '<td class="num"><b>'+goalWeekly+'</b></td>'+
+            '<td class="num">'+b.pva+' <span class="arrow">→</span> '+goalPva.toFixed(1)+'</td>'+
+            '<td><span class="tag '+load+'">'+lab+'</span></td></tr>';
+      var pctNow=(b.nowWeekly/maxBar*100),pctGoal=(goalWeekly/maxBar*100),pctCap=(b.capWeekly/maxBar*100);
+      bars+='<div class="barrow"><div class="nm">'+b.n+'</div><div class="track">'+
+            '<div class="bar" style="width:'+pctNow+'%"></div>'+
+            '<div class="bar goal" style="width:'+pctGoal+'%"></div>'+
+            '<div class="cap" style="left:'+pctCap+'%"></div></div></div>';
+    });
+    document.querySelector('#tbl tbody').innerHTML=rows;
+    document.getElementById('bars').innerHTML=bars;
+  }
+  document.getElementById('slider').addEventListener('input',recompute);
+  fetch('/plan/data').then(function(r){return r.json()}).then(function(d){
+    if(d.error){document.getElementById('err').textContent='PracticeHub error: '+d.error;
+      document.querySelector('#tbl tbody').innerHTML='';return;}
+    DATA=d;
+    if(d.chiros.some(function(c){return !c.phone})) 
+      document.getElementById('lock').innerHTML='';
+    recompute();
+  }).catch(function(e){document.getElementById('err').textContent='Could not load: '+e});
+</script></body></html>`);
+});
+
+app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — open /plan"));
