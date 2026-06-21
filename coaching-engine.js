@@ -705,6 +705,7 @@ const CAS = [
   { name: "Anne",      phoneVar: "PHONE_ANNE" },
   { name: "Alexandra", phoneVar: "PHONE_ALEXANDRA" },
   { name: "Archana",   phoneVar: "PHONE_ARCHANA" },
+  { name: "Renata",    phoneVar: "PHONE_RENATA" },
 ];
 
 function caPhone(name) {
@@ -725,7 +726,7 @@ function normalizeCA(raw) {
     alexandra: "Alexandra",
     archana: "Archana",
     renata: "Renata",  // Renata herself sometimes takes intakes
-    szandi: "Szandi",  // Utrecht CA
+    szandi: "Alexandra",  // Szandi and Alexandra are the same person
   };
   return map[s] || String(raw).trim();
 }
