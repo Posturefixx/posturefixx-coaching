@@ -1900,7 +1900,7 @@ th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;te
     <div style="flex:1;min-width:220px"><label>Target profit on top: <b id="targetLbl">10%</b></label><input type="range" id="target" min="0" max="30" value="10" style="width:100%"></div>
   </div>
   <table>
-    <thead><tr><th>Chiro</th><th>Brings in /mo</th><th>Pay</th><th>= rate</th><th>Cost share</th><th>Your-fee share</th><th>Profit</th><th>Margin</th></tr></thead>
+    <thead><tr><th>Chiro</th><th>Brings in /mo</th><th>Pay</th><th title="pay divided by revenue">Effective %</th><th>Cost share</th><th>Your-fee share</th><th>Profit</th><th>Margin</th></tr></thead>
     <tbody>${DEF.map(row).join("")}</tbody>
   </table>
   <div class="legend"><b>Pay</b> is computed live from each structure below \u2014 change a chiro's revenue and watch their pay (and the commission tiers) move. <b>Cost share / fee share</b> split the other running costs and your draw across chiros by revenue. Employer factor turns Myles' & Matthew's gross base into real cost.</div>
@@ -1928,14 +1928,21 @@ function mattComm(r){return 0.40*Math.max(0,Math.min(r,21500)-16500)+0.45*Math.m
 function factor(){return +document.getElementById("factor").value||1.27;}
 function payOf(id,revs){ if(id==="Alex")return 0; if(id==="Annefloor")return 0.45*revs[0]; if(id==="Lara")return laraTier(revs[0])+laraTier(revs[1]); if(id==="Myles")return 5688*factor()+mylesComm(revs[0]); if(id==="Matthew")return 4551*factor()+mattComm(revs[0]); return 0; }
 function revsOf(d){var a=[];for(var i=0;i<d.n;i++)a.push(+document.getElementById("rev-"+d.id+"-"+i).value||0);return a;}
+function payDetail(id,revs){var f=factor();
+  if(id==="Alex")return "Owner \u2014 no wage taken here";
+  if(id==="Annefloor")return "45% of "+eur(revs[0])+" = "+eur(0.45*revs[0]);
+  if(id==="Lara")return "Amstelveen "+eur(laraTier(revs[0]))+" + Bussum "+eur(laraTier(revs[1]))+"  (37.5/42.5/45% tiers, each site on its own)";
+  if(id==="Myles"){var c=mylesComm(revs[0]); return eur(5688)+" base \u00d7"+f+" = "+eur(5688*f)+(c>0?" + "+eur(c)+" commission":" + \u20ac0 commission ("+eur(Math.max(0,17500-revs[0]))+" below \u20ac17.5k threshold)");}
+  if(id==="Matthew"){var c=mattComm(revs[0]); return eur(4551)+" base \u00d7"+f+" = "+eur(4551*f)+(c>0?" + "+eur(c)+" commission":" + \u20ac0 commission ("+eur(Math.max(0,16500-revs[0]))+" below \u20ac16.5k threshold)");}
+  return "";}
 function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
 function recompute(){
   var O=+document.getElementById("overhead").value||0, draw=+document.getElementById("draw").value||0, target=(+document.getElementById("target").value||0)/100;
   set("targetLbl",(target*100).toFixed(0)+"%");
   var R=0,totalPay=0,data={};
-  DEF.forEach(function(d){var revs=revsOf(d),rev=revs.reduce(function(a,b){return a+b;},0),pay=payOf(d.id,revs); data[d.id]={rev:rev,pay:pay}; R+=rev; totalPay+=pay;});
+  DEF.forEach(function(d){var revs=revsOf(d),rev=revs.reduce(function(a,b){return a+b;},0),pay=payOf(d.id,revs); data[d.id]={rev:rev,pay:pay,revs:revs}; R+=rev; totalPay+=pay;});
   DEF.forEach(function(d){var x=data[d.id], Hi=R?O*x.rev/R:0, Si=R?draw*x.rev/R:0, profit=x.rev-x.pay-Hi-Si, margin=x.rev?profit/x.rev:0;
-    set("pay-"+d.id,eur(x.pay)); set("rate-"+d.id,x.rev?Math.round(100*x.pay/x.rev)+"%":"\u2014"); set("cost-"+d.id,eur(Hi)); set("fee-"+d.id,eur(Si)); set("profit-"+d.id,eur(profit));
+    set("pay-"+d.id,eur(x.pay)); var pe=document.getElementById("pay-"+d.id); if(pe){pe.title=payDetail(d.id,x.revs); pe.style.cursor="help";} set("rate-"+d.id,x.rev?Math.round(100*x.pay/x.rev)+"%":"\u2014"); set("cost-"+d.id,eur(Hi)); set("fee-"+d.id,eur(Si)); set("profit-"+d.id,eur(profit));
     var mc=document.getElementById("margin-"+d.id); if(mc){mc.textContent=(margin*100).toFixed(0)+"%"; mc.style.color=margin>=target?"#16a34a":margin>=0?"#f59e0b":"#dc2626";}});
   var profitTot=R-totalPay-O-draw, marginTot=R?profitTot/R:0, covered=(R-totalPay-O)>=draw;
   set("cR",eur(R)); set("cPay",eur(totalPay)); set("cP",eur(profitTot));
