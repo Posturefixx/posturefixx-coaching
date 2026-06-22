@@ -705,6 +705,8 @@ const CAS = [
   { name: "Anne",      phoneVar: "PHONE_ANNE" },
   { name: "Alexandra", phoneVar: "PHONE_ALEXANDRA" },
   { name: "Archana",   phoneVar: "PHONE_ARCHANA" },
+  { name: "Renata",    phoneVar: "PHONE_RENATA" },
+  { name: "Szandi",    phoneVar: "PHONE_SZANDI" },
 ];
 
 function caPhone(name) {
