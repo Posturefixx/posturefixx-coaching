@@ -1265,6 +1265,23 @@ function parseWeekly(rows) {
   return wk;
 }
 
+// ── Per-practitioner monthly revenue (the € table at the bottom of the PVA sheet) ─
+function parseMonthlyRev(rows, year) {
+  let ri=-1;
+  for (let i=0;i<rows.length;i++){ const r=rows[i]||[]; if((r[0]||"").trim().toLowerCase()==="month" && r.join(",").toLowerCase().includes("operational expense")){ri=i;break;} }
+  if (ri<0) return {};
+  const hdr=(rows[ri]||[]).map(c=>(c||"").trim().toLowerCase()), ix=n=>hdr.indexOf(n);
+  const cAlex=ix("alex total"),cLA=ix("lara amstelveen"),cLB=ix("lara bussum"),cMy=ix("total myles"),cAn=ix("annefloor"),cMU=ix("matthew u"),cMB=ix("matthew b");
+  const MON={january:"01",jan:"01",february:"02",feb:"02",march:"03",mar:"03",april:"04",apr:"04",may:"05",june:"06",july:"07",jul:"07",august:"08",aug:"08",september:"09",sept:"09",october:"10",oct:"10",november:"11",nov:"11",december:"12",dec:"12"};
+  const E=s=>{ if(s==null)return 0; let t=String(s).replace(/\u20ac/g,"").trim(); if(!t||t[0]==="#")return 0; const neg=t[0]==="-"; t=t.replace(/^-/,"").replace(/,/g,""); const v=parseFloat(t); return isNaN(v)?0:(neg?-v:v); };
+  const out={};
+  for (let r=ri+1;r<rows.length;r++){ const row=rows[r]||[]; const mn=(row[0]||"").trim().toLowerCase(); if(!MON[mn])continue;
+    const g=c=>(c>=0&&c<row.length)?E(row[c]):0;
+    const o={Alex:Math.round(g(cAlex)),LaraA:Math.round(g(cLA)),LaraB:Math.round(g(cLB)),Myles:Math.round(g(cMy)),Annefloor:Math.round(g(cAn)),Matthew:Math.round(g(cMU)+g(cMB))};
+    if(o.Alex+o.LaraA+o.LaraB+o.Myles+o.Annefloor+o.Matthew>0) out[year+"-"+MON[mn]]=o; }
+  return out;
+}
+
 // ── Load + shape everything ──────────────────────────────────────────────────
 async function loadTabs(sheetId, tabs) {
   const out = [];
@@ -1313,7 +1330,8 @@ async function loadPvaData() {
     earn[k] = { 2025: t25.earn[k] || Array(12).fill(null), 2026: t26.earn[k] || Array(12).fill(null) };
   }
   const weekly = parseWeekly(rows26);
-  return { keys, labels, pva, earn, weekly, errors, found: { y2026: t26.found, y2025: t25.found } };
+  const monthlyRev = { ...parseMonthlyRev(rows25, "2025"), ...parseMonthlyRev(rows26, "2026") };
+  return { keys, labels, pva, earn, weekly, monthlyRev, errors, found: { y2026: t26.found, y2025: t25.found } };
 }
 
 // ── Live current-month PVA from PracticeHub (per chiro-location) ──────────────
@@ -1960,6 +1978,7 @@ th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;te
 <h1>Profit per chiropractor</h1><div class="sub">Pay is calculated from each chiro's real deal. Edit the revenue to model a month; the slider sets the profit you want after paying everyone and your draw.</div>
 <div class="card">
   <div class="controls">
+    <div><label>Month (recorded)</label><select id="monthSel" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;min-width:130px"></select></div>
     <div><label>Employer cost factor (gross\u2192cost)</label><input type="number" step="0.01" id="factor" value="1.27"></div>
     <div><label>Other running costs \u20ac/mo (rent, ads, CAs\u2026)</label><input type="number" id="overhead" value="38000"></div>
     <div><label>Your draw \u20ac/mo</label><input type="number" id="draw" value="6000"></div>
@@ -2018,11 +2037,26 @@ function recompute(){
   for(var s=1;s<=4;s+=0.01){ var Rs=0,Ps=0; DEF.forEach(function(d){var revs=revsOf(d).map(function(v){return v*s;}); Rs+=revs.reduce(function(a,b){return a+b;},0); Ps+=payOf(d.id,revs);}); if(Rs&&(Rs-Ps-O-draw)/Rs>=target){need=s;break;} }
   var rn=document.getElementById("cNeed"); if(rn){ if(marginTot>=target) rn.textContent="\u2714 already there"; else if(need) rn.textContent="+"+Math.round((need-1)*100)+"%  (\u2248"+eur(R*(need-1))+"/mo)"; else rn.textContent="raise prices/cut costs"; }
 }
+var PROFIT_REV={"2026-01":{"Alex":33658,"LaraA":8370,"LaraB":5405,"Myles":7685,"Annefloor":2765,"Matthew":5335},"2026-02":{"Alex":23765,"LaraA":6625,"LaraB":2860,"Myles":10065,"Annefloor":0,"Matthew":14895},"2026-03":{"Alex":30875,"LaraA":9425,"LaraB":7265,"Myles":10845,"Annefloor":2005,"Matthew":20413},"2026-04":{"Alex":13660,"LaraA":8385,"LaraB":7210,"Myles":18430,"Annefloor":1465,"Matthew":15830},"2026-05":{"Alex":14140,"LaraA":6405,"LaraB":5400,"Myles":18295,"Annefloor":2160,"Matthew":17888}};
+function monthLabel(k){var p=k.split("-");var mn=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return (mn[+p[1]]||p[1])+" "+p[0];}
+function buildMonths(){var sel=document.getElementById("monthSel");if(!sel)return;var keys=Object.keys(PROFIT_REV).sort().reverse();sel.innerHTML=keys.map(function(k){return "<option value='"+k+"'>"+monthLabel(k)+"</option>";}).join("");}
+function loadMonth(k){var r=PROFIT_REV[k];if(!r)return;var map={"rev-Alex-0":r.Alex,"rev-Lara-0":r.LaraA,"rev-Lara-1":r.LaraB,"rev-Myles-0":r.Myles,"rev-Matthew-0":r.Matthew,"rev-Annefloor-0":r.Annefloor};Object.keys(map).forEach(function(id){var e=document.getElementById(id);if(e&&map[id]!=null)e.value=map[id];});recompute();}
 document.querySelectorAll("input").forEach(function(el){el.addEventListener("input",recompute);});
-recompute();
+buildMonths();
+var msel=document.getElementById("monthSel");
+if(msel){msel.addEventListener("change",function(){loadMonth(this.value);});}
+var firstKey=Object.keys(PROFIT_REV).sort().reverse()[0];
+if(firstKey){if(msel)msel.value=firstKey;loadMonth(firstKey);}else{recompute();}
+fetch("/profit/rev.json").then(function(r){return r.json();}).then(function(live){if(live&&Object.keys(live).length){Object.assign(PROFIT_REV,live);buildMonths();var cur=msel?msel.value:null;var k=(cur&&PROFIT_REV[cur])?cur:Object.keys(PROFIT_REV).sort().reverse()[0];if(msel)msel.value=k;loadMonth(k);}}).catch(function(){});
 </script>
 </body></html>`);
 } catch(e){ res.status(500).send("profit error: "+e.message); } });
+
+// live per-practitioner monthly revenue from the PVA sheet (refreshes the /profit month picker)
+app.get("/profit/rev.json", gate, async (_req, res) => {
+  try { const d = await loadPvaData(); res.json(d.monthlyRev || {}); }
+  catch (e) { res.json({}); }
+});
 
 // ============================================================================
 //  /scorecard — the systems-vs-growth view: revenue, PVA (retention),
