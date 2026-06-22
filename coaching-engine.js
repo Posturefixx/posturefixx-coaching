@@ -1969,8 +1969,8 @@ app.get("/profit", gate, (_req,res)=>{ try {
   const DEF=[
     {id:"Alex", revs:[["all clinics",23220]], base:0, note:"Owner \u2014 draws via the holding, no wage taken here."},
     {id:"Lara", revs:[["Amstelveen",7842],["Bussum",5628]], base:0, note:"37.5% on the first \u20ac5k, 42.5% \u20ac5\u201310k, 45% above \u2014 each location worked out separately, not combined."},
-    {id:"Myles", revs:[["Amstelveen",13064]], base:5688, note:"\u20ac5,688 gross base + commission once over \u20ac17.5k: 45% to \u20ac22.5k, 50% to \u20ac30k, 55% above. A monthly shortfall carries forward before commission restarts."},
-    {id:"Matthew", revs:[["Utrecht + Bussum",14872]], base:4551, note:"\u20ac4,551 gross base + commission once over \u20ac16.5k: 40% to \u20ac21.5k, 45% above. Shortfall carries forward like Myles."},
+    {id:"Myles", revs:[["Amstelveen",13064]], base:5688, note:"Employee since Apr 2026. \u20ac5,688 gross base (\u00d7 employer factor). Bonus threshold \u20ac16,500 for the first 3 months (Apr\u2013Jun), then \u20ac17,500; 45% / 50% / 55% on revenue above it. A monthly shortfall rolls onto next month\u2019s threshold."},
+    {id:"Matthew", revs:[["Utrecht + Bussum",14872]], base:4551, note:"Employee since Jan 2026; bonus threshold (\u20ac16,500) activates May 2026. \u20ac4,551 gross base (\u00d7 employer factor); 40% then 45% on revenue above threshold. Shortfall rolls forward like Myles."},
     {id:"Annefloor", revs:[["Amstelveen",1679]], base:0, note:"45% of paid invoices."},
   ];
   const row=ch=>`<tr>
@@ -1998,7 +1998,7 @@ th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;te
 <div class="card">
   <div class="controls">
     <div><label>Month (recorded)</label><select id="monthSel" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;min-width:130px"></select></div>
-    <div><label>Employer cost factor (gross\u2192cost)</label><input type="number" step="0.01" id="factor" value="1.27"></div>
+    <div><label>Employer costs (gross \u2192 total, \u00d7)</label><input type="number" step="0.01" id="factor" value="1.27"></div>
     <div><label>Other running costs \u20ac/mo (rent, ads, CAs\u2026)</label><input type="number" id="overhead" value="38000"></div>
     <div><label>Your draw \u20ac/mo</label><input type="number" id="draw" value="6000"></div>
     <div style="flex:1;min-width:220px"><label>Target profit on top: <b id="targetLbl">10%</b></label><input type="range" id="target" min="0" max="30" value="10" style="width:100%"></div>
@@ -2027,17 +2027,35 @@ th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;te
 var DEF=[{id:"Alex",n:1},{id:"Lara",n:2},{id:"Myles",n:1},{id:"Matthew",n:1},{id:"Annefloor",n:1}];
 function eur(n){return "\u20ac"+Math.round(n||0).toLocaleString("en-US");}
 function laraTier(r){return 0.375*Math.min(r,5000)+0.425*Math.max(0,Math.min(r,10000)-5000)+0.45*Math.max(0,r-10000);}
-function mylesComm(r){return 0.45*Math.max(0,Math.min(r,22500)-17500)+0.50*Math.max(0,Math.min(r,30000)-22500)+0.55*Math.max(0,r-30000);}
-function mattComm(r){return 0.40*Math.max(0,Math.min(r,21500)-16500)+0.45*Math.max(0,r-21500);}
 function factor(){return +document.getElementById("factor").value||1.27;}
-function payOf(id,revs){ if(id==="Alex")return 0; if(id==="Annefloor")return 0.45*revs[0]; if(id==="Lara")return laraTier(revs[0])+laraTier(revs[1]); if(id==="Myles")return 5688*factor()+mylesComm(revs[0]); if(id==="Matthew")return 4551*factor()+mattComm(revs[0]); return 0; }
+function curMonth(){var s=document.getElementById("monthSel");return (s&&s.value)?s.value:"2026-05";}
+var EMP={
+  Myles:{base:5688,startLabel:"Apr 2026",thr:function(ym){return ym<"2026-04"?null:(ym<="2026-06"?16500:17500);},
+         comm:function(rev,T){return 0.45*Math.max(0,Math.min(rev,T+5000)-T)+0.50*Math.max(0,Math.min(rev,T+12500)-(T+5000))+0.55*Math.max(0,rev-(T+12500));}},
+  Matthew:{base:4551,startLabel:"May 2026",thr:function(ym){return ym<"2026-05"?null:16500;},
+           comm:function(rev,T){return 0.40*Math.max(0,Math.min(rev,T+5000)-T)+0.45*Math.max(0,rev-(T+5000));}}
+};
+function chiroMonthRev(id,m){var r=PROFIT_REV[m];if(!r)return 0;return id==="Myles"?(r.Myles||0):(id==="Matthew"?(r.Matthew||0):0);}
+function accThreshold(id,ym){var cfg=EMP[id];if(!cfg)return{active:false};var baseT=cfg.thr(ym);if(baseT==null)return{active:false,start:cfg.startLabel};
+  var prior=Object.keys(PROFIT_REV).sort().filter(function(m){return m<ym&&cfg.thr(m)!=null;});var deficit=0;
+  prior.forEach(function(m){var T=cfg.thr(m)+deficit;var rev=chiroMonthRev(id,m);deficit=(rev>=T)?0:(T-rev);});
+  return{active:true,baseT:baseT,carried:deficit,T:baseT+deficit};}
+function payOf(id,revs){
+  if(id==="Alex")return 0;
+  if(id==="Annefloor")return 0.45*revs[0];
+  if(id==="Lara")return laraTier(revs[0])+laraTier(revs[1]);
+  if(id==="Myles"||id==="Matthew"){var cfg=EMP[id],base=cfg.base*factor(),acc=accThreshold(id,curMonth());var bonus=(acc.active&&revs[0]>=acc.T)?cfg.comm(revs[0],acc.T):0;return base+bonus;}
+  return 0;
+}
 function revsOf(d){var a=[];for(var i=0;i<d.n;i++)a.push(+document.getElementById("rev-"+d.id+"-"+i).value||0);return a;}
 function payDetail(id,revs){var f=factor();
   if(id==="Alex")return "Owner \u2014 no wage taken here";
   if(id==="Annefloor")return "45% of "+eur(revs[0])+" = "+eur(0.45*revs[0]);
   if(id==="Lara")return "Amstelveen "+eur(laraTier(revs[0]))+" + Bussum "+eur(laraTier(revs[1]))+"  (37.5/42.5/45% tiers, each site on its own)";
-  if(id==="Myles"){var c=mylesComm(revs[0]); return eur(5688)+" base \u00d7"+f+" = "+eur(5688*f)+(c>0?" + "+eur(c)+" commission":" + \u20ac0 commission ("+eur(Math.max(0,17500-revs[0]))+" below \u20ac17.5k threshold)");}
-  if(id==="Matthew"){var c=mattComm(revs[0]); return eur(4551)+" base \u00d7"+f+" = "+eur(4551*f)+(c>0?" + "+eur(c)+" commission":" + \u20ac0 commission ("+eur(Math.max(0,16500-revs[0]))+" below \u20ac16.5k threshold)");}
+  if(id==="Myles"||id==="Matthew"){var cfg=EMP[id],b=cfg.base*f,acc=accThreshold(id,curMonth());
+    if(!acc.active) return eur(cfg.base)+" base \u00d7"+f+" = "+eur(b)+" (bonus starts "+acc.start+")";
+    var c=(revs[0]>=acc.T)?cfg.comm(revs[0],acc.T):0;
+    return eur(cfg.base)+" base \u00d7"+f+" = "+eur(b)+(c>0?" + "+eur(c)+" bonus (over \u20ac"+Math.round(acc.T)+")":" + \u20ac0 bonus (need \u20ac"+Math.round(acc.T)+", billed \u20ac"+Math.round(revs[0])+")");}
   return "";}
 function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
 function recompute(){
@@ -2046,7 +2064,7 @@ function recompute(){
   var R=0,totalPay=0,data={};
   DEF.forEach(function(d){var revs=revsOf(d),rev=revs.reduce(function(a,b){return a+b;},0),pay=payOf(d.id,revs); data[d.id]={rev:rev,pay:pay,revs:revs}; R+=rev; totalPay+=pay;});
   DEF.forEach(function(d){var x=data[d.id], Hi=R?O*x.rev/R:0, Si=R?draw*x.rev/R:0, profit=x.rev-x.pay-Hi-Si, margin=x.rev?profit/x.rev:0;
-    set("pay-"+d.id,eur(x.pay)); var pe=document.getElementById("pay-"+d.id); if(pe){pe.title=payDetail(d.id,x.revs); pe.style.cursor="help";} set("rate-"+d.id,x.rev?Math.round(100*x.pay/x.rev)+"%":"\u2014"); set("cost-"+d.id,eur(Hi)); set("fee-"+d.id,eur(Si)); set("profit-"+d.id,eur(profit));
+    var pe=document.getElementById("pay-"+d.id); if(pe){ if(d.id==="Myles"||d.id==="Matthew"){ var cfg=EMP[d.id], bc=cfg.base*factor(), cm=x.pay-bc, acc=accThreshold(d.id,curMonth()); var sub; if(!acc.active){ sub="base "+eur(bc)+" \u00b7 bonus starts "+acc.start; } else { var thrTxt=acc.carried>0?("threshold "+eur(acc.T)+" = "+eur(acc.baseT)+" + "+eur(acc.carried)+" carried"):("threshold "+eur(acc.T)); sub="base "+eur(bc)+(cm>0.5?" + bonus "+eur(cm):", no bonus")+" \u00b7 "+thrTxt; } pe.innerHTML=eur(x.pay)+"<div style='font-weight:400;color:#94a3b8;font-size:10.5px'>"+sub+"</div>"; } else { pe.textContent=eur(x.pay); } pe.title=payDetail(d.id,x.revs); pe.style.cursor="help"; } set("rate-"+d.id,x.rev?Math.round(100*x.pay/x.rev)+"%":"\u2014"); set("cost-"+d.id,eur(Hi)); set("fee-"+d.id,eur(Si)); set("profit-"+d.id,eur(profit));
     var mc=document.getElementById("margin-"+d.id); if(mc){mc.textContent=(margin*100).toFixed(0)+"%"; mc.style.color=margin>=target?"#16a34a":margin>=0?"#f59e0b":"#dc2626";}});
   var profitTot=R-totalPay-O-draw, marginTot=R?profitTot/R:0, covered=(R-totalPay-O)>=draw;
   set("cR",eur(R)); set("cPay",eur(totalPay)); set("cP",eur(profitTot));
