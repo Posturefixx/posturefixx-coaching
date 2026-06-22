@@ -564,6 +564,7 @@ app.get("/plan", gate, (req, res) => {
 </div>
 <script>
   var PL={"Amstelveen": {"2025": {"rev": 336619, "op": 92859, "exp": {"Personnel \u00b7 staff": 46691, "Other/Misc": 46449, "Personnel \u00b7 contractor chiro": 42924, "Marketing": 34786, "Rent": 33958, "Bank/Payment fees": 15741, "Travel/Transport": 6274, "Accounting/Professional": 5716, "Supplies/Retail": 4738, "Insurance": 3662, "Software/SaaS": 2711}, "below": {"Intercompany/Owner": 59519, "Tax": 10513, "Financing/Loan repay": 15496, "Internal \u00b7 transfer/loan in": -1432}}, "2026": {"rev": 167304, "op": 46401, "exp": {"Personnel \u00b7 staff": 34567, "Personnel \u00b7 contractor chiro": 18697, "Rent": 14821, "Marketing": 12676, "Other/Misc": 10575, "Accounting/Professional": 8295, "Bank/Payment fees": 7815, "Supplies/Retail": 5795, "Travel/Transport": 4865, "Insurance": 1567, "Software/SaaS": 1224}, "below": {"Financing/Loan repay": 6825, "Intercompany/Owner": 19500, "Internal \u00b7 transfer/loan in": -286, "Tax": 12123}}}, "Utrecht": {"2025": {"rev": 230704, "op": 45155, "exp": {"Personnel \u00b7 contractor chiro": 63660, "Personnel \u00b7 staff": 52861, "Marketing": 20327, "Other/Misc": 15133, "Bank/Payment fees": 13054, "Accounting/Professional": 9229, "Rent": 3944, "Supplies/Retail": 3538, "Software/SaaS": 1450, "Travel/Transport": 1305, "Insurance": 699, "Energy/Utilities": 210}, "below": {"Tax": 16855, "Financing/Loan repay": 629, "Intercompany/Owner": 31954}}, "2026": {"rev": 108567, "op": 17336, "exp": {"Personnel \u00b7 staff": 37926, "Personnel \u00b7 contractor chiro": 22782, "Marketing": 8966, "Bank/Payment fees": 6664, "Accounting/Professional": 6448, "Other/Misc": 4429, "Rent": 1294, "Supplies/Retail": 1020, "Travel/Transport": 667, "Software/SaaS": 646, "Insurance": 305}, "below": {"Financing/Loan repay": 358, "Tax": 11447, "Intercompany/Owner": 1500}}}, "Bussum": {"2025": {"rev": 167853, "op": 55260, "exp": {"Personnel \u00b7 contractor chiro": 38246, "Personnel \u00b7 staff": 25666, "Marketing": 15233, "Bank/Payment fees": 10135, "Accounting/Professional": 6676, "Other/Misc": 5143, "Energy/Utilities": 3596, "Travel/Transport": 3011, "Rent": 2377, "Supplies/Retail": 1494, "Software/SaaS": 785, "Insurance": 231}, "below": {"Financing/Loan repay": 37979, "Tax": 10596, "Intercompany/Owner": 3555, "Internal \u00b7 transfer/loan in": -1000}}, "2026": {"rev": 69072, "op": 26883, "exp": {"Personnel \u00b7 staff": 11068, "Personnel \u00b7 contractor chiro": 10622, "Marketing": 6110, "Bank/Payment fees": 4452, "Accounting/Professional": 3151, "Other/Misc": 2200, "Travel/Transport": 2099, "Energy/Utilities": 1581, "Software/SaaS": 364, "Insurance": 231, "Rent": 200}, "below": {"Financing/Loan repay": 12290, "Tax": 5255, "Intercompany/Owner": 7500}}}, "Rotterdam": {"2025": {"rev": 32828, "op": -18862, "exp": {"Supplies/Retail": 22514, "Personnel \u00b7 staff": 12921, "Rent": 7154, "Other/Misc": 5271, "Marketing": 2295, "Accounting/Professional": 862, "Software/SaaS": 495}, "below": {"Tax": 3994, "Financing/Loan repay": 1030, "Intercompany/Owner": 1150, "Internal \u00b7 transfer/loan in": -25320}}, "2026": {"rev": 79551, "op": 34444, "exp": {"Personnel \u00b7 staff": 12899, "Marketing": 10246, "Rent": 8821, "Other/Misc": 5905, "Accounting/Professional": 3842, "Supplies/Retail": 2327, "Bank/Payment fees": 422, "Software/SaaS": 214}, "below": {"Financing/Loan repay": 2527, "Intercompany/Owner": 14900, "Tax": 4947}}}, "Holding": {"2025": {"rev": 161243, "op": 94981, "exp": {"Personnel \u00b7 contractor chiro": 28680, "Supplies/Retail": 16734, "Other/Misc": 10478, "Accounting/Professional": 4037, "Marketing": 2622, "Travel/Transport": 1432, "Rent": 1431, "Bank/Payment fees": 772}, "below": {"Intercompany/Owner": 48010, "Tax": 18904, "Financing/Loan repay": 27488}}, "2026": {"rev": 107336, "op": 51569, "exp": {"Personnel \u00b7 contractor chiro": 37736, "Other/Misc": 10678, "Personnel \u00b7 staff": 4229, "Accounting/Professional": 1516, "Travel/Transport": 1120, "Rent": 250}, "below": {"Tax": 14895, "Intercompany/Owner": 20339, "Financing/Loan repay": 4883}}}}, ORDER=["Amstelveen", "Utrecht", "Bussum", "Rotterdam", "Holding"], LABEL={"Holding": "Notable (holding)"}, MONTHLY=[71488, 65154, 80199, 75479, 78357], PACE=74135.4, ASOF="Jun 2026";
+  var PL_SPEND={"Utrecht":{"2021":{"Other (suppliers, fees, misc)":64826,"Contractor chiros":20388,"Rent":14792,"Marketing":7384,"Tax":6017,"Software/SaaS":492,"Insurance":466},"2022":{"Other (suppliers, fees, misc)":121309,"Rent":23162,"Marketing":20480,"Contractor chiros":17748,"Intercompany/Owner":17406,"Tax":10160,"Personnel":10125,"Insurance":1522,"Software/SaaS":640,"Travel/Parking":5},"2023":{"Other (suppliers, fees, misc)":102564,"Contractor chiros":94770,"Intercompany/Owner":43352,"Personnel":18293,"Marketing":18086,"Tax":11779,"Rent":5891,"Travel/Parking":3028,"Insurance":2315,"Software/SaaS":773},"2024":{"Other (suppliers, fees, misc)":107329,"Contractor chiros":100294,"Personnel":18816,"Marketing":18762,"Tax":16458,"Intercompany/Owner":16365,"Insurance":3830,"Travel/Parking":1565,"Software/SaaS":1375},"2025":{"Other (suppliers, fees, misc)":112300,"Contractor chiros":48449,"Intercompany/Owner":29976,"Tax":15518,"Marketing":15079,"Personnel":11012,"Software/SaaS":1310,"Travel/Parking":1234,"Insurance":109},"2026":{"Other (suppliers, fees, misc)":77030,"Tax":11361,"Contractor chiros":8167,"Marketing":5321,"Intercompany/Owner":1720,"Software/SaaS":556,"Travel/Parking":466}},"Bussum":{"2022":{"Other (suppliers, fees, misc)":102148,"Intercompany/Owner":19752,"Personnel":8224,"Contractor chiros":7754,"Marketing":4508,"Tax":2991,"Travel/Parking":2337,"Software/SaaS":480,"Insurance":234},"2023":{"Other (suppliers, fees, misc)":82302,"Contractor chiros":30078,"Personnel":14119,"Intercompany/Owner":14034,"Tax":11673,"Marketing":10649,"Travel/Parking":1065,"Insurance":809,"Software/SaaS":659},"2024":{"Other (suppliers, fees, misc)":108601,"Intercompany/Owner":26293,"Marketing":11254,"Contractor chiros":6027,"Tax":5819,"Personnel":2923,"Travel/Parking":1922,"Software/SaaS":693,"Insurance":623},"2025":{"Other (suppliers, fees, misc)":93052,"Contractor chiros":39628,"Marketing":10186,"Tax":9062,"Intercompany/Owner":4947,"Personnel":4526,"Travel/Parking":2373,"Software/SaaS":717,"Insurance":231},"2026":{"Other (suppliers, fees, misc)":40830,"Contractor chiros":10622,"Intercompany/Owner":7500,"Tax":3938,"Marketing":2266,"Travel/Parking":1482,"Software/SaaS":364,"Insurance":231}},"Amstelveen":{"2023":{"Other (suppliers, fees, misc)":72939,"Intercompany/Owner":18195,"Marketing":10581,"Rent":9386,"Personnel":6543,"Contractor chiros":5372,"Tax":1404,"Travel/Parking":1218,"Software/SaaS":184},"2024":{"Other (suppliers, fees, misc)":128311,"Intercompany/Owner":42265,"Marketing":25942,"Personnel":14427,"Rent":14079,"Tax":13258,"Contractor chiros":6188,"Travel/Parking":3197,"Software/SaaS":1834},"2025":{"Other (suppliers, fees, misc)":150641,"Intercompany/Owner":61458,"Contractor chiros":43334,"Marketing":30060,"Tax":13083,"Personnel":11732,"Rent":6590,"Travel/Parking":6120,"Insurance":3654,"Software/SaaS":2616},"2026":{"Other (suppliers, fees, misc)":92218,"Intercompany/Owner":19940,"Contractor chiros":18700,"Tax":12123,"Marketing":8832,"Travel/Parking":4515,"Insurance":1567,"Software/SaaS":1224,"Rent":425}},"Rotterdam":{"2025":{"Other (suppliers, fees, misc)":39840,"Rent":7154,"Tax":3994,"Personnel":2870,"Intercompany/Owner":1901,"Marketing":1695,"Software/SaaS":406,"Travel/Parking":4},"2026":{"Other (suppliers, fees, misc)":30811,"Intercompany/Owner":16135,"Rent":8621,"Marketing":6722,"Tax":4947,"Software/SaaS":214,"Travel/Parking":30}},"Holding":{"2020":{"Other (suppliers, fees, misc)":4711,"Tax":68},"2021":{"Other (suppliers, fees, misc)":5958,"Contractor chiros":5375,"Rent":4235,"Intercompany/Owner":100,"Tax":53},"2022":{"Other (suppliers, fees, misc)":43924,"Contractor chiros":17033,"Personnel":15258,"Tax":13117,"Intercompany/Owner":270},"2023":{"Other (suppliers, fees, misc)":61914,"Contractor chiros":29262,"Tax":14469,"Personnel":10813,"Marketing":302,"Software/SaaS":25},"2024":{"Other (suppliers, fees, misc)":69073,"Tax":25396,"Contractor chiros":13269,"Marketing":5724,"Personnel":1950},"2025":{"Other (suppliers, fees, misc)":81089,"Contractor chiros":31180,"Intercompany/Owner":26752,"Tax":18988,"Marketing":2622,"Travel/Parking":35},"2026":{"Other (suppliers, fees, misc)":43139,"Contractor chiros":37736,"Tax":14895,"Travel/Parking":115}}};
   var DATA=null;
   var fmtM=function(n){return "€"+(n/1e6).toFixed(2)+"M"};
   var eur=function(n){return (n<0?"-":"")+"€"+Math.abs(Math.round(n)).toLocaleString("en-US")};
@@ -578,6 +579,28 @@ app.get("/plan", gate, (req, res) => {
   tabNames.forEach(function(name){var b=document.createElement("div");b.className="tab";b.textContent=name;b.onclick=function(){show(name)};tabsEl.appendChild(b);});
 
   // ---- P&L tabs ----
+  function spendBlock(clinic){
+    var yrs=Object.keys(PL_SPEND[clinic]||{}).sort();
+    if(!yrs.length) return "";
+    var btns=yrs.map(function(y){return "<button data-clinic='"+clinic+"' data-year='"+y+"' onclick='drawSpend(\""+clinic+"\",\""+y+"\")' style='padding:5px 10px;margin:0 6px 6px 0;border:1px solid #e5e7eb;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;color:#6B7686'>"+y+(y==="2026"?" YTD":"")+"</button>";}).join("");
+    return "<div class='card'><b>Spend by category</b> <span class='sub' style='font-size:12px'>\u00b7 pick a year \u2014 history runs from "+yrs[0]+" \u00b7 hover a bar for the figure</span>"+
+      "<div style='margin:10px 0 4px'>"+btns+"</div><div id='spend-"+clinic+"'></div></div>";
+  }
+  function drawSpend(clinic,year){
+    var exp=(PL_SPEND[clinic]||{})[year]||{};
+    var cats=Object.keys(exp).sort(function(a,b){return exp[b]-exp[a];});
+    var max=cats.length?exp[cats[0]]:1, rowH=30, padL=160, W=720, barMax=W-padL-90, H=cats.length*rowH+10, g="";
+    cats.forEach(function(c,i){ var yt=i*rowH+6, v=exp[c], w=v/max*barMax;
+      g+="<text x='"+(padL-8)+"' y='"+(yt+14)+"' text-anchor='end' font-size='11' fill='#16202E'>"+c+"</text>";
+      g+="<rect x='"+padL+"' y='"+yt+"' width='"+w+"' height='16' rx='3' fill='#2563EB'><title>"+c+": "+eur(v)+"</title></rect>";
+      g+="<text x='"+(padL+w+6)+"' y='"+(yt+14)+"' font-size='10' fill='#64748b'>"+eur(v)+"</text>"; });
+    var el=document.getElementById("spend-"+clinic);
+    if(el) el.innerHTML = cats.length? ("<svg viewBox='0 0 "+W+" "+H+"' width='100%'>"+g+"</svg>") : "<p class='sub'>No spend recorded for "+year+".</p>";
+    Array.prototype.forEach.call(document.querySelectorAll("button[data-clinic='"+clinic+"']"),function(b){
+      var on=b.getAttribute("data-year")===year;
+      b.style.background=on?"#2563EB":"#fff"; b.style.color=on?"#fff":"#6B7686"; b.style.borderColor=on?"#2563EB":"#e5e7eb"; });
+  }
+
   var plWrap=document.getElementById("pl-tabs");
   ORDER.forEach(function(e){
     var d=PL[e], sec=document.createElement("section"); sec.setAttribute("data-tab",LABEL[e]||e); sec.style.display="none";
@@ -593,9 +616,11 @@ app.get("/plan", gate, (req, res) => {
     }
     sec.innerHTML="<h2 style='font-size:18px;margin:4px 0 2px'>"+(LABEL[e]||e)+" — P&L</h2>"+
       "<p class='sub'>Operating basis from your bank data (as of "+ASOF+"). Excludes owner draws, tax and loan repayments (shown below the line). "+(e==="Holding"?"Note: Notable's revenue is mostly intra-group management fees + table sales, so don't add it to the clinics.":"")+"</p>"+
+      spendBlock(e)+
       "<div style='display:flex;gap:14px;flex-wrap:wrap'>"+col("2026")+col("2025")+"</div>";
     plWrap.appendChild(sec);
   });
+  ORDER.forEach(function(e){ var ys=Object.keys(PL_SPEND[e]||{}).sort(); if(ys.length) drawSpend(e, ys[ys.length-1]); });
 
   // ---- trajectory ----
   function drawTraj(){
@@ -1512,52 +1537,72 @@ cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.t
 });
 
 // ============================================================================
-//  /marketing — ad spend by channel YoY (bank) + 2026 funnel results & advice.
-//  Spend trends are live-baked from MT940; funnel (intakes→started care) and the
-//  written advice update each month when fresh data is re-baked here.
+//  /marketing — PER CLINIC ad spend vs agency cost, year over year (from bank).
+//  Google + Meta = ad spend paid to the platforms (per clinic). Shoet = agency /
+//  management cost (mostly central). "Compare" overlays clinics to spot trends.
 // ============================================================================
-const MKTG_REV = {"Google":{"2026":[2073,2199,2160,2202,2310,null,null,null,null,null,null,null],"2025":[2712,2893,2117,2381,2810,1791,2922,2573,2719,2281,2587,2320],"2024":[1937,1778,2047,3373,2791,2795,2182,2156,3117,3138,3183,2788],"2023":[2076,1111,1078,830,1382,851,513,1660,1512,1932,2133,1907],"2022":[1000,2000,1500,1750,2174,1776,1843,919,1265,1011,1789,445],"2021":[null,null,null,null,250,700,1000,500,500,1000,497,1000]},"Meta":{"2026":[1800,2300,1950,3000,1550,null,null,null,null,null,null,null],"2025":[1150,1600,2000,1700,1725,1700,1650,1150,2050,1900,2261,1725],"2024":[2462,1330,2139,2564,2465,2449,2746,2750,1159,1550,1450,1100],"2023":[1436,740,885,714,906,341,2547,2632,2491,2491,1981,1485],"2022":[218,244,330,573,818,516,452,702,492,530,678,1961],"2021":[null,null,null,50,11,11,279,260,279,207,394,445]},"Shoet":{"2026":[321,2723,null,null,null,null,null,null,null,null,null,null],"2025":[807,1815,null,3025,2420,null,25666,333,1815,3630,1815,null],"2024":[1652,641,1283,962,1688,1801,641,641,1283,null,641,null],"2023":[null,null,null,null,null,null,302,null,726,484,641,1827]}};
-const MKTG_ORDER = ["Google","Meta","Shoet"];
-const MKTG_RESULTS = {Google:{intakes:429,care:108,spend:11998},Meta:{intakes:300,care:48,spend:12860}};
-const MKTG_ADVICE = {
-  Google:"★ Your best acquisition channel — €111 per patient who actually starts care, and 25% of intakes convert. Spend has held ~€30k/yr. This is where extra budget pays back fastest; lean in.",
-  Meta:"⚠ Cheap leads, weak conversion. €267 per started-care patient — 2.4× Google — because only 16% of Meta intakes start care. The leak isn't lead volume, it's intake→care follow-up. Fix the CA scripts on Meta leads or shift budget to Google.",
-  Shoet:"Agency / organic. €41k in 2025 — your single biggest marketing line that year — then cut to ~€3k in 2026. The 2026 numbers don't show organic converting clearly. Pull the 2025 leads before ever renewing at that level."
-};
+const MKTG_CLINIC = {"Utrecht":{"Google":{"2026":4641,"2025":10111,"2024":9770,"2023":8460,"2022":13872,"2021":5447},"Meta":{"2026":1040,"2025":2801,"2024":7176,"2023":8984,"2022":6608,"2021":1937},"Shoet":{"2026":681,"2025":4568,"2024":4217,"2023":641}},"Bussum":{"Google":{"2026":1585,"2025":5368,"2024":8489,"2023":5294,"2022":3599},"Meta":{"2026":1240,"2025":2450,"2024":2600,"2023":5035,"2022":908},"Shoet":{"2026":681,"2025":4568,"2024":2565,"2023":321}},"Amstelveen":{"Google":{"2026":4051,"2025":13997,"2024":13026,"2023":3233},"Meta":{"2026":5340,"2025":13695,"2024":10230,"2023":4631},"Shoet":{"2026":681,"2025":4568,"2024":2886,"2023":2716}},"Rotterdam":{"Google":{"2026":1721,"2025":630},"Meta":{"2026":5240,"2025":1665},"Shoet":{"2026":1001}},"Group":{"Meta":{"2024":4159},"Shoet":{"2025":27622,"2024":1565,"2023":302}}};
+const MKTG_FUNNEL = {"Utrecht":{"Google":{"intakes":111,"care":23},"Meta":{"intakes":54,"care":5}},"Bussum":{"Google":{"intakes":71,"care":12},"Meta":{"intakes":32,"care":4}},"Amstelveen":{"Google":{"intakes":144,"care":50},"Meta":{"intakes":97,"care":24}},"Rotterdam":{"Google":{"intakes":103,"care":23},"Meta":{"intakes":117,"care":15}}};
+const MKTG_CLINICS = ["Utrecht","Bussum","Amstelveen","Rotterdam"];
+const CLINIC_COLOR = {Utrecht:"#7c3aed",Bussum:"#0891b2",Amstelveen:"#2563eb",Rotterdam:"#ea580c",Group:"#64748b"};
+
+function mktgYears(){ const s=new Set(); Object.values(MKTG_CLINIC).forEach(ch=>Object.values(ch).forEach(yr=>Object.keys(yr).forEach(y=>s.add(y)))); return [...s].sort(); }
+
+function svgYearLines(series, years){
+  const W=720,H=320,P={l:52,r:118,t:14,b:28};
+  const vals=[].concat(...series.map(s=>years.map(y=>s.pts[y]||0)),1);
+  const max=Math.max(...vals)*1.12, n=years.length;
+  const x=i=>P.l+(n<2?(W-P.l-P.r)/2:(i/(n-1))*(W-P.l-P.r)), y=v=>H-P.b-(v/max)*(H-P.t-P.b);
+  const step=max>40000?10000:max>20000?5000:max>8000?2000:1000;
+  let g="";
+  for(let t=0;t<=max;t+=step) g+='<line x1="'+P.l+'" x2="'+(W-P.r)+'" y1="'+y(t)+'" y2="'+y(t)+'" stroke="#eef2f7"/><text x="'+(P.l-8)+'" y="'+(y(t)+4)+'" text-anchor="end" font-size="10" fill="#94a3b8">\u20ac'+((t/1000)|0)+'k</text>';
+  years.forEach((yr,i)=>g+='<text x="'+x(i)+'" y="'+(H-10)+'" text-anchor="middle" font-size="10" fill="#94a3b8">'+yr+'</text>');
+  series.forEach((s,si)=>{
+    const pts=years.map((yr,i)=>s.pts[yr]!=null?(x(i)+","+y(s.pts[yr])):null).filter(Boolean);
+    if(pts.length>1) g+='<polyline points="'+pts.join(" ")+'" fill="none" stroke="'+s.color+'" stroke-width="2.5"'+(s.dash?' stroke-dasharray="5 4"':'')+'/>';
+    years.forEach((yr,i)=>{ if(s.pts[yr]!=null) g+='<circle cx="'+x(i)+'" cy="'+y(s.pts[yr])+'" r="3" fill="'+s.color+'"><title>'+s.label+" "+yr+": \u20ac"+s.pts[yr].toLocaleString("en-US")+'</title></circle>'; });
+    g+='<text x="'+(W-P.r+8)+'" y="'+(20+si*15)+'" font-size="11" fill="'+s.color+'">'+s.label+'</text>';
+  });
+  return '<svg viewBox="0 0 '+W+' '+H+'" width="100%">'+g+'</svg>';
+}
 
 app.get("/marketing", gate, async (_req,res)=>{ try {
-  const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
-  const sum=a=>a.filter(v=>v!=null).reduce((x,y)=>x+y,0);
-  const panels=MKTG_ORDER.map(c=>{
-    const years=MKTG_REV[c]||{}; const ys=Object.keys(years).sort();
-    const yt={}; ys.forEach(y=>yt[y]=sum(years[y]));
-    const last=ys.filter(y=>y!=="2026").pop(), prev=ys.filter(y=>y!=="2026"&&y<last).pop();
-    const yoy=(last&&prev&&yt[prev])?((yt[last]/yt[prev]-1)*100):null;
-    let projFull=null; if(years["2026"]){const done=years["2026"].filter(v=>v!=null);const p=projectYear(years["2026"]);projFull=sum(done)+sum(p);}
-    const r=MKTG_RESULTS[c];
-    const results = r ? `<div class="card" style="background:#f8fafc">
-      <b>2026 funnel (Jan–May)</b>
-      <table style="margin-top:6px"><tbody>
-        <tr><td>Ad spend</td><td class="num">${fmt(r.spend)}</td></tr>
-        <tr><td>Intakes (leads)</td><td class="num">${r.intakes}</td></tr>
-        <tr><td>Started care</td><td class="num">${r.care} (${(100*r.care/r.intakes).toFixed(0)}%)</td></tr>
-        <tr><td><b>Cost per patient</b></td><td class="num"><b>${fmt(r.spend/r.care)}</b></td></tr>
-      </tbody></table></div>` : "";
-    return `<section data-ch="${c}" style="display:${c===MKTG_ORDER[0]?"":"none"}">
+  const fmt=n=>"\u20ac"+Math.round(n||0).toLocaleString("en-US");
+  const years=mktgYears();
+  const adSpend=(c,y)=>(((MKTG_CLINIC[c]||{}).Google||{})[y]||0)+(((MKTG_CLINIC[c]||{}).Meta||{})[y]||0);
+  // COMPARE: one line per clinic = ad spend (Google+Meta)
+  const cmpSeries=MKTG_CLINICS.map(c=>({label:c,color:CLINIC_COLOR[c],pts:Object.fromEntries(years.map(y=>[y,adSpend(c,y)]).filter(p=>p[1]))}));
+  const comparePanel=`<section data-clinic="Compare">
+    <div class="advice">Each line is one clinic's <b>ad spend</b> (Google + Meta paid to the platforms) by year. Use it to see who is scaling and who is pulling back \u2014 e.g. Amstelveen ramped hard into 2025 while Utrecht's spend fell with its revenue. Agency/management cost (Shoet) is shown separately on each clinic's own tab.</div>
+    <div class="card"><b>Ad spend by clinic \u2014 all years</b>${svgYearLines(cmpSeries, years)}<div class="legend">Hover any point for the figure. 2026 is year-to-date.</div></div></section>`;
+  // PER CLINIC
+  const clinicPanels=MKTG_CLINICS.map(c=>{
+    const ch=MKTG_CLINIC[c]||{};
+    const series=[
+      {label:"Google",color:"#2563eb",pts:ch.Google||{}},
+      {label:"Meta",color:"#7c3aed",pts:ch.Meta||{}},
+      {label:"Shoet (agency)",color:"#94a3b8",pts:ch.Shoet||{},dash:true},
+    ];
+    const last=years.filter(y=>(ch.Google&&ch.Google[y])||(ch.Meta&&ch.Meta[y])||(ch.Shoet&&ch.Shoet[y])).pop();
+    const adS=adSpend(c,last), agency=(ch.Shoet||{})[last]||0;
+    const f=MKTG_FUNNEL[c]||{};
+    const funnelRow=(name,d)=> d?`<tr><td>${name}</td><td class="num">${d.intakes}</td><td class="num">${d.care}</td><td class="num">${(100*d.care/d.intakes).toFixed(0)}%</td></tr>`:"";
+    const funnel=f.Google?`<div class="card" style="background:#f8fafc"><b>2026 lead quality (Jan\u2013May)</b>
+      <table style="margin-top:6px"><thead><tr><th style="text-align:left">Channel</th><th>Intakes</th><th>Started care</th><th>Convert</th></tr></thead>
+      <tbody>${funnelRow("Google",f.Google)}${funnelRow("Meta",f.Meta)}</tbody></table>
+      <div class="legend">Google leads convert to care far better than Meta at every clinic \u2014 the gap to close is intake\u2192care, not lead volume.</div></div>`:"";
+    return `<section data-clinic="${c}" style="display:none">
       <div class="kpis">
-        <div class="kpi"><b>${fmt(yt[last])}</b><span>${last} spend</span></div>
-        <div class="kpi"><b>${yoy==null?"—":(yoy>=0?"+":"")+yoy.toFixed(0)+"%"}</b><span>${prev||""}→${last||""} YoY</span></div>
-        <div class="kpi"><b>${projFull?fmt(projFull):"—"}</b><span>2026 projected</span></div>
+        <div class="kpi"><b>${fmt(adS)}</b><span>${last} ad spend (Google+Meta)</span></div>
+        <div class="kpi"><b>${fmt(agency)}</b><span>${last} agency cost (Shoet)</span></div>
+        <div class="kpi"><b>${fmt(adS+agency)}</b><span>${last} total marketing</span></div>
       </div>
-      <div class="advice">${MKTG_ADVICE[c]||""}</div>
-      <div class="card">${svgYears(years)}<div class="legend">${c} ad spend, one line per year (from bank payments). 2026 solid = actual, dashed = projected.</div></div>
-      ${results}
-    </section>`;
+      <div class="card"><b>${c} \u2014 ad spend vs agency, year over year</b>${svgYearLines(series, years)}
+        <div class="legend">Blue = Google, purple = Meta (both are ad spend to the platforms). Grey dashed = Shoet agency/management cost.</div></div>
+      ${funnel}</section>`;
   }).join("");
-  const allYears=[...new Set(MKTG_ORDER.flatMap(c=>Object.keys(MKTG_REV[c]||{})))].sort();
-  const rows=MKTG_ORDER.map(c=>`<tr><td>${c}</td>${allYears.map(y=>`<td class="num">${MKTG_REV[c][y]?fmt(sum(MKTG_REV[c][y])):"—"}</td>`).join("")}</tr>`).join("");
-  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Marketing — Posturefixx</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#16202E}
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Marketing by clinic \u2014 Posturefixx</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}
 h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
 .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}
 .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.5}
@@ -1565,16 +1610,14 @@ h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom
 .kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
 table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 8px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{text-align:right;font-size:12px;color:#64748b;padding:8px}
 a{color:#2563EB}</style></head><body>
-<h1>Marketing — spend vs results</h1><div class="sub">Google · Meta · Shoet · spend from bank, year over year · 2026 funnel from your overview sheets</div>
-<div class="tabs" id="tabs"></div>${panels}
-<div class="card"><b>Annual spend by channel</b><table><thead><tr><th style="text-align:left">Channel</th>${allYears.map(y=>`<th>${y}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>
-<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
-<script>var cs=["Google","Meta","Shoet"],el=document.getElementById("tabs");
-function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-ch]"),function(s){s.style.display=s.getAttribute("data-ch")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
-cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show(cs[0]);</script>
+<h1>Marketing by clinic</h1><div class="sub">Ad spend (Google + Meta) vs agency cost (Shoet) \u00b7 per clinic \u00b7 from bank payments, year over year</div>
+<div class="tabs" id="tabs"></div>${comparePanel}${clinicPanels}
+<p class="sub">Pages: <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/marketing">/marketing</a> \u00b7 <a href="/waste">/waste</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a> \u00b7 <a href="/coach">/coach</a></p>
+<script>var cs=["Compare","Utrecht","Bussum","Amstelveen","Rotterdam"],el=document.getElementById("tabs");
+function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-clinic]"),function(s){s.style.display=s.getAttribute("data-clinic")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
+cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show("Compare");</script>
 </body></html>`);
-} catch(e){ res.status(500).send("marketing error: "+e.message); }
-});
+} catch(e){ res.status(500).send("marketing error: "+e.message); } });
 
 // ============================================================================
 //  /waste — where the money goes, and where it's actually worth cutting.
