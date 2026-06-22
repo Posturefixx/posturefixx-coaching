@@ -88,6 +88,25 @@ async function practitionerMap(clinic) {
   return m;
 }
 
+// Like practitionerMap but includes INACTIVE practitioners too, so ex-chiros
+// (Nick, Holly, Courtney, Maria…) still resolve to a name in historical data.
+async function allPractitionerMap(clinic) {
+  const m = {};
+  for (const flt of [{ active: "eq:1" }, { active: "eq:0" }]) {
+    try {
+      const ps = await phubAll(clinic, "/practitioners", flt);
+      for (const p of ps) m[p.id] = (`${p.first_name || ""} ${p.last_name || ""}`.trim()) || `#${p.id}`;
+    } catch (e) { /* one filter may not be supported; keep what we have */ }
+  }
+  return m;
+}
+function monthsAgoRange(months) {
+  const s = new Date(); s.setMonth(s.getMonth() - months); s.setDate(1); s.setHours(0,0,0,0);
+  const f = d => d.toISOString().slice(0,19).replace("T"," ");
+  return `between:${f(s)},${f(new Date())}`;
+}
+const _earnCache = {};
+
 // ── APPOINTMENT-TYPE CLASSIFICATION (edit these rules in plain English) ──────
 // Matched on the TYPE NAME, so it works across all four clinics even though
 // their type ID numbers differ. Tweak the words below any time.
@@ -2058,6 +2077,96 @@ app.get("/profit/rev.json", gate, async (_req, res) => {
   catch (e) { res.json({}); }
 });
 
+// ── Per-practitioner monthly EARNINGS history, estimated from PracticeHub visits ─
+// One clinic per call (keeps each request bounded). Earnings = completed visits ×
+// PRICE_PER_VISIT. Includes ex-chiros via allPractitionerMap. Cached 1h in memory.
+app.get("/practitioner-earnings.json", gate, async (req, res) => {
+  try {
+    const clinic = req.query.clinic || "Amstelveen";
+    const months = Math.max(1, Math.min(parseInt(req.query.months) || 6, 36));
+    const ck = clinic + "|" + months;
+    if (_earnCache[ck] && Date.now() - _earnCache[ck].t < 3600000) return res.json(_earnCache[ck].v);
+    const names = await allPractitionerMap(clinic);
+    const types = await phubAll(clinic, "/appointment_types", {}).catch(() => []);
+    const excluded = new Set(); for (const t of types) if (notAVisit(t.name || "")) excluded.add(t.id);
+    const appts = await phubAll(clinic, "/appointments", { start: monthsAgoRange(months) });
+    const byId = new Map();
+    for (const a of appts) { const c = a.status === "cancelled" || a.cancelDate; const p = byId.get(a.id); if (!p || (p.cancelled && !c)) byId.set(a.id, { ...a, cancelled: c }); }
+    const per = {};
+    for (const a of byId.values()) {
+      if (a.cancelled || a.status !== "processed") continue;
+      if (excluded.has(a.appointment_type_id)) continue;
+      const ym = (a.start || "").slice(0, 7); if (!/^\d{4}-\d{2}$/.test(ym)) continue;
+      const pid = a.practitioner_id;
+      (per[pid] || (per[pid] = { name: names[pid] || `#${pid}`, m: {} })).m[ym] = (per[pid].m[ym] || 0) + 1;
+    }
+    const data = Object.values(per).map(v => ({ name: v.name, rev: Object.fromEntries(Object.entries(v.m).map(([m, vis]) => [m, vis * PRICE_PER_VISIT])) }));
+    const v = { clinic, months, price: PRICE_PER_VISIT, appointments: appts.length, data };
+    _earnCache[ck] = { t: Date.now(), v };
+    res.json(v);
+  } catch (e) { res.json({ error: e.message, clinic: req.query.clinic || "Amstelveen" }); }
+});
+
+// ── Page: per-practitioner monthly earnings history (incl. ex-chiros) ─────────
+app.get("/practitioner-earnings", gate, (_req, res) => {
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Practitioner earnings history</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1100px;margin:26px auto;padding:0 16px;color:#16202E}
+h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}
+.card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}
+.controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.controls label{font-size:12px;color:#64748b;display:block;margin-bottom:4px}.controls input{width:90px;border:1px solid #d1d5db;border-radius:8px;padding:7px 9px;font-size:14px}
+button{padding:9px 16px;border:none;background:#2563EB;color:#fff;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+table{border-collapse:collapse;font-size:12.5px;white-space:nowrap}td,th{padding:7px 9px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{color:#64748b;font-size:11px;text-align:right}th:first-child,td:first-child{text-align:left}
+.ex{color:#b45309;font-size:10px;border:1px solid #fcd34d;background:#fffbeb;border-radius:4px;padding:1px 5px;margin-left:6px}
+.warn{background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:12px}a{color:#2563EB}</style></head><body>
+<h1>Practitioner earnings history</h1><div class="sub">Estimated from PracticeHub completed visits \u00d7 \u20ac${PRICE_PER_VISIT}. Pull as far back as PracticeHub serves \u2014 ex-chiros included.</div>
+<div class="warn">This is an <b>estimate</b> (visits \u00d7 price), not exact euros, and it reads live from PracticeHub per clinic \u2014 a deep pull can take a moment. Increase \u201cmonths back\u201d until older months stop appearing; that\u2019s as far as the API will serve.</div>
+<div class="controls">
+  <div><label>Months back</label><input type="number" id="hmonths" value="6" min="1" max="36"></div>
+  <button onclick="loadHistory()">Pull from PracticeHub</button>
+  <span id="status" style="color:#64748b;font-size:13px"></span>
+</div>
+<div class="card"><div id="tbl">Set months back and click Pull.</div></div>
+<p class="sub">Pages: <a href="/">home</a> \u00b7 <a href="/profit">/profit</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/scorecard">/scorecard</a></p>
+<script>
+var CLINICS=["Amstelveen","Utrecht","Bussum","Rotterdam"];
+var CURRENT=["alex","lara","myles","matthew","annefloor"]; // current team (lowercased first names) -> others flagged ex
+function eur(n){return "\u20ac"+Math.round(n||0).toLocaleString("en-US");}
+function loadHistory(){
+  var months=+document.getElementById("hmonths").value||6;
+  var byName={}, monthsSet={}, errs=[];
+  var i=0;
+  function done(){
+    var ms=Object.keys(monthsSet).sort();
+    var names=Object.keys(byName).sort(function(a,b){var ta=0,tb=0;ms.forEach(function(m){ta+=byName[a][m]||0;tb+=byName[b][m]||0;});return tb-ta;});
+    if(!names.length){document.getElementById("tbl").innerHTML="No data returned. "+(errs.length?("Errors: "+errs.join("; ")):"PracticeHub may not serve that range, or keys aren\u2019t set.");return;}
+    var h="<table><thead><tr><th>Practitioner</th>";
+    ms.forEach(function(m){h+="<th>"+m+"</th>";}); h+="<th>Total</th></tr></thead><tbody>";
+    names.forEach(function(n){
+      var first=(n.split(" ")[0]||"").toLowerCase(), isEx=CURRENT.indexOf(first)<0;
+      h+="<tr><td>"+n+(isEx?"<span class=\'ex\'>ex</span>":"")+"</td>";
+      var tot=0; ms.forEach(function(m){var v=byName[n][m]||0;tot+=v;h+="<td class=\'num\'>"+(v?eur(v):"\u00b7")+"</td>";});
+      h+="<td class=\'num\'><b>"+eur(tot)+"</b></td></tr>";
+    });
+    h+="</tbody></table>";
+    document.getElementById("tbl").innerHTML=h;
+    document.getElementById("status").textContent=names.length+" practitioners \u00b7 "+ms.length+" months"+(errs.length?(" \u00b7 "+errs.length+" clinic error(s)"):"");
+  }
+  function next(){
+    if(i>=CLINICS.length){done();return;}
+    var c=CLINICS[i++];
+    document.getElementById("status").textContent="Pulling "+c+"\u2026 ("+i+"/"+CLINICS.length+")";
+    fetch("/practitioner-earnings.json?clinic="+c+"&months="+months).then(function(r){return r.json();}).then(function(j){
+      if(j&&j.error){errs.push(c+": "+j.error);}
+      if(j&&j.data){j.data.forEach(function(p){var k=p.name;if(!byName[k])byName[k]={};Object.keys(p.rev).forEach(function(m){byName[k][m]=(byName[k][m]||0)+p.rev[m];monthsSet[m]=1;});});}
+      next();
+    }).catch(function(e){errs.push(c+": fetch failed");next();});
+  }
+  next();
+}
+</script></body></html>`);
+});
+
 // ============================================================================
 //  /scorecard — the systems-vs-growth view: revenue, PVA (retention),
 //  CA script adherence (doorplannen/package) and lead conversion, per clinic.
@@ -2130,6 +2239,7 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts.")
 ])}
 <h3>The money</h3>${grid([
+  card("/practitioner-earnings","Earnings history","Per-practitioner monthly earnings pulled from PracticeHub, as far back as it serves \u2014 includes chiros who have left."),
   card("/profit","\u2b50 Profit per chiro","What each chiro brings in vs pay, costs and your draw \u2014 with a target slider and the \u20ac6k floor."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
