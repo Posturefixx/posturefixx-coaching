@@ -1537,16 +1537,19 @@ cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.t
 });
 
 // ============================================================================
-//  /marketing — PER CLINIC ad spend vs agency cost, year over year (from bank).
-//  Google + Meta = ad spend paid to the platforms (per clinic). Shoet = agency /
-//  management cost (mostly central). "Compare" overlays clinics to spot trends.
+//  /marketing — PER CLINIC: monthly ad spend (Google / Meta / Organic) with a
+//  year selector, plus cost-per-lead by channel. "Compare" overlays clinics.
+//  Google + Meta = ad spend to the platforms; Organic = Shoet agency/social.
 // ============================================================================
 const MKTG_CLINIC = {"Utrecht":{"Google":{"2026":4641,"2025":10111,"2024":9770,"2023":8460,"2022":13872,"2021":5447},"Meta":{"2026":1040,"2025":2801,"2024":7176,"2023":8984,"2022":6608,"2021":1937},"Shoet":{"2026":681,"2025":4568,"2024":4217,"2023":641}},"Bussum":{"Google":{"2026":1585,"2025":5368,"2024":8489,"2023":5294,"2022":3599},"Meta":{"2026":1240,"2025":2450,"2024":2600,"2023":5035,"2022":908},"Shoet":{"2026":681,"2025":4568,"2024":2565,"2023":321}},"Amstelveen":{"Google":{"2026":4051,"2025":13997,"2024":13026,"2023":3233},"Meta":{"2026":5340,"2025":13695,"2024":10230,"2023":4631},"Shoet":{"2026":681,"2025":4568,"2024":2886,"2023":2716}},"Rotterdam":{"Google":{"2026":1721,"2025":630},"Meta":{"2026":5240,"2025":1665},"Shoet":{"2026":1001}},"Group":{"Meta":{"2024":4159},"Shoet":{"2025":27622,"2024":1565,"2023":302}}};
+const MKTG_CLINIC_M = {"Utrecht":{"Google":{"2026":[790,806,886,971,944,null,null,null,null,null,null,null],"2025":[752,822,821,766,838,868,888,869,875,913,900,799],"2024":[766,646,778,990,1011,841,703,654,724,923,951,782],"2023":[996,298,962,265,889,522,314,998,1135,631,742,709],"2022":[1000,2000,1500,1500,1343,1399,1619,758,1020,694,752,288],"2021":[null,null,null,null,250,700,1000,500,500,1000,497,1000]},"Meta":{"2026":[200,200,null,200,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,200,300,340,361,200],"2024":[1212,830,1239,1114,485,949,346,200,200,200,200,200],"2023":[656,366,434,228,131,34,1307,1230,1391,1141,1181,885],"2022":[218,244,330,573,817,516,452,702,492,530,678,1054],"2021":[null,null,null,50,11,11,279,260,279,207,394,445]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,null,333,605,1210,605,null],"2024":[1331,null,321,321,641,641,null,321,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,321]}},"Bussum":{"Google":{"2026":[266,287,261,266,287,null,null,null,null,null,null,null],"2025":[705,740,105,393,768,102,403,424,420,452,456,401],"2024":[340,370,390,810,813,886,818,784,819,862,876,721],"2023":[1080,813,116,566,494,330,199,205,150,337,584,420],"2022":[null,null,null,250,832,378,224,161,245,317,1037,157]},"Meta":{"2026":[200,200,200,400,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,350,300,null,200,200],"2024":[200,200,200,200,200,200,200,200,200,400,200,200],"2023":[780,374,452,486,775,308,1040,821,null,null,null,null],"2022":[null,null,null,null,1,null,null,null,null,null,null,907]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,605,1210,null,333,null,605,1210,605,null],"2024":[321,321,321,321,null,321,321,null,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,null]}},"Amstelveen":{"Google":{"2026":[773,864,709,683,730,null,null,null,null,null,null,null],"2025":[1255,1331,1191,1222,1204,822,1632,1280,1364,869,1018,809],"2024":[831,761,880,1574,967,1068,661,717,1573,1352,1356,1285],"2023":[null,null,null,null,null,null,null,457,226,964,808,778]},"Meta":{"2026":[900,1000,850,1150,700,null,null,null,null,null,null,null],"2025":[750,1200,1600,1300,1325,1300,1250,600,1450,1220,1050,650],"2024":[1050,300,700,1250,1280,800,700,850,600,950,1050,700],"2023":[null,null,null,null,null,null,200,581,1100,1350,800,600]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,333,null,605,1210,605,null],"2024":[null,321,641,321,321,null,321,321,641,null,null,null],"2023":[null,null,null,null,null,null,null,null,726,484,null,1506]}},"Rotterdam":{"Google":{"2026":[244,242,305,281,349,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,60,46,213,311]},"Meta":{"2026":[500,900,900,1250,850,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,null,340,650,675]},"Organic":{"2026":[321,681,null,null,null,null,null,null,null,null,null,null]}}};
+const MKTG_CPL = {"Utrecht":{"Google":{"spend":4397,"leads":111,"cpl":40},"Meta":{"spend":600,"leads":54,"cpl":11},"Organic":{"spend":681,"leads":58,"cpl":12}},"Bussum":{"Google":{"spend":1367,"leads":71,"cpl":19},"Meta":{"spend":1000,"leads":32,"cpl":31},"Organic":{"spend":681,"leads":24,"cpl":28}},"Amstelveen":{"Google":{"spend":3759,"leads":144,"cpl":26},"Meta":{"spend":4600,"leads":97,"cpl":47},"Organic":{"spend":681,"leads":58,"cpl":12}},"Rotterdam":{"Google":{"spend":1421,"leads":103,"cpl":14},"Meta":{"spend":4400,"leads":117,"cpl":38},"Organic":{"spend":1002,"leads":null,"cpl":null}}};
 const MKTG_FUNNEL = {"Utrecht":{"Google":{"intakes":111,"care":23},"Meta":{"intakes":54,"care":5}},"Bussum":{"Google":{"intakes":71,"care":12},"Meta":{"intakes":32,"care":4}},"Amstelveen":{"Google":{"intakes":144,"care":50},"Meta":{"intakes":97,"care":24}},"Rotterdam":{"Google":{"intakes":103,"care":23},"Meta":{"intakes":117,"care":15}}};
 const MKTG_CLINICS = ["Utrecht","Bussum","Amstelveen","Rotterdam"];
-const CLINIC_COLOR = {Utrecht:"#7c3aed",Bussum:"#0891b2",Amstelveen:"#2563eb",Rotterdam:"#ea580c",Group:"#64748b"};
+const CLINIC_COLOR = {Utrecht:"#7c3aed",Bussum:"#0891b2",Amstelveen:"#2563eb",Rotterdam:"#ea580c"};
 
 function mktgYears(){ const s=new Set(); Object.values(MKTG_CLINIC).forEach(ch=>Object.values(ch).forEach(yr=>Object.keys(yr).forEach(y=>s.add(y)))); return [...s].sort(); }
+function clinicYears(c){ const s=new Set(); Object.values(MKTG_CLINIC_M[c]||{}).forEach(yr=>Object.keys(yr).forEach(y=>s.add(y))); return [...s].sort(); }
 
 function svgYearLines(series, years){
   const W=720,H=320,P={l:52,r:118,t:14,b:28};
@@ -1559,7 +1562,7 @@ function svgYearLines(series, years){
   years.forEach((yr,i)=>g+='<text x="'+x(i)+'" y="'+(H-10)+'" text-anchor="middle" font-size="10" fill="#94a3b8">'+yr+'</text>');
   series.forEach((s,si)=>{
     const pts=years.map((yr,i)=>s.pts[yr]!=null?(x(i)+","+y(s.pts[yr])):null).filter(Boolean);
-    if(pts.length>1) g+='<polyline points="'+pts.join(" ")+'" fill="none" stroke="'+s.color+'" stroke-width="2.5"'+(s.dash?' stroke-dasharray="5 4"':'')+'/>';
+    if(pts.length>1) g+='<polyline points="'+pts.join(" ")+'" fill="none" stroke="'+s.color+'" stroke-width="2.5"/>';
     years.forEach((yr,i)=>{ if(s.pts[yr]!=null) g+='<circle cx="'+x(i)+'" cy="'+y(s.pts[yr])+'" r="3" fill="'+s.color+'"><title>'+s.label+" "+yr+": \u20ac"+s.pts[yr].toLocaleString("en-US")+'</title></circle>'; });
     g+='<text x="'+(W-P.r+8)+'" y="'+(20+si*15)+'" font-size="11" fill="'+s.color+'">'+s.label+'</text>';
   });
@@ -1570,37 +1573,39 @@ app.get("/marketing", gate, async (_req,res)=>{ try {
   const fmt=n=>"\u20ac"+Math.round(n||0).toLocaleString("en-US");
   const years=mktgYears();
   const adSpend=(c,y)=>(((MKTG_CLINIC[c]||{}).Google||{})[y]||0)+(((MKTG_CLINIC[c]||{}).Meta||{})[y]||0);
-  // COMPARE: one line per clinic = ad spend (Google+Meta)
   const cmpSeries=MKTG_CLINICS.map(c=>({label:c,color:CLINIC_COLOR[c],pts:Object.fromEntries(years.map(y=>[y,adSpend(c,y)]).filter(p=>p[1]))}));
   const comparePanel=`<section data-clinic="Compare">
-    <div class="advice">Each line is one clinic's <b>ad spend</b> (Google + Meta paid to the platforms) by year. Use it to see who is scaling and who is pulling back \u2014 e.g. Amstelveen ramped hard into 2025 while Utrecht's spend fell with its revenue. Agency/management cost (Shoet) is shown separately on each clinic's own tab.</div>
+    <div class="advice">Each line is one clinic's <b>ad spend</b> (Google + Meta) by year. Amstelveen scaled hard into 2025; Utrecht's spend fell with its revenue. Open a clinic tab for month-by-month detail and cost per lead.</div>
     <div class="card"><b>Ad spend by clinic \u2014 all years</b>${svgYearLines(cmpSeries, years)}<div class="legend">Hover any point for the figure. 2026 is year-to-date.</div></div></section>`;
-  // PER CLINIC
+
   const clinicPanels=MKTG_CLINICS.map(c=>{
-    const ch=MKTG_CLINIC[c]||{};
-    const series=[
-      {label:"Google",color:"#2563eb",pts:ch.Google||{}},
-      {label:"Meta",color:"#7c3aed",pts:ch.Meta||{}},
-      {label:"Shoet (agency)",color:"#94a3b8",pts:ch.Shoet||{},dash:true},
-    ];
-    const last=years.filter(y=>(ch.Google&&ch.Google[y])||(ch.Meta&&ch.Meta[y])||(ch.Shoet&&ch.Shoet[y])).pop();
-    const adS=adSpend(c,last), agency=(ch.Shoet||{})[last]||0;
+    const ys=clinicYears(c), last=ys[ys.length-1];
+    const adS=adSpend(c,last), agency=((MKTG_CLINIC[c]||{}).Shoet||{})[last]||0;
+    const ybtns=ys.map(y=>`<button data-mm="${c}" data-year="${y}" onclick='drawMktgMonth("${c}","${y}")' style="padding:5px 10px;margin:0 6px 6px 0;border:1px solid #e5e7eb;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;color:#6B7686">${y}${y==="2026"?" YTD":""}</button>`).join("");
+    const cp=MKTG_CPL[c]||{};
+    const cplRow=(n,d)=> d&&d.cpl?`<tr><td>${n}</td><td class="num">${d.leads}</td><td class="num"><b>\u20ac${d.cpl}</b></td><td class="num">${fmt(d.spend)}</td></tr>`:(d?`<tr><td>${n}</td><td class="num">${d.leads||"\u2014"}</td><td class="num">\u2014</td><td class="num">${fmt(d.spend)}</td></tr>`:"");
+    const cplCard=`<div class="card" style="background:#f8fafc"><b>Cost per lead \u2014 2026 (Jan\u2013May)</b>
+      <table style="margin-top:6px"><thead><tr><th style="text-align:left">Channel</th><th>Leads</th><th>Cost/lead</th><th>Spend</th></tr></thead>
+      <tbody>${cplRow("Google",cp.Google)}${cplRow("Meta",cp.Meta)}${cplRow("Organic",cp.Organic)}</tbody></table>
+      <div class="legend">Cheapest cost-per-lead isn't the whole story \u2014 see the funnel below for which leads actually become patients.</div></div>`;
     const f=MKTG_FUNNEL[c]||{};
-    const funnelRow=(name,d)=> d?`<tr><td>${name}</td><td class="num">${d.intakes}</td><td class="num">${d.care}</td><td class="num">${(100*d.care/d.intakes).toFixed(0)}%</td></tr>`:"";
-    const funnel=f.Google?`<div class="card" style="background:#f8fafc"><b>2026 lead quality (Jan\u2013May)</b>
+    const fRow=(n,d)=> d?`<tr><td>${n}</td><td class="num">${d.intakes}</td><td class="num">${d.care}</td><td class="num">${(100*d.care/d.intakes).toFixed(0)}%</td></tr>`:"";
+    const funnel=f.Google?`<div class="card"><b>Lead quality \u2014 2026</b>
       <table style="margin-top:6px"><thead><tr><th style="text-align:left">Channel</th><th>Intakes</th><th>Started care</th><th>Convert</th></tr></thead>
-      <tbody>${funnelRow("Google",f.Google)}${funnelRow("Meta",f.Meta)}</tbody></table>
-      <div class="legend">Google leads convert to care far better than Meta at every clinic \u2014 the gap to close is intake\u2192care, not lead volume.</div></div>`:"";
+      <tbody>${fRow("Google",f.Google)}${fRow("Meta",f.Meta)}</tbody></table>
+      <div class="legend">Google leads convert to care far better than Meta at every clinic \u2014 close the intake\u2192care gap before chasing cheaper leads.</div></div>`:"";
     return `<section data-clinic="${c}" style="display:none">
       <div class="kpis">
         <div class="kpi"><b>${fmt(adS)}</b><span>${last} ad spend (Google+Meta)</span></div>
-        <div class="kpi"><b>${fmt(agency)}</b><span>${last} agency cost (Shoet)</span></div>
+        <div class="kpi"><b>${fmt(agency)}</b><span>${last} agency/organic (Shoet)</span></div>
         <div class="kpi"><b>${fmt(adS+agency)}</b><span>${last} total marketing</span></div>
       </div>
-      <div class="card"><b>${c} \u2014 ad spend vs agency, year over year</b>${svgYearLines(series, years)}
-        <div class="legend">Blue = Google, purple = Meta (both are ad spend to the platforms). Grey dashed = Shoet agency/management cost.</div></div>
-      ${funnel}</section>`;
+      <div class="card"><b>${c} \u2014 monthly ad spend</b>
+        <div style="margin:10px 0 4px">${ybtns}</div><div id="mm-${c}"></div>
+        <div class="legend">Blue = Google, purple = Meta, grey = Organic (Shoet). Pick a year. Hover a point for the figure.</div></div>
+      ${cplCard}${funnel}</section>`;
   }).join("");
+
   res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Marketing by clinic \u2014 Posturefixx</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}
 h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
@@ -1610,12 +1615,38 @@ h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom
 .kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
 table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 8px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{text-align:right;font-size:12px;color:#64748b;padding:8px}
 a{color:#2563EB}</style></head><body>
-<h1>Marketing by clinic</h1><div class="sub">Ad spend (Google + Meta) vs agency cost (Shoet) \u00b7 per clinic \u00b7 from bank payments, year over year</div>
+<h1>Marketing by clinic</h1><div class="sub">Monthly ad spend (Google / Meta / Organic) per clinic \u00b7 cost per lead \u00b7 from bank payments</div>
 <div class="tabs" id="tabs"></div>${comparePanel}${clinicPanels}
 <p class="sub">Pages: <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/marketing">/marketing</a> \u00b7 <a href="/waste">/waste</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a> \u00b7 <a href="/coach">/coach</a></p>
-<script>var cs=["Compare","Utrecht","Bussum","Amstelveen","Rotterdam"],el=document.getElementById("tabs");
+<script>
+var MM={"Utrecht":{"Google":{"2026":[790,806,886,971,944,null,null,null,null,null,null,null],"2025":[752,822,821,766,838,868,888,869,875,913,900,799],"2024":[766,646,778,990,1011,841,703,654,724,923,951,782],"2023":[996,298,962,265,889,522,314,998,1135,631,742,709],"2022":[1000,2000,1500,1500,1343,1399,1619,758,1020,694,752,288],"2021":[null,null,null,null,250,700,1000,500,500,1000,497,1000]},"Meta":{"2026":[200,200,null,200,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,200,300,340,361,200],"2024":[1212,830,1239,1114,485,949,346,200,200,200,200,200],"2023":[656,366,434,228,131,34,1307,1230,1391,1141,1181,885],"2022":[218,244,330,573,817,516,452,702,492,530,678,1054],"2021":[null,null,null,50,11,11,279,260,279,207,394,445]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,null,333,605,1210,605,null],"2024":[1331,null,321,321,641,641,null,321,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,321]}},"Bussum":{"Google":{"2026":[266,287,261,266,287,null,null,null,null,null,null,null],"2025":[705,740,105,393,768,102,403,424,420,452,456,401],"2024":[340,370,390,810,813,886,818,784,819,862,876,721],"2023":[1080,813,116,566,494,330,199,205,150,337,584,420],"2022":[null,null,null,250,832,378,224,161,245,317,1037,157]},"Meta":{"2026":[200,200,200,400,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,350,300,null,200,200],"2024":[200,200,200,200,200,200,200,200,200,400,200,200],"2023":[780,374,452,486,775,308,1040,821,null,null,null,null],"2022":[null,null,null,null,1,null,null,null,null,null,null,907]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,605,1210,null,333,null,605,1210,605,null],"2024":[321,321,321,321,null,321,321,null,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,null]}},"Amstelveen":{"Google":{"2026":[773,864,709,683,730,null,null,null,null,null,null,null],"2025":[1255,1331,1191,1222,1204,822,1632,1280,1364,869,1018,809],"2024":[831,761,880,1574,967,1068,661,717,1573,1352,1356,1285],"2023":[null,null,null,null,null,null,null,457,226,964,808,778]},"Meta":{"2026":[900,1000,850,1150,700,null,null,null,null,null,null,null],"2025":[750,1200,1600,1300,1325,1300,1250,600,1450,1220,1050,650],"2024":[1050,300,700,1250,1280,800,700,850,600,950,1050,700],"2023":[null,null,null,null,null,null,200,581,1100,1350,800,600]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,333,null,605,1210,605,null],"2024":[null,321,641,321,321,null,321,321,641,null,null,null],"2023":[null,null,null,null,null,null,null,null,726,484,null,1506]}},"Rotterdam":{"Google":{"2026":[244,242,305,281,349,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,60,46,213,311]},"Meta":{"2026":[500,900,900,1250,850,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,null,340,650,675]},"Organic":{"2026":[321,681,null,null,null,null,null,null,null,null,null,null]}}};
+var cs=["Compare","Utrecht","Bussum","Amstelveen","Rotterdam"],el=document.getElementById("tabs");
 function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-clinic]"),function(s){s.style.display=s.getAttribute("data-clinic")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
-cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show("Compare");</script>
+cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});
+function drawMktgMonth(clinic,year){
+  var chans=[["Google","#2563eb"],["Meta","#7c3aed"],["Organic","#94a3b8"]];
+  var W=720,H=290,pL=46,pR=92,pT=12,pB=24, MN=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var series=chans.map(function(cc){return {name:cc[0],color:cc[1],arr:((MM[clinic]||{})[cc[0]]||{})[year]||[]};});
+  var max=1; series.forEach(function(s){s.arr.forEach(function(v){if(v!=null&&v>max)max=v;});}); max*=1.15;
+  var x=function(i){return pL+(i/11)*(W-pL-pR);}, y=function(v){return H-pB-(v/max)*(H-pT-pB);};
+  var step=max>4000?1000:max>2000?500:max>800?200:100, g="";
+  for(var t=0;t<=max;t+=step){g+="<line x1='"+pL+"' x2='"+(W-pR)+"' y1='"+y(t)+"' y2='"+y(t)+"' stroke='#eef2f7'/><text x='"+(pL-6)+"' y='"+(y(t)+4)+"' text-anchor='end' font-size='10' fill='#94a3b8'>\u20ac"+t+"</text>";}
+  MN.forEach(function(mn,i){g+="<text x='"+x(i)+"' y='"+(H-8)+"' text-anchor='middle' font-size='9' fill='#94a3b8'>"+mn+"</text>";});
+  series.forEach(function(s,si){
+    var pts=[]; s.arr.forEach(function(v,i){if(v!=null)pts.push(x(i)+","+y(v));});
+    if(pts.length>1) g+="<polyline points='"+pts.join(" ")+"' fill='none' stroke='"+s.color+"' stroke-width='2.5'/>";
+    s.arr.forEach(function(v,i){if(v!=null)g+="<circle cx='"+x(i)+"' cy='"+y(v)+"' r='2.6' fill='"+s.color+"'><title>"+s.name+" "+MN[i]+": \u20ac"+v.toLocaleString("en-US")+"</title></circle>";});
+    g+="<text x='"+(W-pR+8)+"' y='"+(18+si*15)+"' font-size='11' fill='"+s.color+"'>"+s.name+"</text>";
+  });
+  var el2=document.getElementById("mm-"+clinic);
+  if(el2) el2.innerHTML="<svg viewBox='0 0 "+W+" "+H+"' width='100%'>"+g+"</svg>";
+  Array.prototype.forEach.call(document.querySelectorAll("button[data-mm='"+clinic+"']"),function(b){
+    var on=b.getAttribute("data-year")===year; b.style.background=on?"#2563EB":"#fff"; b.style.color=on?"#fff":"#6B7686"; b.style.borderColor=on?"#2563EB":"#e5e7eb";
+  });
+}
+["Utrecht","Bussum","Amstelveen","Rotterdam"].forEach(function(c){var ys=Object.keys((MM[c]||{}).Google||(MM[c]||{}).Meta||{}).sort(); if(ys.length) drawMktgMonth(c, ys[ys.length-1]);});
+show("Compare");
+</script>
 </body></html>`);
 } catch(e){ res.status(500).send("marketing error: "+e.message); } });
 
