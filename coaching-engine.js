@@ -1387,4 +1387,35 @@ app.get("/pva/live.json", gate, async (_req, res) => {
   catch (e) { res.json({ live: {}, errors: [e.message] }); }
 });
 
+
+// ============================================================================
+//  /coach/cron — scheduled team coaching send (Mon & Thu 9am via an external
+//  scheduler). NOT browser-gated: protected by a secret token instead, so an
+//  automated caller can trigger it. Set CRON_SECRET in Render. Optionally set
+//  COACH_TARGET (yearly revenue target) to steer the goals; defaults to 1.1M.
+//  This sends straight out — there is NO human review step on scheduled sends.
+// ============================================================================
+app.get("/coach/cron", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query.key !== secret) return res.status(403).json({ ok: false, error: "forbidden" });
+  const target = parseInt(process.env.COACH_TARGET) || parseInt(req.query.target) || 1100000;
+  try {
+    const goals = chiroGoals(target, await chiroBaselines(30));
+    const results = [];
+    for (const g of goals) {
+      if (!g.phone) { results.push(`${g.n}: skipped (no phone)`); continue; }
+      try {
+        const msg = await draftCoaching(g);
+        await sendSms(g.smsClinic, g.phone, g.n, msg);
+        results.push(`${g.n}: sent`);
+      } catch (e) { results.push(`${g.n}: failed — ${e.message}`); }
+    }
+    console.log("[coach/cron]", new Date().toISOString(), "·", results.join(" | "));
+    res.json({ ok: true, at: new Date().toISOString(), target, results });
+  } catch (e) {
+    console.error("[coach/cron] error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
