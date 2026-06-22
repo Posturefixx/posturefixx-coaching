@@ -582,7 +582,7 @@ app.get("/plan", gate, (req, res) => {
   function spendBlock(clinic){
     var yrs=Object.keys(PL_SPEND[clinic]||{}).sort();
     if(!yrs.length) return "";
-    var btns=yrs.map(function(y){return "<button data-clinic='"+clinic+"' data-year='"+y+"' onclick='drawSpend(\""+clinic+"\",\""+y+"\")' style='padding:5px 10px;margin:0 6px 6px 0;border:1px solid #e5e7eb;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;color:#6B7686'>"+y+(y==="2026"?" YTD":"")+"</button>";}).join("");
+    var btns=yrs.map(function(y){return "<button data-clinic='"+clinic+"' data-year='"+y+"' onclick='drawSpend(&quot;"+clinic+"&quot;,&quot;"+y+"&quot;)' style='padding:5px 10px;margin:0 6px 6px 0;border:1px solid #e5e7eb;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;color:#6B7686'>"+y+(y==="2026"?" YTD":"")+"</button>";}).join("");
     return "<div class='card'><b>Spend by category</b> <span class='sub' style='font-size:12px'>\u00b7 pick a year \u2014 history runs from "+yrs[0]+" \u00b7 hover a bar for the figure</span>"+
       "<div style='margin:10px 0 4px'>"+btns+"</div><div id='spend-"+clinic+"'></div></div>";
   }
@@ -1459,16 +1459,14 @@ app.get("/coach/cron", async (req, res) => {
 
 
 // ============================================================================
-//  /revenue — per-clinic revenue, YEAR OVER YEAR, from real MT940 bank data
-//  One line per year (Jan..Dec) + 2026 projection. Figures are cash-in (credits),
-//  same basis as the /plan P&L revenue. Baked from the bank exports (history is
-//  static); re-provide newer MT940 files to extend 2026.
+//  /revenue — per-clinic monthly revenue. Pick a single year (clean read + an
+//  auto summary of highs/lows/standout months) or "All" to overlay every year.
+//  Real cash-in from the MT940 bank exports; matches the /plan P&L basis.
 // ============================================================================
 const BANK_REV = {"Bussum":{"2026":[10229,6989,14352,16379,12939,null,null,null,null,null,null,null],"2025":[14733,10220,15685,14648,12459,12181,15666,14123,14817,14471,14525,15325],"2024":[13930,8318,8724,20207,15907,13612,19508,12283,14032,12646,12755,11248],"2023":[18590,14369,11717,15348,13801,11995,16861,11472,12167,15929,9613,10129],"2022":[null,0,70,3927,10156,11381,13009,17288,16518,13651,12357,11433]},"Rotterdam":{"2026":[13594,13651,16057,14333,13113,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,25000,3550,6801,7098,8580,7118]},"Utrecht":{"2026":[21701,14351,18680,20538,22353,null,null,null,null,null,null,null],"2025":[20981,18072,22391,19586,18933,19250,18303,20430,20793,18721,20609,12634],"2024":[30110,24482,20532,22944,22996,21128,22877,22367,24941,22673,27035,23430],"2023":[30891,23347,25682,21796,30444,24480,21241,21363,20749,26169,24960,23607],"2022":[20045,22950,15434,14606,17695,16722,19143,24110,19190,20018,19040,23192],"2021":[null,null,33101,440,5017,7796,8253,10030,14635,9789,11265,15978]},"Amstelveen":{"2026":[31536,29530,31635,28562,28879,null,null,null,null,null,null,null],"2025":[28112,23654,33273,28117,28306,25771,27801,27464,28169,29066,30926,27392],"2024":[16579,15677,17043,22228,19165,17491,21251,24405,22823,23881,28582,22726],"2023":[null,null,null,null,46767,194,2040,11708,15628,22915,16029,15209]},"Holding":{"2026":[19116,14513,22905,10608,38304,null,null,null,null,null,null,null],"2025":[10463,10532,14123,4407,17906,48590,8036,5303,6484,7679,15550,12172],"2024":[15909,4850,5200,9797,11403,7409,19130,9695,8309,8704,7822,7922],"2023":[18007,8551,7315,8046,21123,8887,6464,4850,3784,16292,3990,9313],"2022":[1002,6475,3405,4286,7678,9186,4046,9894,6864,7307,16883,12479],"2021":[962,7333,0,5198,827,121,0,949,363,0,0,302],"2020":[null,null,null,null,null,null,1000,464,283,121,0,368]}};
 const REV_ORDER = ["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"];
 const YEAR_COLOR = {2020:"#cbd5e1",2021:"#94a3b8",2022:"#64748b",2023:"#0891b2",2024:"#7c3aed",2025:"#16a34a",2026:"#2563eb"};
-
-function projectYear(arr){ // linear run-rate on filled months -> fill the rest (dashed)
+function projectYear(arr){
   const pts=arr.map((v,i)=>[i,v]).filter(p=>p[1]!=null);
   if(pts.length<3) return Array(12).fill(null);
   const n=pts.length,sx=pts.reduce((a,p)=>a+p[0],0),sy=pts.reduce((a,p)=>a+p[1],0);
@@ -1477,64 +1475,102 @@ function projectYear(arr){ // linear run-rate on filled months -> fill the rest 
   return Array.from({length:12},(_,i)=> i>last?Math.max(0,Math.round(m*i+b)):null);
 }
 
-function svgYears(years){
-  const W=760,H=380,P={l:54,r:90,t:16,b:30};
-  const proj2026 = years["2026"]?projectYear(years["2026"]):null;
-  const vals=[].concat(...Object.values(years).map(a=>a.filter(v=>v!=null)), (proj2026||[]).filter(v=>v!=null),1);
-  const max=Math.max(...vals)*1.12;
-  const x=m=>P.l+(m/11)*(W-P.l-P.r), y=v=>H-P.b-(v/max)*(H-P.t-P.b);
-  const step=max>40000?10000:max>20000?5000:2000;
-  let g="";
-  for(let t=0;t<=max;t+=step) g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#eef2f7"/><text x="${P.l-8}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="#94a3b8">€${(t/1000)|0}k</text>`;
-  MONTHS.forEach((m,i)=>g+=`<text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="9" fill="#94a3b8">${m}</text>`);
-  const draw=(arr,color,dash,w)=>{ const pts=arr.map((v,i)=>v==null?null:`${x(i)},${y(v)}`).filter(Boolean);
-    let s=pts.length>1?`<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${w}"${dash?` stroke-dasharray="${dash}"`:""}/>`:"";
-    arr.forEach((v,i)=>{ if(v!=null) s+=`<circle cx="${x(i)}" cy="${y(v)}" r="${w>2?2.6:2}" fill="${color}"><title>${MONTHS[i]} ${v!=null?'€'+v.toLocaleString('en-US'):''}</title></circle>`; }); return s; };
-  const ys=Object.keys(years).sort();
-  let li=0;
-  for(const yr of ys){ const c=YEAR_COLOR[yr]||"#475569"; const emph=(yr==="2026"); g+=draw(years[yr],c,"",emph?3:1.8);
-    g+=`<text x="${W-P.r+8}" y="${22+li*16}" font-size="11" fill="${c}" font-weight="${emph?700:400}">${yr}</text>`; li++; }
-  if(proj2026){ const a=years["2026"]; const lastA=a.reduce((acc,v,i)=>v!=null?i:acc,-1); const pb=proj2026.slice(); if(lastA>=0)pb[lastA]=a[lastA];
-    g+=draw(pb,"#2563eb","5 4",2); g+=`<text x="${W-P.r+8}" y="${22+li*16}" font-size="10" fill="#2563eb">2026 proj</text>`; }
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg>`;
-}
-
 app.get("/revenue", gate, async (_req,res)=>{ try {
-  const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
+  const fmt=n=>"\u20ac"+Math.round(n||0).toLocaleString("en-US");
   const sum=a=>a.filter(v=>v!=null).reduce((x,y)=>x+y,0);
   const panels=REV_ORDER.map(c=>{
-    const years=BANK_REV[c]||{}; const ys=Object.keys(years).sort();
-    const yearTot={}; ys.forEach(y=>yearTot[y]=sum(years[y]));
-    const last=ys.filter(y=>y!=="2026").pop(), prev=ys.filter(y=>y!=="2026" && y<last).pop();
-    const yoy = (last&&prev)? ((yearTot[last]/yearTot[prev]-1)*100):null;
-    let projFull=null; if(years["2026"]){ const done=years["2026"].filter(v=>v!=null); const p=projectYear(years["2026"]); projFull=sum(done)+sum(p); }
-    const arrow = yoy==null?"":(yoy>=5?"▲":yoy<=-5?"▼":"▬");
+    const years=Object.keys(BANK_REV[c]||{}).sort();
+    const yt={}; years.forEach(y=>yt[y]=sum(BANK_REV[c][y]));
+    const last=years.filter(y=>y!=="2026").pop(), prev=years.filter(y=>y!=="2026"&&y<last).pop();
+    const yoy=(last&&prev)?((yt[last]/yt[prev]-1)*100):null;
+    let projFull=null; if(BANK_REV[c]["2026"]){ const done=sum(BANK_REV[c]["2026"]); projFull=done+sum(projectYear(BANK_REV[c]["2026"])); }
+    const arrow=yoy==null?"":(yoy>=5?"\u25b2":yoy<=-5?"\u25bc":"\u25ac");
+    const btns=["All"].concat(years).map(s=>`<button data-rv="${c}" data-sel="${s}" onclick='drawRev("${c}","${s}")' style="padding:5px 11px;margin:0 6px 6px 0;border:1px solid #e5e7eb;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;color:#6B7686">${s==="All"?"All (overlay)":s+(s==="2026"?" YTD":"")}</button>`).join("");
     return `<section data-clinic="${c}" style="display:${c===REV_ORDER[0]?"":"none"}">
       <div class="kpis">
-        <div class="kpi"><b>${fmt(yearTot[last])}</b><span>${last} revenue</span></div>
-        <div class="kpi"><b>${yoy==null?"—":(yoy>=0?"+":"")+yoy.toFixed(0)+"%"}</b><span>${prev||""}→${last||""} YoY ${arrow}</span></div>
-        <div class="kpi"><b>${projFull?fmt(projFull):"—"}</b><span>2026 projected</span></div>
+        <div class="kpi"><b>${fmt(yt[last])}</b><span>${last} revenue</span></div>
+        <div class="kpi"><b>${yoy==null?"\u2014":(yoy>=0?"+":"")+yoy.toFixed(0)+"%"}</b><span>${prev||""}\u2192${last||""} YoY ${arrow}</span></div>
+        <div class="kpi"><b>${projFull?fmt(projFull):"\u2014"}</b><span>2026 projected</span></div>
       </div>
-      <div class="card">${svgYears(years)}<div class="legend">Each line is one calendar year (cash-in, P&L basis). 2026 solid = actual, dashed = projected to year-end. Hover a point for the month.</div></div>
+      <div style="margin:4px 0">${btns}</div>
+      <div class="card"><div id="rv-${c}"></div><div class="legend">Each line is one calendar year (cash-in). 2026 dashed = projected to year-end. Hover a point for the month.</div></div>
+      <div id="rs-${c}" class="advice">Pick a single year above for a summary, or All to compare every year.</div>
     </section>`;
   }).join("");
-
-  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revenue by clinic — Posturefixx</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#16202E}
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revenue by clinic \u2014 Posturefixx</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}
 h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
 .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}
-.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.5}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:14px}.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.5}
+.advice{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:12px 14px;border-radius:10px;font-size:13.5px;line-height:1.6;margin-bottom:16px}
 .kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
 a{color:#2563EB}</style></head><body>
-<h1>Revenue by clinic — year over year</h1><div class="sub">Real figures from your MT940 bank exports · cash-in basis (matches the /plan P&L) · ${REV_ORDER.length} accounts since 2020</div>
+<h1>Revenue by clinic \u2014 year over year</h1><div class="sub">Real cash-in from your MT940 bank exports \u00b7 matches the /plan P&L</div>
 <div class="tabs" id="tabs"></div>${panels}
-<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
-<script>var cs=["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"],el=document.getElementById("tabs");
+<p class="sub">Pages: <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/marketing">/marketing</a> \u00b7 <a href="/waste">/waste</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a> \u00b7 <a href="/coach">/coach</a></p>
+<script>
+var BR={"Bussum":{"2026":[10229,6989,14352,16379,12939,null,null,null,null,null,null,null],"2025":[14733,10220,15685,14648,12459,12181,15666,14123,14817,14471,14525,15325],"2024":[13930,8318,8724,20207,15907,13612,19508,12283,14032,12646,12755,11248],"2023":[18590,14369,11717,15348,13801,11995,16861,11472,12167,15929,9613,10129],"2022":[null,0,70,3927,10156,11381,13009,17288,16518,13651,12357,11433]},"Rotterdam":{"2026":[13594,13651,16057,14333,13113,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,25000,3550,6801,7098,8580,7118]},"Utrecht":{"2026":[21701,14351,18680,20538,22353,null,null,null,null,null,null,null],"2025":[20981,18072,22391,19586,18933,19250,18303,20430,20793,18721,20609,12634],"2024":[30110,24482,20532,22944,22996,21128,22877,22367,24941,22673,27035,23430],"2023":[30891,23347,25682,21796,30444,24480,21241,21363,20749,26169,24960,23607],"2022":[20045,22950,15434,14606,17695,16722,19143,24110,19190,20018,19040,23192],"2021":[null,null,33101,440,5017,7796,8253,10030,14635,9789,11265,15978]},"Amstelveen":{"2026":[31536,29530,31635,28562,28879,null,null,null,null,null,null,null],"2025":[28112,23654,33273,28117,28306,25771,27801,27464,28169,29066,30926,27392],"2024":[16579,15677,17043,22228,19165,17491,21251,24405,22823,23881,28582,22726],"2023":[null,null,null,null,46767,194,2040,11708,15628,22915,16029,15209]},"Holding":{"2026":[19116,14513,22905,10608,38304,null,null,null,null,null,null,null],"2025":[10463,10532,14123,4407,17906,48590,8036,5303,6484,7679,15550,12172],"2024":[15909,4850,5200,9797,11403,7409,19130,9695,8309,8704,7822,7922],"2023":[18007,8551,7315,8046,21123,8887,6464,4850,3784,16292,3990,9313],"2022":[1002,6475,3405,4286,7678,9186,4046,9894,6864,7307,16883,12479],"2021":[962,7333,0,5198,827,121,0,949,363,0,0,302],"2020":[null,null,null,null,null,null,1000,464,283,121,0,368]}};
+var YC={2020:"#cbd5e1",2021:"#94a3b8",2022:"#64748b",2023:"#0891b2",2024:"#7c3aed",2025:"#16a34a",2026:"#2563eb"};
+var MN=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var eur=function(n){return "\u20ac"+Math.round(n||0).toLocaleString("en-US");};
+function projC(arr){var pts=[];arr.forEach(function(v,i){if(v!=null)pts.push([i,v]);});if(pts.length<3)return null;
+  var n=pts.length,sx=0,sy=0,sxy=0,sxx=0;pts.forEach(function(p){sx+=p[0];sy+=p[1];sxy+=p[0]*p[1];sxx+=p[0]*p[0];});
+  var m=(n*sxy-sx*sy)/(n*sxx-sx*sx),b=(sy-m*sx)/n,last=pts[pts.length-1][0];
+  return MN.map(function(_,i){return i>last?Math.max(0,Math.round(m*i+b)):null;});}
+function drawRev(clinic,sel){
+  var yd=BR[clinic]||{}, allY=Object.keys(yd).sort(), single=sel!=="All", years=single?[sel]:allY;
+  var W=720,H=360,pL=54,pR=70,pT=14,pB=28;
+  var proj=(years.indexOf("2026")>=0&&yd["2026"])?projC(yd["2026"]):null;
+  var vals=[1]; years.forEach(function(y){(yd[y]||[]).forEach(function(v){if(v!=null)vals.push(v);});}); if(proj)proj.forEach(function(v){if(v!=null)vals.push(v);});
+  var max=Math.max.apply(null,vals)*1.12;
+  var x=function(i){return pL+(i/11)*(W-pL-pR);}, y=function(v){return H-pB-(v/max)*(H-pT-pB);};
+  var step=max>40000?10000:max>20000?5000:2000, g="";
+  for(var t=0;t<=max;t+=step){g+="<line x1='"+pL+"' x2='"+(W-pR)+"' y1='"+y(t)+"' y2='"+y(t)+"' stroke='#eef2f7'/><text x='"+(pL-8)+"' y='"+(y(t)+4)+"' text-anchor='end' font-size='10' fill='#94a3b8'>\u20ac"+((t/1000)|0)+"k</text>";}
+  MN.forEach(function(m,i){g+="<text x='"+x(i)+"' y='"+(H-10)+"' text-anchor='middle' font-size='10' fill='#94a3b8'>"+m+"</text>";});
+  var li=0;
+  years.forEach(function(yr){var col=YC[yr]||"#475569",emph=(single||yr==="2026"),arr=yd[yr]||[],pts=[];
+    arr.forEach(function(v,i){if(v!=null)pts.push(x(i)+","+y(v));});
+    if(pts.length>1)g+="<polyline points='"+pts.join(" ")+"' fill='none' stroke='"+col+"' stroke-width='"+(emph?3:1.8)+"'/>";
+    arr.forEach(function(v,i){if(v!=null)g+="<circle cx='"+x(i)+"' cy='"+y(v)+"' r='"+(emph?3:2)+"' fill='"+col+"'><title>"+MN[i]+" "+yr+": "+eur(v)+"</title></circle>";});
+    g+="<text x='"+(W-pR+8)+"' y='"+(20+li*15)+"' font-size='11' fill='"+col+"' font-weight='"+(emph?700:400)+"'>"+yr+"</text>";li++;});
+  if(proj){var a=yd["2026"],lastA=-1;a.forEach(function(v,i){if(v!=null)lastA=i;});var pb=proj.slice();if(lastA>=0)pb[lastA]=a[lastA];
+    var pp=[];pb.forEach(function(v,i){if(v!=null)pp.push(x(i)+","+y(v));});if(pp.length>1)g+="<polyline points='"+pp.join(" ")+"' fill='none' stroke='#2563eb' stroke-width='2' stroke-dasharray='5 4'/>";
+    g+="<text x='"+(W-pR+8)+"' y='"+(20+li*15)+"' font-size='10' fill='#2563eb'>2026 proj</text>";}
+  document.getElementById("rv-"+clinic).innerHTML="<svg viewBox='0 0 "+W+" "+H+"' width='100%'>"+g+"</svg>";
+  Array.prototype.forEach.call(document.querySelectorAll("button[data-rv='"+clinic+"']"),function(b){var on=b.getAttribute("data-sel")===sel;b.style.background=on?"#16202E":"#fff";b.style.color=on?"#fff":"#6B7686";b.style.borderColor=on?"#16202E":"#e5e7eb";});
+  var se=document.getElementById("rs-"+clinic);
+  if(se) se.innerHTML = single ? revSummary(clinic,sel) : "Comparing every year. Pick a single year above for a clean read and a summary of its highs, lows and standout months.";
+}
+function revSummary(clinic,year){
+  var arr=(BR[clinic]||{})[year]||[], vals=[]; arr.forEach(function(v,i){if(v!=null)vals.push({m:i,v:v});});
+  if(!vals.length) return "No data for "+year+".";
+  var total=vals.reduce(function(a,o){return a+o.v;},0), avg=total/vals.length, hi=vals[0], lo=vals[0];
+  vals.forEach(function(o){if(o.v>hi.v)hi=o;if(o.v<lo.v)lo=o;});
+  var good=[], bad=[];
+  good.push("best month <b>"+MN[hi.m]+"</b> ("+eur(hi.v)+")");
+  bad.push("weakest <b>"+MN[lo.m]+"</b> ("+eur(lo.v)+")");
+  var prevArr=(BR[clinic]||{})[(+year-1)+""];
+  if(prevArr){var cn=0,pn=0;arr.forEach(function(v,i){if(v!=null&&prevArr[i]!=null){cn+=v;pn+=prevArr[i];}});
+    if(pn>0){var ch=(cn/pn-1)*100, lk=vals.length<12?" (like-for-like months)":""; (ch>=3?good:ch<=-3?bad:good).push((ch>=0?"up ":"down ")+Math.abs(ch).toFixed(0)+"% vs "+(year-1)+lk);}}
+  var strong=vals.filter(function(o){return o.v>1.2*avg;}).map(function(o){return MN[o.m];});
+  var weak=vals.filter(function(o){return o.v<0.75*avg;}).map(function(o){return MN[o.m];});
+  if(strong.length) good.push("standout: "+strong.join(", "));
+  if(weak.length) bad.push("dipped in "+weak.join(", "));
+  if(vals.length>=8){var h1=[],h2=[];arr.forEach(function(v,i){if(v!=null){(i<6?h1:h2).push(v);} });
+    if(h1.length&&h2.length){var a1=h1.reduce(function(a,b){return a+b;},0)/h1.length,a2=h2.reduce(function(a,b){return a+b;},0)/h2.length;
+      if(a2>a1*1.08)good.push("second half stronger");else if(a2<a1*0.92)bad.push("second half softened");}}
+  return "<b>"+clinic+" "+year+(vals.length<12?" (YTD)":"")+" \u2014 "+eur(total)+"</b>"+
+    "<br><b style='color:#15803d'>\u2714 Good:</b> "+good.join("; ")+
+    "<br><b style='color:#b91c1c'>\u26a0 Watch:</b> "+bad.join("; ");
+}
+var cs=["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"],el=document.getElementById("tabs");
 function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-clinic]"),function(s){s.style.display=s.getAttribute("data-clinic")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
-cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show(cs[0]);</script>
+cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});
+cs.forEach(function(c){drawRev(c,"All");});
+show("Amstelveen");
+</script>
 </body></html>`);
-} catch(e){ res.status(500).send("revenue error: "+e.message); }
-});
+} catch(e){ res.status(500).send("revenue error: "+e.message); } });
 
 // ============================================================================
 //  /marketing — PER CLINIC: monthly ad spend (Google / Meta / Organic) with a
@@ -1705,13 +1741,13 @@ var sum=function(a){return (a||[]).reduce(function(x,y){return x+(y||0);},0);};
 function drawWaste(loc,year){
   var yobj=(WF[loc]||{})[year]||{};
   var cats=Object.keys(yobj).sort(function(a,b){return sum(yobj[b])-sum(yobj[a]);});
-  var h="<table><thead><tr><th style=\"text-align:left\">Category</th>";
+  var h="<table><thead><tr><th style='text-align:left'>Category</th>";
   MN.forEach(function(m){h+="<th>"+m+"</th>";}); h+="<th>Total</th></tr></thead><tbody>";
   cats.forEach(function(c){
     var arr=yobj[c];
-    h+="<tr style=\"cursor:pointer\" onclick='advise(\""+loc+"\",\""+year+"\",\""+c+"\")'><td style=\"text-align:left\">"+c+"</td>";
-    arr.forEach(function(v){h+="<td class=\"num\">"+(v!=null?eur(v):"\u00b7")+"</td>";});
-    h+="<td class=\"num\"><b>"+eur(sum(arr))+"</b></td></tr>";
+    h+="<tr style='cursor:pointer' onclick='advise(&quot;"+loc+"&quot;,&quot;"+year+"&quot;,&quot;"+c+"&quot;)'><td style='text-align:left'>"+c+"</td>";
+    arr.forEach(function(v){h+="<td class='num'>"+(v!=null?eur(v):"\u00b7")+"</td>";});
+    h+="<td class='num'><b>"+eur(sum(arr))+"</b></td></tr>";
   });
   h+="</tbody></table>";
   var el=document.getElementById("wt-"+loc); if(el) el.innerHTML=h;
