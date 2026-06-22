@@ -560,7 +560,7 @@ app.get("/plan", gate, (req, res) => {
   </section>
 
   <div id="pl-tabs"></div>
-  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/coach">/coach</a> · <a href="/kpi?clinic=Rotterdam">/kpi</a></p>
+  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
 </div>
 <script>
   var PL={"Amstelveen": {"2025": {"rev": 336619, "op": 92859, "exp": {"Personnel \u00b7 staff": 46691, "Other/Misc": 46449, "Personnel \u00b7 contractor chiro": 42924, "Marketing": 34786, "Rent": 33958, "Bank/Payment fees": 15741, "Travel/Transport": 6274, "Accounting/Professional": 5716, "Supplies/Retail": 4738, "Insurance": 3662, "Software/SaaS": 2711}, "below": {"Intercompany/Owner": 59519, "Tax": 10513, "Financing/Loan repay": 15496, "Internal \u00b7 transfer/loan in": -1432}}, "2026": {"rev": 167304, "op": 46401, "exp": {"Personnel \u00b7 staff": 34567, "Personnel \u00b7 contractor chiro": 18697, "Rent": 14821, "Marketing": 12676, "Other/Misc": 10575, "Accounting/Professional": 8295, "Bank/Payment fees": 7815, "Supplies/Retail": 5795, "Travel/Transport": 4865, "Insurance": 1567, "Software/SaaS": 1224}, "below": {"Financing/Loan repay": 6825, "Intercompany/Owner": 19500, "Internal \u00b7 transfer/loan in": -286, "Tax": 12123}}}, "Utrecht": {"2025": {"rev": 230704, "op": 45155, "exp": {"Personnel \u00b7 contractor chiro": 63660, "Personnel \u00b7 staff": 52861, "Marketing": 20327, "Other/Misc": 15133, "Bank/Payment fees": 13054, "Accounting/Professional": 9229, "Rent": 3944, "Supplies/Retail": 3538, "Software/SaaS": 1450, "Travel/Transport": 1305, "Insurance": 699, "Energy/Utilities": 210}, "below": {"Tax": 16855, "Financing/Loan repay": 629, "Intercompany/Owner": 31954}}, "2026": {"rev": 108567, "op": 17336, "exp": {"Personnel \u00b7 staff": 37926, "Personnel \u00b7 contractor chiro": 22782, "Marketing": 8966, "Bank/Payment fees": 6664, "Accounting/Professional": 6448, "Other/Misc": 4429, "Rent": 1294, "Supplies/Retail": 1020, "Travel/Transport": 667, "Software/SaaS": 646, "Insurance": 305}, "below": {"Financing/Loan repay": 358, "Tax": 11447, "Intercompany/Owner": 1500}}}, "Bussum": {"2025": {"rev": 167853, "op": 55260, "exp": {"Personnel \u00b7 contractor chiro": 38246, "Personnel \u00b7 staff": 25666, "Marketing": 15233, "Bank/Payment fees": 10135, "Accounting/Professional": 6676, "Other/Misc": 5143, "Energy/Utilities": 3596, "Travel/Transport": 3011, "Rent": 2377, "Supplies/Retail": 1494, "Software/SaaS": 785, "Insurance": 231}, "below": {"Financing/Loan repay": 37979, "Tax": 10596, "Intercompany/Owner": 3555, "Internal \u00b7 transfer/loan in": -1000}}, "2026": {"rev": 69072, "op": 26883, "exp": {"Personnel \u00b7 staff": 11068, "Personnel \u00b7 contractor chiro": 10622, "Marketing": 6110, "Bank/Payment fees": 4452, "Accounting/Professional": 3151, "Other/Misc": 2200, "Travel/Transport": 2099, "Energy/Utilities": 1581, "Software/SaaS": 364, "Insurance": 231, "Rent": 200}, "below": {"Financing/Loan repay": 12290, "Tax": 5255, "Intercompany/Owner": 7500}}}, "Rotterdam": {"2025": {"rev": 32828, "op": -18862, "exp": {"Supplies/Retail": 22514, "Personnel \u00b7 staff": 12921, "Rent": 7154, "Other/Misc": 5271, "Marketing": 2295, "Accounting/Professional": 862, "Software/SaaS": 495}, "below": {"Tax": 3994, "Financing/Loan repay": 1030, "Intercompany/Owner": 1150, "Internal \u00b7 transfer/loan in": -25320}}, "2026": {"rev": 79551, "op": 34444, "exp": {"Personnel \u00b7 staff": 12899, "Marketing": 10246, "Rent": 8821, "Other/Misc": 5905, "Accounting/Professional": 3842, "Supplies/Retail": 2327, "Bank/Payment fees": 422, "Software/SaaS": 214}, "below": {"Financing/Loan repay": 2527, "Intercompany/Owner": 14900, "Tax": 4947}}}, "Holding": {"2025": {"rev": 161243, "op": 94981, "exp": {"Personnel \u00b7 contractor chiro": 28680, "Supplies/Retail": 16734, "Other/Misc": 10478, "Accounting/Professional": 4037, "Marketing": 2622, "Travel/Transport": 1432, "Rent": 1431, "Bank/Payment fees": 772}, "below": {"Intercompany/Owner": 48010, "Tax": 18904, "Financing/Loan repay": 27488}}, "2026": {"rev": 107336, "op": 51569, "exp": {"Personnel \u00b7 contractor chiro": 37736, "Other/Misc": 10678, "Personnel \u00b7 staff": 4229, "Accounting/Professional": 1516, "Travel/Transport": 1120, "Rent": 250}, "below": {"Tax": 14895, "Intercompany/Owner": 20339, "Financing/Loan repay": 4883}}}}, ORDER=["Amstelveen", "Utrecht", "Bussum", "Rotterdam", "Holding"], LABEL={"Holding": "Notable (holding)"}, MONTHLY=[71488, 65154, 80199, 75479, 78357], PACE=74135.4, ASOF="Jun 2026";
@@ -1199,10 +1199,21 @@ function findTables(rows) {
 // ── Load + shape everything ──────────────────────────────────────────────────
 async function loadTabs(sheetId, tabs) {
   const out = [];
-  const list = (tabs && tabs.length && tabs.some(t => t)) ? tabs : [""]; // [""] = first tab
+  // The export endpoint returns the ENTIRE first tab — including tables that sit
+  // BELOW blank rows (your earnings table). gviz tends to stop at the first blank
+  // gap, which is why the top PVA matrix loaded but the earnings table came back
+  // empty. Your data is on the first tab of each sheet (2026 / 2025), so we read
+  // the whole thing here and only fall back to gviz-by-name if export is blocked.
+  try {
+    const r = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
+    if (r.ok) {
+      const csv = await r.text();
+      if (/Month/i.test(csv)) { out.push(...parseCSV(csv)); return out; }
+    }
+  } catch (e) { out._err = (out._err || []); out._err.push(`export: ${e.message}`); }
+  const list = (tabs && tabs.length && tabs.some(t => t)) ? tabs : [""];
   for (const t of list) {
     try {
-      // fetchSheetCSV adds &sheet=; for the first-tab default we call gviz directly.
       const csv = t
         ? await fetchSheetCSV(sheetId, t)
         : await (await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`)).text();
@@ -1361,7 +1372,7 @@ function renderPvaPage(d, debug) {
    <div class="card"><b>2026 earnings by chiropractor (all locations)</b><table><tbody>${earnRows}</tbody></table>
    <div class="legend">Per-location split and 2025 figures appear here once a 2025 earnings tab exists.</div></div></section>
  ${debugBlock}
- <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/ca">/ca</a> · <a href="/pva?debug=1">debug</a></p>
+ <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
  <script>
   var tabs=["YTD PVA","Month-to-month","PVA vs earnings"],el=document.getElementById("tabs");
   function show(n){Array.prototype.forEach.call(document.querySelectorAll("[data-tab]"),function(s){s.style.display=s.getAttribute("data-tab")===n?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===n?" on":"")})}
@@ -1421,84 +1432,185 @@ app.get("/coach/cron", async (req, res) => {
 
 
 // ============================================================================
-//  /revenue — monthly revenue line chart (manager-gated)
-//  • 2026 actual (Jan..latest) summed LIVE from the PVA-sheet earnings table
-//  • 2026 projection to December (linear trend on the filled months)
-//  • 2025 estimate (visits x 2026 €/visit) — baked historical estimate
-//  INTERIM until MT940 bank files arrive; then real bank monthly replaces this.
+//  /revenue — per-clinic revenue, YEAR OVER YEAR, from real MT940 bank data
+//  One line per year (Jan..Dec) + 2026 projection. Figures are cash-in (credits),
+//  same basis as the /plan P&L revenue. Baked from the bank exports (history is
+//  static); re-provide newer MT940 files to extend 2026.
 // ============================================================================
-const REV_EST_2025 = [55841,50466,70533,55005,67905,52317,51541,61873,59245,74355,64740,43777];
+const BANK_REV = {"Bussum":{"2026":[10229,6989,14352,16379,12939,null,null,null,null,null,null,null],"2025":[14733,10220,15685,14648,12459,12181,15666,14123,14817,14471,14525,15325],"2024":[13930,8318,8724,20207,15907,13612,19508,12283,14032,12646,12755,11248],"2023":[18590,14369,11717,15348,13801,11995,16861,11472,12167,15929,9613,10129],"2022":[null,0,70,3927,10156,11381,13009,17288,16518,13651,12357,11433]},"Rotterdam":{"2026":[13594,13651,16057,14333,13113,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,25000,3550,6801,7098,8580,7118]},"Utrecht":{"2026":[21701,14351,18680,20538,22353,null,null,null,null,null,null,null],"2025":[20981,18072,22391,19586,18933,19250,18303,20430,20793,18721,20609,12634],"2024":[30110,24482,20532,22944,22996,21128,22877,22367,24941,22673,27035,23430],"2023":[30891,23347,25682,21796,30444,24480,21241,21363,20749,26169,24960,23607],"2022":[20045,22950,15434,14606,17695,16722,19143,24110,19190,20018,19040,23192],"2021":[null,null,33101,440,5017,7796,8253,10030,14635,9789,11265,15978]},"Amstelveen":{"2026":[31536,29530,31635,28562,28879,null,null,null,null,null,null,null],"2025":[28112,23654,33273,28117,28306,25771,27801,27464,28169,29066,30926,27392],"2024":[16579,15677,17043,22228,19165,17491,21251,24405,22823,23881,28582,22726],"2023":[null,null,null,null,46767,194,2040,11708,15628,22915,16029,15209]},"Holding":{"2026":[19116,14513,22905,10608,38304,null,null,null,null,null,null,null],"2025":[10463,10532,14123,4407,17906,48590,8036,5303,6484,7679,15550,12172],"2024":[15909,4850,5200,9797,11403,7409,19130,9695,8309,8704,7822,7922],"2023":[18007,8551,7315,8046,21123,8887,6464,4850,3784,16292,3990,9313],"2022":[1002,6475,3405,4286,7678,9186,4046,9894,6864,7307,16883,12479],"2021":[962,7333,0,5198,827,121,0,949,363,0,0,302],"2020":[null,null,null,null,null,null,1000,464,283,121,0,368]}};
+const REV_ORDER = ["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"];
+const YEAR_COLOR = {2020:"#cbd5e1",2021:"#94a3b8",2022:"#64748b",2023:"#0891b2",2024:"#7c3aed",2025:"#16a34a",2026:"#2563eb"};
 
-function linProj(actual) {
-  const pts = actual.map((v,i)=>[i,v]).filter(p=>p[1]!=null);
-  if (pts.length < 2) return Array(12).fill(null);
-  const n=pts.length, sx=pts.reduce((a,p)=>a+p[0],0), sy=pts.reduce((a,p)=>a+p[1],0);
-  const sxy=pts.reduce((a,p)=>a+p[0]*p[1],0), sxx=pts.reduce((a,p)=>a+p[0]*p[0],0);
-  const m=(n*sxy-sx*sy)/(n*sxx-sx*sx), b=(sy-m*sx)/n;
-  const last=pts[pts.length-1][0];
-  return Array.from({length:12},(_,i)=> i>last ? Math.max(0,Math.round(m*i+b)) : null);
+function projectYear(arr){ // linear run-rate on filled months -> fill the rest (dashed)
+  const pts=arr.map((v,i)=>[i,v]).filter(p=>p[1]!=null);
+  if(pts.length<2) return Array(12).fill(null);
+  const n=pts.length,sx=pts.reduce((a,p)=>a+p[0],0),sy=pts.reduce((a,p)=>a+p[1],0);
+  const sxy=pts.reduce((a,p)=>a+p[0]*p[1],0),sxx=pts.reduce((a,p)=>a+p[0]*p[0],0);
+  const m=(n*sxy-sx*sy)/(n*sxx-sx*sx),b=(sy-m*sx)/n,last=pts[pts.length-1][0];
+  return Array.from({length:12},(_,i)=> i>last?Math.max(0,Math.round(m*i+b)):null);
 }
 
-function svgRevenue(actual, proj) {
-  const W=760,H=380,P={l:54,r:16,t:16,b:34};
-  const all=[...REV_EST_2025, ...actual.filter(v=>v!=null), ...proj.filter(v=>v!=null)];
-  const max=Math.max(...all)*1.12;
+function svgYears(years){
+  const W=760,H=380,P={l:54,r:90,t:16,b:30};
+  const proj2026 = years["2026"]?projectYear(years["2026"]):null;
+  const vals=[].concat(...Object.values(years).map(a=>a.filter(v=>v!=null)), (proj2026||[]).filter(v=>v!=null),1);
+  const max=Math.max(...vals)*1.12;
   const x=m=>P.l+(m/11)*(W-P.l-P.r), y=v=>H-P.b-(v/max)*(H-P.t-P.b);
+  const step=max>40000?10000:max>20000?5000:2000;
   let g="";
-  for (let t=0;t<=max;t+=20000) g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#eef2f7"/><text x="${P.l-8}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="#94a3b8">€${(t/1000)|0}k</text>`;
-  MONTHS.forEach((m,i)=>g+=`<text x="${x(i)}" y="${H-12}" text-anchor="middle" font-size="10" fill="#94a3b8">${m}</text>`);
-  const line=(arr,color,dash,r)=>{
-    const pts=arr.map((v,i)=>v==null?null:`${x(i)},${y(v)}`).filter(Boolean);
-    let s = pts.length>1 ? `<polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="2.5"${dash?` stroke-dasharray="${dash}"`:""}/>` : "";
-    arr.forEach((v,i)=>{ if(v!=null) s+=`<circle cx="${x(i)}" cy="${y(v)}" r="${r}" fill="${color}"><title>${MONTHS[i]}: €${Math.round(v).toLocaleString("en-US")}</title></circle>`; });
-    return s;
-  };
-  // bridge actual -> projection so the dashed line connects
-  const lastA = actual.reduce((acc,v,i)=>v!=null?i:acc,-1);
-  const projBridge = proj.slice(); if (lastA>=0) projBridge[lastA]=actual[lastA];
-  g += line(REV_EST_2025, "#94a3b8", "5 4", 2.5);     // 2025 estimate (grey dashed)
-  g += line(projBridge, "#2563eb", "5 4", 0);          // 2026 projection (blue dashed)
-  g += line(actual, "#2563eb", "", 3.5);               // 2026 actual (blue solid)
+  for(let t=0;t<=max;t+=step) g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#eef2f7"/><text x="${P.l-8}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="#94a3b8">€${(t/1000)|0}k</text>`;
+  MONTHS.forEach((m,i)=>g+=`<text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="9" fill="#94a3b8">${m}</text>`);
+  const draw=(arr,color,dash,w)=>{ const pts=arr.map((v,i)=>v==null?null:`${x(i)},${y(v)}`).filter(Boolean);
+    let s=pts.length>1?`<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${w}"${dash?` stroke-dasharray="${dash}"`:""}/>`:"";
+    arr.forEach((v,i)=>{ if(v!=null) s+=`<circle cx="${x(i)}" cy="${y(v)}" r="${w>2?2.6:2}" fill="${color}"><title>${MONTHS[i]} ${v!=null?'€'+v.toLocaleString('en-US'):''}</title></circle>`; }); return s; };
+  const ys=Object.keys(years).sort();
+  let li=0;
+  for(const yr of ys){ const c=YEAR_COLOR[yr]||"#475569"; const emph=(yr==="2026"); g+=draw(years[yr],c,"",emph?3:1.8);
+    g+=`<text x="${W-P.r+8}" y="${22+li*16}" font-size="11" fill="${c}" font-weight="${emph?700:400}">${yr}</text>`; li++; }
+  if(proj2026){ const a=years["2026"]; const lastA=a.reduce((acc,v,i)=>v!=null?i:acc,-1); const pb=proj2026.slice(); if(lastA>=0)pb[lastA]=a[lastA];
+    g+=draw(pb,"#2563eb","5 4",2); g+=`<text x="${W-P.r+8}" y="${22+li*16}" font-size="10" fill="#2563eb">2026 proj</text>`; }
   return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg>`;
 }
 
-app.get("/revenue", gate, async (req, res) => {
-  try {
-    const d = await loadPvaData();
-    const actual = Array.from({length:12},(_,m)=>{
-      let sum=null;
-      for (const k of d.keys){ const v=d.earn[k]?.[2026]?.[m]; if(v!=null){ sum=(sum||0)+v; } }
-      return sum;
-    });
-    const proj = linProj(actual);
-    const ytd = actual.filter(v=>v!=null).reduce((a,b)=>a+b,0);
-    const projRest = proj.filter(v=>v!=null).reduce((a,b)=>a+b,0);
-    const est2025 = REV_EST_2025.reduce((a,b)=>a+b,0);
-    const fmt=n=>"€"+Math.round(n).toLocaleString("en-US");
-    res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revenue — Posturefixx</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:840px;margin:24px auto;padding:0 16px;color:#16202E}
+app.get("/revenue", gate, async (_req,res)=>{
+  const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
+  const sum=a=>a.filter(v=>v!=null).reduce((x,y)=>x+y,0);
+  const panels=REV_ORDER.map(c=>{
+    const years=BANK_REV[c]||{}; const ys=Object.keys(years).sort();
+    const yearTot={}; ys.forEach(y=>yearTot[y]=sum(years[y]));
+    const last=ys.filter(y=>y!=="2026").pop(), prev=ys.filter(y=>y!=="2026" && y<last).pop();
+    const yoy = (last&&prev)? ((yearTot[last]/yearTot[prev]-1)*100):null;
+    let projFull=null; if(years["2026"]){ const done=years["2026"].filter(v=>v!=null); const p=projectYear(years["2026"]); projFull=sum(done)+sum(p); }
+    const arrow = yoy==null?"":(yoy>=5?"▲":yoy<=-5?"▼":"▬");
+    return `<section data-clinic="${c}" style="display:${c===REV_ORDER[0]?"":"none"}">
+      <div class="kpis">
+        <div class="kpi"><b>${fmt(yearTot[last])}</b><span>${last} revenue</span></div>
+        <div class="kpi"><b>${yoy==null?"—":(yoy>=0?"+":"")+yoy.toFixed(0)+"%"}</b><span>${prev||""}→${last||""} YoY ${arrow}</span></div>
+        <div class="kpi"><b>${projFull?fmt(projFull):"—"}</b><span>2026 projected</span></div>
+      </div>
+      <div class="card">${svgYears(years)}<div class="legend">Each line is one calendar year (cash-in, P&L basis). 2026 solid = actual, dashed = projected to year-end. Hover a point for the month.</div></div>
+    </section>`;
+  }).join("");
+
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revenue by clinic — Posturefixx</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#16202E}
+h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.5}
+.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
+a{color:#2563EB}</style></head><body>
+<h1>Revenue by clinic — year over year</h1><div class="sub">Real figures from your MT940 bank exports · cash-in basis (matches the /plan P&L) · ${REV_ORDER.length} accounts since 2020</div>
+<div class="tabs" id="tabs"></div>${panels}
+<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
+<script>var cs=${json.dumps(['Amstelveen','Utrecht','Bussum','Rotterdam','Holding'])},el=document.getElementById("tabs");
+function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-clinic]"),function(s){s.style.display=s.getAttribute("data-clinic")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
+cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show(cs[0]);</script>
+</body></html>`);
+});
+
+// ============================================================================
+//  /marketing — ad spend by channel YoY (bank) + 2026 funnel results & advice.
+//  Spend trends are live-baked from MT940; funnel (intakes→started care) and the
+//  written advice update each month when fresh data is re-baked here.
+// ============================================================================
+const MKTG_REV = {"Google":{"2026":[2073,2199,2160,2202,2310,null,null,null,null,null,null,null],"2025":[2712,2893,2117,2381,2810,1791,2922,2573,2719,2281,2587,2320],"2024":[1937,1778,2047,3373,2791,2795,2182,2156,3117,3138,3183,2788],"2023":[2076,1111,1078,830,1382,851,513,1660,1512,1932,2133,1907],"2022":[1000,2000,1500,1750,2174,1776,1843,919,1265,1011,1789,445],"2021":[null,null,null,null,250,700,1000,500,500,1000,497,1000]},"Meta":{"2026":[1800,2300,1950,3000,1550,null,null,null,null,null,null,null],"2025":[1150,1600,2000,1700,1725,1700,1650,1150,2050,1900,2261,1725],"2024":[2462,1330,2139,2564,2465,2449,2746,2750,1159,1550,1450,1100],"2023":[1436,740,885,714,906,341,2547,2632,2491,2491,1981,1485],"2022":[218,244,330,573,818,516,452,702,492,530,678,1961],"2021":[null,null,null,50,11,11,279,260,279,207,394,445]},"Shoet":{"2026":[321,2723,null,null,null,null,null,null,null,null,null,null],"2025":[807,1815,null,3025,2420,null,25666,333,1815,3630,1815,null],"2024":[1652,641,1283,962,1688,1801,641,641,1283,null,641,null],"2023":[null,null,null,null,null,null,302,null,726,484,641,1827]}};
+const MKTG_ORDER = ["Google","Meta","Shoet"];
+const MKTG_RESULTS = {Google:{intakes:429,care:108,spend:11998},Meta:{intakes:300,care:48,spend:12860}};
+const MKTG_ADVICE = {
+  Google:"★ Your best acquisition channel — €111 per patient who actually starts care, and 25% of intakes convert. Spend has held ~€30k/yr. This is where extra budget pays back fastest; lean in.",
+  Meta:"⚠ Cheap leads, weak conversion. €267 per started-care patient — 2.4× Google — because only 16% of Meta intakes start care. The leak isn't lead volume, it's intake→care follow-up. Fix the CA scripts on Meta leads or shift budget to Google.",
+  Shoet:"Agency / organic. €41k in 2025 — your single biggest marketing line that year — then cut to ~€3k in 2026. The 2026 numbers don't show organic converting clearly. Pull the 2025 leads before ever renewing at that level."
+};
+
+app.get("/marketing", gate, async (_req,res)=>{
+  const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
+  const sum=a=>a.filter(v=>v!=null).reduce((x,y)=>x+y,0);
+  const panels=MKTG_ORDER.map(c=>{
+    const years=MKTG_REV[c]||{}; const ys=Object.keys(years).sort();
+    const yt={}; ys.forEach(y=>yt[y]=sum(years[y]));
+    const last=ys.filter(y=>y!=="2026").pop(), prev=ys.filter(y=>y!=="2026"&&y<last).pop();
+    const yoy=(last&&prev&&yt[prev])?((yt[last]/yt[prev]-1)*100):null;
+    let projFull=null; if(years["2026"]){const done=years["2026"].filter(v=>v!=null);const p=projectYear(years["2026"]);projFull=sum(done)+sum(p);}
+    const r=MKTG_RESULTS[c];
+    const results = r ? `<div class="card" style="background:#f8fafc">
+      <b>2026 funnel (Jan–May)</b>
+      <table style="margin-top:6px"><tbody>
+        <tr><td>Ad spend</td><td class="num">${fmt(r.spend)}</td></tr>
+        <tr><td>Intakes (leads)</td><td class="num">${r.intakes}</td></tr>
+        <tr><td>Started care</td><td class="num">${r.care} (${(100*r.care/r.intakes).toFixed(0)}%)</td></tr>
+        <tr><td><b>Cost per patient</b></td><td class="num"><b>${fmt(r.spend/r.care)}</b></td></tr>
+      </tbody></table></div>` : "";
+    return `<section data-ch="${c}" style="display:${c===MKTG_ORDER[0]?"":"none"}">
+      <div class="kpis">
+        <div class="kpi"><b>${fmt(yt[last])}</b><span>${last} spend</span></div>
+        <div class="kpi"><b>${yoy==null?"—":(yoy>=0?"+":"")+yoy.toFixed(0)+"%"}</b><span>${prev||""}→${last||""} YoY</span></div>
+        <div class="kpi"><b>${projFull?fmt(projFull):"—"}</b><span>2026 projected</span></div>
+      </div>
+      <div class="advice">${MKTG_ADVICE[c]||""}</div>
+      <div class="card">${svgYears(years)}<div class="legend">${c} ad spend, one line per year (from bank payments). 2026 solid = actual, dashed = projected.</div></div>
+      ${results}
+    </section>`;
+  }).join("");
+  const allYears=[...new Set(MKTG_ORDER.flatMap(c=>Object.keys(MKTG_REV[c]||{})))].sort();
+  const rows=MKTG_ORDER.map(c=>`<tr><td>${c}</td>${allYears.map(y=>`<td class="num">${MKTG_REV[c][y]?fmt(sum(MKTG_REV[c][y])):"—"}</td>`).join("")}</tr>`).join("");
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Marketing — Posturefixx</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#16202E}
+h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.5}
+.advice{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:12px 14px;border-radius:10px;font-size:13.5px;line-height:1.55;margin-bottom:14px}
+.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
+table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 8px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{text-align:right;font-size:12px;color:#64748b;padding:8px}
+a{color:#2563EB}</style></head><body>
+<h1>Marketing — spend vs results</h1><div class="sub">Google · Meta · Shoet · spend from bank, year over year · 2026 funnel from your overview sheets</div>
+<div class="tabs" id="tabs"></div>${panels}
+<div class="card"><b>Annual spend by channel</b><table><thead><tr><th style="text-align:left">Channel</th>${allYears.map(y=>`<th>${y}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>
+<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
+<script>var cs=["Google","Meta","Shoet"],el=document.getElementById("tabs");
+function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-ch]"),function(s){s.style.display=s.getAttribute("data-ch")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
+cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show(cs[0]);</script>
+</body></html>`);
+});
+
+// ============================================================================
+//  /waste — where the money goes, and where it's actually worth cutting.
+//  Spend categorised from the MT940 bank debits (same source as /revenue).
+// ============================================================================
+const WASTE = {"Other (suppliers, contractors, fees, intercompany)":{"2026":396773,"2025":728994,"2024":614594,"2023":548093,"2022":342025,"2021":94810,"2020":4711},"Parking/transport":{"2026":6415,"2025":9434,"2024":6411,"2023":5100,"2022":2337},"Insurance":{"2026":1798,"2025":3994,"2024":4453,"2023":3123,"2022":1756,"2021":466},"Marketing":{"2026":27901,"2025":92042,"2024":66681,"2023":39618,"2022":24988,"2021":7384},"Software/SaaS":{"2026":2358,"2025":5050,"2024":3902,"2023":1642,"2022":1120,"2021":492},"Tax/gov":{"2026":48559,"2025":60777,"2024":62173,"2023":40062,"2022":26522,"2021":6070,"2020":68},"Groceries":{"2026":1468,"2025":2139,"2024":2061,"2023":3670,"2022":2837,"2021":1053},"Fuel":{"2025":333,"2024":289,"2026":194,"2023":241,"2022":5},"Personnel":{"2025":30139,"2024":38116,"2023":49768,"2022":33608},"Restaurants/takeout":{"2024":1063,"2023":1754,"2022":1779,"2026":75,"2025":430,"2021":605},"Alcohol":{"2022":450,"2026":178,"2025":451,"2024":41,"2023":496,"2021":180},"Rent":{"2026":9046,"2025":13744,"2023":15277,"2022":23162,"2021":19027,"2024":14079}};
+const WASTE_DISC = ["Groceries","Restaurants/takeout","Alcohol","Fuel"];
+
+app.get("/waste", gate, (_req,res)=>{
+  const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
+  const years=[...new Set(Object.values(WASTE).flatMap(o=>Object.keys(o)))].sort();
+  const cats=Object.keys(WASTE).map(c=>({c,tot:Object.values(WASTE[c]).reduce((a,b)=>a+b,0)})).sort((a,b)=>b.tot-a.tot);
+  const discTot=WASTE_DISC.reduce((s,c)=>s+(WASTE[c]?Object.values(WASTE[c]).reduce((a,b)=>a+b,0):0),0);
+  const disc2025=WASTE_DISC.reduce((s,c)=>s+((WASTE[c]||{})["2025"]||0),0);
+  const rows=cats.map(({c,tot})=>{
+    const isD=WASTE_DISC.includes(c);
+    return `<tr${isD?' style="background:#fffbeb"':''}><td>${c}${isD?' <span style="color:#b45309;font-size:11px">discretionary</span>':''}</td>`+
+      years.map(y=>`<td class="num">${WASTE[c][y]?fmt(WASTE[c][y]):"—"}</td>`).join("")+
+      `<td class="num"><b>${fmt(tot)}</b></td></tr>`;
+  }).join("");
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Spend / waste — Posturefixx</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:920px;margin:24px auto;padding:0 16px;color:#16202E}
 h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
 .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}
-.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.6}.dot{display:inline-block;width:22px;height:0;border-top:3px solid;vertical-align:middle;margin-right:5px}
-.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}
-.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
-.warn{background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+.advice{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:12px 14px;border-radius:10px;font-size:13.5px;line-height:1.55;margin-bottom:16px}
+.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
+table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 8px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{text-align:right;font-size:12px;color:#64748b;padding:8px}
 a{color:#2563EB}</style></head><body>
-<h1>Monthly revenue</h1><div class="sub">Company-wide · month by month · with projection to year-end</div>
-<div class="warn">Interim view. 2026 Jan–May is real (from your PVA earnings sheet, chiro-attributed basis — runs lower than the bank P&L). The rest is projected/estimated. Send the MT940 bank files and I'll replace this with exact, P&L-matching monthly figures per location.</div>
+<h1>Where the money goes</h1><div class="sub">Bank debits categorised since 2020 · same source as /revenue · figures as of Jun 2026</div>
+<div class="advice"><b>The honest takeaway:</b> personal-type spending is <b>not</b> your problem. Groceries, takeout, alcohol and fuel combined come to about <b>${fmt(discTot)}</b> across <b>six years</b> — only ${fmt(disc2025)} in 2025, and the groceries are mostly small shop-runs next to the clinics. Cutting them changes nothing. Your real leverage is <a href="/marketing">marketing efficiency</a> (Google €111/patient vs Meta €267) and the big <b>"Other"</b> bucket — contractor chiropractors, suppliers and payment-processor fees — which is where the serious money moves and is worth a proper line-by-line review.</div>
 <div class="kpis">
-  <div class="kpi"><b>${fmt(ytd)}</b><span>2026 actual so far</span></div>
-  <div class="kpi"><b>${fmt(ytd+projRest)}</b><span>2026 projected full year</span></div>
-  <div class="kpi"><b>${fmt(est2025)}</b><span>2025 estimated</span></div>
+  <div class="kpi"><b>${fmt(discTot)}</b><span>discretionary, all 6 yrs</span></div>
+  <div class="kpi"><b>${fmt(disc2025)}</b><span>discretionary in 2025</span></div>
+  <div class="kpi"><b>${fmt((WASTE["Marketing"]&&WASTE["Marketing"]["2025"])||0)}</b><span>marketing 2025 — the real lever</span></div>
 </div>
-<div class="card">${svgRevenue(actual, proj)}
-<div class="legend">
-<span class="dot" style="border-color:#2563eb"></span><b>2026 actual</b> (solid) &nbsp;
-<span class="dot" style="border-color:#2563eb;border-top-style:dashed"></span><b>2026 projection</b> (dashed) &nbsp;
-<span class="dot" style="border-color:#94a3b8;border-top-style:dashed"></span><b>2025 estimate</b> (dashed). Hover any point for the figure.</div></div>
-<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/pva">/pva</a> · <a href="/coach">/coach</a></p>
+<div class="card"><b>Spend by category, year over year</b>
+<table><thead><tr><th style="text-align:left">Category</th>${years.map(y=>`<th>${y}</th>`).join("")}<th>Total</th></tr></thead><tbody>${rows}</tbody></table>
+<div class="sub" style="margin-top:10px">"Other" is large because it holds contractor-chiro payouts, suppliers, intercompany transfers and card-processor fees — normal operating money, not waste. Worth categorising further if you want to squeeze margin.</div></div>
+<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
 </body></html>`);
-  } catch (e) { res.status(500).send("revenue error: " + e.message); }
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
