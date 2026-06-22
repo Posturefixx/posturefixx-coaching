@@ -1857,85 +1857,93 @@ show("All");
 } catch(e){ res.status(500).send("waste error: "+e.message); } });
 
 // ============================================================================
-//  /profit — per-chiro profitability. Revenue (PVA sheet) minus their pay,
-//  their share of running costs and your management fee, against a target you
-//  slide. Minimum bar: cover your \u20ac6,000/mo draw; slide up for more profit.
+//  /profit — per-chiro profitability with each chiro's REAL pay structure.
+//  Pay is calculated from revenue (Annefloor 45%; Lara tiered per location;
+//  Myles/Matthew base salary + threshold commission). Slider = profit target
+//  on top of paying everyone and your draw.
 // ============================================================================
 app.get("/profit", gate, (_req,res)=>{ try {
-  const REV={Alex:23219,Lara:13470,Myles:13064,Matthew:14872,Annefloor:1679};
-  const PAY={Alex:0,Lara:4000,Myles:1800,Matthew:4000,Annefloor:1600};
-  const CH=["Alex","Lara","Myles","Matthew","Annefloor"];
-  const row=c=>`<tr>
-    <td style="text-align:left;font-weight:600">${c}</td>
-    <td class="num" id="rev-${c}"></td>
-    <td class="num"><input type="number" id="pay-${c}" value="${PAY[c]}" style="width:78px;text-align:right;border:1px solid #d1d5db;border-radius:6px;padding:4px 6px;font-size:13px"></td>
-    <td class="num" id="cost-${c}"></td>
-    <td class="num" id="fee-${c}"></td>
-    <td class="num" id="profit-${c}" style="font-weight:600"></td>
-    <td class="num" id="margin-${c}" style="font-weight:600"></td>
-    <td class="num" id="need-${c}" style="color:#64748b"></td><td class="num" id="vw-${c}" style="color:#2563EB;font-weight:600"></td></tr>`;
+  const DEF=[
+    {id:"Alex", revs:[["all clinics",23220]], base:0, note:"Owner \u2014 draws via the holding, no wage taken here."},
+    {id:"Lara", revs:[["Amstelveen",7842],["Bussum",5628]], base:0, note:"37.5% on the first \u20ac5k, 42.5% \u20ac5\u201310k, 45% above \u2014 each location worked out separately, not combined."},
+    {id:"Myles", revs:[["Amstelveen",13064]], base:5688, note:"\u20ac5,688 gross base + commission once over \u20ac17.5k: 45% to \u20ac22.5k, 50% to \u20ac30k, 55% above. A monthly shortfall carries forward before commission restarts."},
+    {id:"Matthew", revs:[["Utrecht + Bussum",14872]], base:4551, note:"\u20ac4,551 gross base + commission once over \u20ac16.5k: 40% to \u20ac21.5k, 45% above. Shortfall carries forward like Myles."},
+    {id:"Annefloor", revs:[["Amstelveen",1679]], base:0, note:"45% of paid invoices."},
+  ];
+  const row=ch=>`<tr>
+    <td style="text-align:left;font-weight:600">${ch.id}${ch.base?`<div style="font-weight:400;color:#64748b;font-size:11px">\u20ac${ch.base.toLocaleString("en-US")} base</div>`:""}</td>
+    <td class="num">${ch.revs.map((r,i)=>`<div style="margin:2px 0;white-space:nowrap"><span style="color:#94a3b8;font-size:11px">${r[0]}</span> <input type="number" id="rev-${ch.id}-${i}" value="${r[1]}" style="width:82px;text-align:right;border:1px solid #d1d5db;border-radius:6px;padding:3px 6px;font-size:12px"></div>`).join("")}</td>
+    <td class="num" id="pay-${ch.id}" style="font-weight:600"></td>
+    <td class="num" id="rate-${ch.id}" style="color:#64748b;font-size:12px"></td>
+    <td class="num" id="cost-${ch.id}"></td>
+    <td class="num" id="fee-${ch.id}"></td>
+    <td class="num" id="profit-${ch.id}" style="font-weight:600"></td>
+    <td class="num" id="margin-${ch.id}" style="font-weight:600"></td></tr>`;
+  const notes=DEF.map(d=>`<li><b>${d.id}:</b> ${d.note}</li>`).join("");
   res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Profit per chiro \u2014 Posturefixx</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:960px;margin:26px auto;padding:0 16px;color:#16202E}
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1000px;margin:26px auto;padding:0 16px;color:#16202E}
 h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}
 .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}
 .controls{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
 .controls label{font-size:12px;color:#64748b;display:block;margin-bottom:4px}
-.controls input[type=number]{width:110px;border:1px solid #d1d5db;border-radius:8px;padding:7px 9px;font-size:14px}
-table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:9px 8px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}
-th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.03em;text-align:right}th:first-child{text-align:left}
-.big{font-size:15px}.sum{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}.sum>div{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.sum b{font-size:20px;display:block}.sum span{font-size:12px;color:#64748b}
-a{color:#2563EB}.legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.55}</style></head><body>
-<h1>Profit per chiropractor</h1><div class="sub">What each one brings in, minus their pay, their share of running costs and your draw \u2014 against the profit you target. Revenue from your 2026 PVA sheet (monthly average).</div>
+.controls input[type=number]{width:104px;border:1px solid #d1d5db;border-radius:8px;padding:7px 9px;font-size:14px}
+table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:9px 7px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}
+th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;text-align:right}th:first-child{text-align:left}
+.sum{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}.sum>div{flex:1;min-width:140px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.sum b{font-size:20px;display:block}.sum span{font-size:12px;color:#64748b}
+.legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.6}ul{margin:8px 0 0;padding-left:18px;color:#475569;font-size:12.5px;line-height:1.7}a{color:#2563EB}</style></head><body>
+<h1>Profit per chiropractor</h1><div class="sub">Pay is calculated from each chiro's real deal. Edit the revenue to model a month; the slider sets the profit you want after paying everyone and your draw.</div>
 <div class="card">
   <div class="controls">
-    <div><label>Your draw (\u20ac/month)</label><input type="number" id="salary" value="6000"></div>
-    <div><label>Running costs, excl. your draw (\u20ac/mo)</label><input type="number" id="opex" value="57000"></div>
+    <div><label>Employer cost factor (gross\u2192cost)</label><input type="number" step="0.01" id="factor" value="1.27"></div>
+    <div><label>Other running costs \u20ac/mo (rent, ads, CAs\u2026)</label><input type="number" id="overhead" value="38000"></div>
+    <div><label>Your draw \u20ac/mo</label><input type="number" id="draw" value="6000"></div>
     <div style="flex:1;min-width:220px"><label>Target profit on top: <b id="targetLbl">10%</b></label><input type="range" id="target" min="0" max="30" value="10" style="width:100%"></div>
   </div>
   <table>
-    <thead><tr><th>Chiro</th><th>Brings in /mo</th><th>Their pay</th><th>Cost share</th><th>Your-fee share</th><th>Profit</th><th>Margin</th><th>Need /mo</th><th>Visits/wk @ target</th></tr></thead>
-    <tbody>${CH.map(row).join("")}</tbody>
+    <thead><tr><th>Chiro</th><th>Brings in /mo</th><th>Pay</th><th>= rate</th><th>Cost share</th><th>Your-fee share</th><th>Profit</th><th>Margin</th></tr></thead>
+    <tbody>${DEF.map(row).join("")}</tbody>
   </table>
-  <div class="legend">Pay is editable \u2014 type each chiro's real monthly pay and everything recalculates. <b>Cost share</b> = the running costs left after pay, split by revenue share. <b>Your-fee share</b> = your draw, split the same way. <b>Need /mo</b> = revenue that chiro needs to bill to clear the target after all of it. <b>Visits/wk @ target</b> turns that revenue into a coaching number \u2014 visits per week each chiro needs (at \u20ac59/visit) to clear the target; compare it to their actual weekly visits on /pva. Alex defaults to \u20ac0 pay since you draw via the holding. <b>Note:</b> your sheet's \u20ac63k is split here as \u20ac57k running costs + your \u20ac6k draw, so the draw is counted once \u2014 set running costs to 63,000 if your draw sits on top of that instead.</div>
+  <div class="legend"><b>Pay</b> is computed live from each structure below \u2014 change a chiro's revenue and watch their pay (and the commission tiers) move. <b>Cost share / fee share</b> split the other running costs and your draw across chiros by revenue. Employer factor turns Myles' & Matthew's gross base into real cost.</div>
+  <ul>${notes}</ul>
 </div>
 <div class="card">
-  <b class="big">All clinics together</b>
+  <b style="font-size:15px">All clinics together</b>
   <div class="sum">
     <div><b id="cR"></b><span>brought in /mo</span></div>
-    <div><b id="cP"></b><span>profit after costs + your draw</span></div>
+    <div><b id="cPay"></b><span>total chiro pay</span></div>
+    <div><b id="cP"></b><span>profit after pay, costs & your draw</span></div>
     <div><b id="cM"></b><span>margin</span></div>
-    <div><b id="salCov"></b><span>your \u20ac6k draw</span></div>
-    <div><b id="cNeed"></b><span>needed /mo to hit target</span></div>
-    <div><b id="cGap"></b><span>gap to target</span></div>
+    <div><b id="salCov"></b><span>your draw</span></div>
+    <div><b id="cNeed"></b><span>revenue lift to hit target</span></div>
   </div>
+  <div class="legend">Because Myles and Matthew carry a fixed base salary, growth helps more than it looks: as their revenue rises past their thresholds, the base gets diluted and commission only takes a slice of the extra \u2014 so each step up in revenue drops more to profit. That's why the slider's "revenue lift" isn't linear.</div>
 </div>
 <p class="sub">Pages: <a href="/">home</a> \u00b7 <a href="/scorecard">/scorecard</a> \u00b7 <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a></p>
 <script>
-var REV={Alex:23219,Lara:13470,Myles:13064,Matthew:14872,Annefloor:1679};
-var CH=["Alex","Lara","Myles","Matthew","Annefloor"];
+var DEF=[{id:"Alex",n:1},{id:"Lara",n:2},{id:"Myles",n:1},{id:"Matthew",n:1},{id:"Annefloor",n:1}];
 function eur(n){return "\u20ac"+Math.round(n||0).toLocaleString("en-US");}
+function laraTier(r){return 0.375*Math.min(r,5000)+0.425*Math.max(0,Math.min(r,10000)-5000)+0.45*Math.max(0,r-10000);}
+function mylesComm(r){return 0.45*Math.max(0,Math.min(r,22500)-17500)+0.50*Math.max(0,Math.min(r,30000)-22500)+0.55*Math.max(0,r-30000);}
+function mattComm(r){return 0.40*Math.max(0,Math.min(r,21500)-16500)+0.45*Math.max(0,r-21500);}
+function factor(){return +document.getElementById("factor").value||1.27;}
+function payOf(id,revs){ if(id==="Alex")return 0; if(id==="Annefloor")return 0.45*revs[0]; if(id==="Lara")return laraTier(revs[0])+laraTier(revs[1]); if(id==="Myles")return 5688*factor()+mylesComm(revs[0]); if(id==="Matthew")return 4551*factor()+mattComm(revs[0]); return 0; }
+function revsOf(d){var a=[];for(var i=0;i<d.n;i++)a.push(+document.getElementById("rev-"+d.id+"-"+i).value||0);return a;}
+function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
 function recompute(){
-  var salary=+document.getElementById("salary").value||0, opex=+document.getElementById("opex").value||0, target=(+document.getElementById("target").value||0)/100;
-  document.getElementById("targetLbl").textContent=(target*100).toFixed(0)+"%";
-  var pay={},totalPay=0,R=0;
-  CH.forEach(function(c){pay[c]=+document.getElementById("pay-"+c).value||0; totalPay+=pay[c]; R+=REV[c];});
-  var H=Math.max(0,opex-totalPay);
-  CH.forEach(function(c){
-    var Ri=REV[c], Hi=R?H*Ri/R:0, Si=R?salary*Ri/R:0, profit=Ri-pay[c]-Hi-Si, margin=Ri?profit/Ri:0, need=(1-target)>0?(pay[c]+Hi+Si)/(1-target):0;
-    document.getElementById("rev-"+c).textContent=eur(Ri);
-    document.getElementById("cost-"+c).textContent=eur(Hi);
-    document.getElementById("fee-"+c).textContent=eur(Si);
-    document.getElementById("profit-"+c).textContent=eur(profit);
-    var mc=document.getElementById("margin-"+c); mc.textContent=(margin*100).toFixed(0)+"%"; mc.style.color=margin>=target?"#16a34a":margin>=0?"#f59e0b":"#dc2626";
-    document.getElementById("need-"+c).textContent=eur(need); document.getElementById("vw-"+c).textContent=Math.round(need/59/4.33)+"/wk";
-  });
-  var profitTot=R-opex-salary, marginTot=R?profitTot/R:0, needTot=(1-target)>0?(opex+salary)/(1-target):0, gap=needTot-R, covered=(R-opex)>=salary;
-  document.getElementById("cR").textContent=eur(R);
-  document.getElementById("cP").textContent=eur(profitTot);
-  var cm=document.getElementById("cM"); cm.textContent=(marginTot*100).toFixed(0)+"%"; cm.style.color=marginTot>=target?"#16a34a":marginTot>=0?"#f59e0b":"#dc2626";
-  var sc=document.getElementById("salCov"); sc.textContent=covered?"\u2714 covered":"\u2717 not yet"; sc.style.color=covered?"#16a34a":"#dc2626";
-  document.getElementById("cNeed").textContent=eur(needTot);
-  var cg=document.getElementById("cGap"); cg.textContent=(gap>0?eur(gap)+" short":eur(-gap)+" spare"); cg.style.color=gap>0?"#dc2626":"#16a34a";
+  var O=+document.getElementById("overhead").value||0, draw=+document.getElementById("draw").value||0, target=(+document.getElementById("target").value||0)/100;
+  set("targetLbl",(target*100).toFixed(0)+"%");
+  var R=0,totalPay=0,data={};
+  DEF.forEach(function(d){var revs=revsOf(d),rev=revs.reduce(function(a,b){return a+b;},0),pay=payOf(d.id,revs); data[d.id]={rev:rev,pay:pay}; R+=rev; totalPay+=pay;});
+  DEF.forEach(function(d){var x=data[d.id], Hi=R?O*x.rev/R:0, Si=R?draw*x.rev/R:0, profit=x.rev-x.pay-Hi-Si, margin=x.rev?profit/x.rev:0;
+    set("pay-"+d.id,eur(x.pay)); set("rate-"+d.id,x.rev?Math.round(100*x.pay/x.rev)+"%":"\u2014"); set("cost-"+d.id,eur(Hi)); set("fee-"+d.id,eur(Si)); set("profit-"+d.id,eur(profit));
+    var mc=document.getElementById("margin-"+d.id); if(mc){mc.textContent=(margin*100).toFixed(0)+"%"; mc.style.color=margin>=target?"#16a34a":margin>=0?"#f59e0b":"#dc2626";}});
+  var profitTot=R-totalPay-O-draw, marginTot=R?profitTot/R:0, covered=(R-totalPay-O)>=draw;
+  set("cR",eur(R)); set("cPay",eur(totalPay)); set("cP",eur(profitTot));
+  var cm=document.getElementById("cM"); if(cm){cm.textContent=(marginTot*100).toFixed(0)+"%"; cm.style.color=marginTot>=target?"#16a34a":marginTot>=0?"#f59e0b":"#dc2626";}
+  var scov=document.getElementById("salCov"); if(scov){scov.textContent=covered?"\u2714 covered":"\u2717 not yet"; scov.style.color=covered?"#16a34a":"#dc2626";}
+  var need=null;
+  for(var s=1;s<=4;s+=0.01){ var Rs=0,Ps=0; DEF.forEach(function(d){var revs=revsOf(d).map(function(v){return v*s;}); Rs+=revs.reduce(function(a,b){return a+b;},0); Ps+=payOf(d.id,revs);}); if(Rs&&(Rs-Ps-O-draw)/Rs>=target){need=s;break;} }
+  var rn=document.getElementById("cNeed"); if(rn){ if(marginTot>=target) rn.textContent="\u2714 already there"; else if(need) rn.textContent="+"+Math.round((need-1)*100)+"%  (\u2248"+eur(R*(need-1))+"/mo)"; else rn.textContent="raise prices/cut costs"; }
 }
 document.querySelectorAll("input").forEach(function(el){el.addEventListener("input",recompute);});
 recompute();
