@@ -1443,7 +1443,7 @@ const YEAR_COLOR = {2020:"#cbd5e1",2021:"#94a3b8",2022:"#64748b",2023:"#0891b2",
 
 function projectYear(arr){ // linear run-rate on filled months -> fill the rest (dashed)
   const pts=arr.map((v,i)=>[i,v]).filter(p=>p[1]!=null);
-  if(pts.length<2) return Array(12).fill(null);
+  if(pts.length<3) return Array(12).fill(null);
   const n=pts.length,sx=pts.reduce((a,p)=>a+p[0],0),sy=pts.reduce((a,p)=>a+p[1],0);
   const sxy=pts.reduce((a,p)=>a+p[0]*p[1],0),sxx=pts.reduce((a,p)=>a+p[0]*p[0],0);
   const m=(n*sxy-sx*sy)/(n*sxx-sx*sx),b=(sy-m*sx)/n,last=pts[pts.length-1][0];
@@ -1472,7 +1472,7 @@ function svgYears(years){
   return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg>`;
 }
 
-app.get("/revenue", gate, async (_req,res)=>{
+app.get("/revenue", gate, async (_req,res)=>{ try {
   const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
   const sum=a=>a.filter(v=>v!=null).reduce((x,y)=>x+y,0);
   const panels=REV_ORDER.map(c=>{
@@ -1502,10 +1502,11 @@ a{color:#2563EB}</style></head><body>
 <h1>Revenue by clinic — year over year</h1><div class="sub">Real figures from your MT940 bank exports · cash-in basis (matches the /plan P&L) · ${REV_ORDER.length} accounts since 2020</div>
 <div class="tabs" id="tabs"></div>${panels}
 <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
-<script>var cs=${json.dumps(['Amstelveen','Utrecht','Bussum','Rotterdam','Holding'])},el=document.getElementById("tabs");
+<script>var cs=["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"],el=document.getElementById("tabs");
 function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-clinic]"),function(s){s.style.display=s.getAttribute("data-clinic")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
 cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show(cs[0]);</script>
 </body></html>`);
+} catch(e){ res.status(500).send("revenue error: "+e.message); }
 });
 
 // ============================================================================
@@ -1522,7 +1523,7 @@ const MKTG_ADVICE = {
   Shoet:"Agency / organic. €41k in 2025 — your single biggest marketing line that year — then cut to ~€3k in 2026. The 2026 numbers don't show organic converting clearly. Pull the 2025 leads before ever renewing at that level."
 };
 
-app.get("/marketing", gate, async (_req,res)=>{
+app.get("/marketing", gate, async (_req,res)=>{ try {
   const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
   const sum=a=>a.filter(v=>v!=null).reduce((x,y)=>x+y,0);
   const panels=MKTG_ORDER.map(c=>{
@@ -1570,6 +1571,7 @@ a{color:#2563EB}</style></head><body>
 function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-ch]"),function(s){s.style.display=s.getAttribute("data-ch")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
 cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});show(cs[0]);</script>
 </body></html>`);
+} catch(e){ res.status(500).send("marketing error: "+e.message); }
 });
 
 // ============================================================================
@@ -1579,7 +1581,7 @@ cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.t
 const WASTE = {"Other (suppliers, contractors, fees, intercompany)":{"2026":396773,"2025":728994,"2024":614594,"2023":548093,"2022":342025,"2021":94810,"2020":4711},"Parking/transport":{"2026":6415,"2025":9434,"2024":6411,"2023":5100,"2022":2337},"Insurance":{"2026":1798,"2025":3994,"2024":4453,"2023":3123,"2022":1756,"2021":466},"Marketing":{"2026":27901,"2025":92042,"2024":66681,"2023":39618,"2022":24988,"2021":7384},"Software/SaaS":{"2026":2358,"2025":5050,"2024":3902,"2023":1642,"2022":1120,"2021":492},"Tax/gov":{"2026":48559,"2025":60777,"2024":62173,"2023":40062,"2022":26522,"2021":6070,"2020":68},"Groceries":{"2026":1468,"2025":2139,"2024":2061,"2023":3670,"2022":2837,"2021":1053},"Fuel":{"2025":333,"2024":289,"2026":194,"2023":241,"2022":5},"Personnel":{"2025":30139,"2024":38116,"2023":49768,"2022":33608},"Restaurants/takeout":{"2024":1063,"2023":1754,"2022":1779,"2026":75,"2025":430,"2021":605},"Alcohol":{"2022":450,"2026":178,"2025":451,"2024":41,"2023":496,"2021":180},"Rent":{"2026":9046,"2025":13744,"2023":15277,"2022":23162,"2021":19027,"2024":14079}};
 const WASTE_DISC = ["Groceries","Restaurants/takeout","Alcohol","Fuel"];
 
-app.get("/waste", gate, (_req,res)=>{
+app.get("/waste", gate, (_req,res)=>{ try {
   const fmt=n=>"€"+Math.round(n||0).toLocaleString("en-US");
   const years=[...new Set(Object.values(WASTE).flatMap(o=>Object.keys(o)))].sort();
   const cats=Object.keys(WASTE).map(c=>({c,tot:Object.values(WASTE[c]).reduce((a,b)=>a+b,0)})).sort((a,b)=>b.tot-a.tot);
@@ -1611,6 +1613,12 @@ a{color:#2563EB}</style></head><body>
 <div class="sub" style="margin-top:10px">"Other" is large because it holds contractor-chiro payouts, suppliers, intercompany transfers and card-processor fees — normal operating money, not waste. Worth categorising further if you want to squeeze margin.</div></div>
 <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
 </body></html>`);
+} catch(e){ res.status(500).send("waste error: "+e.message); }
 });
+
+// Safety net: a single bad request should never take the whole site down (502).
+// Log it and keep serving every other page.
+process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
+process.on("uncaughtException",  (e) => console.error("uncaughtException:",  (e && e.message) || e));
 
 app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
