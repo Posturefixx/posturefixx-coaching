@@ -247,7 +247,7 @@ function ghlFor(clinic) {
 }
 
 // ── SEND SMS via GHL: upsert the contact by phone, then send the message ──────
-async function sendSms(clinic, phone, name, text) {
+async function sendSms(clinic, phone, name, text, scheduledTimestamp) {
   const { token, location } = ghlFor(clinic);
   if (!token || !location) throw new Error(`no GHL token/location for ${clinic} (set GHL_TOKEN_${clinic.toUpperCase()} & GHL_LOCATION_${clinic.toUpperCase()})`);
   const headers = { Authorization: `Bearer ${token}`, Version: "2021-07-28", "Content-Type": "application/json", Accept: "application/json" };
@@ -263,9 +263,11 @@ async function sendSms(clinic, phone, name, text) {
   if (!contactId) throw new Error(`GHL upsert returned no contactId`);
 
   // 2) send the SMS
+  const payload = { type: "SMS", contactId, message: text };
+  if (scheduledTimestamp && scheduledTimestamp > Date.now()) payload.scheduledTimestamp = scheduledTimestamp; // GHL schedules it
   const send = await fetch("https://services.leadconnectorhq.com/conversations/messages", {
     method: "POST", headers,
-    body: JSON.stringify({ type: "SMS", contactId, message: text }),
+    body: JSON.stringify(payload),
   });
   const sendBody = await send.json();
   if (!send.ok) throw new Error(`GHL send failed (${send.status}): ${JSON.stringify(sendBody).slice(0, 200)}`);
@@ -377,9 +379,17 @@ app.get("/coach", gate, async (req, res) => {
     res.send(`<body style="font-family:sans-serif;max-width:680px;margin:40px auto">${lockNote()}
       <h2>Coaching drafts — target €${(target/1e6).toFixed(2)}M</h2>
       ${cards.join("")}
-      <form method="POST" action="/coach/send?target=${target}" onsubmit="return confirm('Send these SMS to all four chiros?')">
-        <button style="border:none;background:#2563EB;color:#fff;font-size:15px;font-weight:600;padding:12px 22px;border-radius:8px;cursor:pointer">Approve &amp; send all by SMS</button>
-      </form>
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:8px">
+        <form id="coachForm" method="POST" action="/coach/send?target=${target}"></form>
+        <div style="margin-bottom:12px"><label style="font-size:14px">Schedule for: <input type="datetime-local" id="whenInput" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:7px;font-size:14px"></label> <span style="color:#94a3b8;font-size:12px">your local (Amsterdam) time</span></div>
+        <button type="button" onclick="doSchedule()" style="border:none;background:#2563EB;color:#fff;font-size:15px;font-weight:600;padding:12px 22px;border-radius:8px;cursor:pointer">Schedule SMS to all four</button>
+        <button type="button" onclick="doNow()" style="border:1px solid #d1d5db;background:#fff;color:#16202E;font-size:14px;padding:12px 18px;border-radius:8px;cursor:pointer;margin-left:8px">or send now</button>
+      </div>
+      <script>
+        (function(){var d=new Date();d.setDate(d.getDate()+1);d.setHours(9,0,0,0);var p=function(n){return String(n).padStart(2,"0");};var el=document.getElementById("whenInput");if(el)el.value=d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes());})();
+        function doNow(){if(!confirm("Send these SMS to all four chiros RIGHT NOW?"))return;var f=document.getElementById("coachForm");f.action="/coach/send?target=${target}";f.submit();}
+        function doSchedule(){var v=document.getElementById("whenInput").value;if(!v){alert("Pick a date and time first.");return;}var ts=new Date(v).getTime();if(isNaN(ts)||ts<Date.now()+60000){alert("Pick a time at least a minute in the future.");return;}if(!confirm("Schedule these SMS for "+new Date(ts).toLocaleString()+"?"))return;var f=document.getElementById("coachForm");f.action="/coach/send?target=${target}&when="+ts;f.submit();}
+      </script>
       <p style="color:#888;margin-top:10px">Targets: <a href="?target=1000000">€1.0M</a> · <a href="?target=1100000">€1.1M</a> · <a href="?target=1200000">€1.2M</a></p>
     </body>`);
   } catch (e) { res.status(500).send(`<pre style="white-space:pre-wrap">Error: ${e.message}</pre>`); }
@@ -388,17 +398,19 @@ app.get("/coach", gate, async (req, res) => {
 // ── COACH SEND — drafts again and actually sends via SMS ──────────────────────
 app.post("/coach/send", gate, async (req, res) => {
   const target = parseInt(req.query.target) || 1100000;
+  const when = parseInt(req.query.when) || null;
   try {
     const goals = chiroGoals(target, await chiroBaselines(30));
     const results = await Promise.all(goals.map(async (g) => {
       if (!g.phone) return `${g.n}: skipped (no phone)`;
       try {
         const msg = await draftCoaching(g);
-        await sendSms(g.smsClinic, g.phone, g.n, msg);
-        return `${g.n}: sent ✅`;
+        await sendSms(g.smsClinic, g.phone, g.n, msg, when);
+        return `${g.n}: ${when ? "scheduled" : "sent"} ✅`;
       } catch (e) { return `${g.n}: failed — ${e.message}`; }
     }));
-    res.send(`<body style="font-family:sans-serif;max-width:600px;margin:40px auto"><h2>Send results</h2><p>${results.join("<br>")}</p></body>`);
+    const head = when ? `Scheduled for ${new Date(when).toLocaleString("en-GB",{timeZone:"Europe/Amsterdam"})} (Amsterdam time)` : "Sent now";
+    res.send(`<body style="font-family:sans-serif;max-width:600px;margin:40px auto"><h2>${head}</h2><p>${results.join("<br>")}</p><p style="color:#888;font-size:13px;margin-top:14px">Scheduled messages are held by GHL and go out at the chosen time \u2014 you can see/cancel them in your GHL conversation.</p><p><a href="/coach">\u2190 back</a></p></body>`);
   } catch (e) { res.status(500).send(`<pre style="white-space:pre-wrap">Error: ${e.message}</pre>`); }
 });
 
@@ -1517,29 +1529,68 @@ app.get("/pva/live.json", gate, async (_req, res) => {
 
 
 // ============================================================================
-//  /coach/cron — scheduled team coaching send (Mon & Thu 9am via an external
-//  scheduler). NOT browser-gated: protected by a secret token instead, so an
-//  automated caller can trigger it. Set CRON_SECRET in Render. Optionally set
-//  COACH_TARGET (yearly revenue target) to steer the goals; defaults to 1.1M.
-//  This sends straight out — there is NO human review step on scheduled sends.
+//  /coach/cron — the automated coaching engine. Point an external scheduler at
+//  this DAILY at 09:00 Amsterdam time:  /coach/cron?key=SECRET&until=YYYY-MM-DD
+//  It decides what to do from the weekday (Amsterdam):
+//    Sun & Wed  -> texts YOU a preview of what goes out the next morning
+//    Mon & Thu  -> sends the coaching SMS to the chiros
+//    other days -> does nothing
+//  Stops automatically after the until date (or COACH_UNTIL env). Set OWNER_PHONE
+//  (and optionally OWNER_SMS_CLINIC, default Amstelveen) so previews reach you.
 // ============================================================================
+const APP_URL = process.env.APP_URL || "https://posturefixx-coaching.onrender.com";
+async function notifyOwner(text) {
+  const phone = process.env.OWNER_PHONE || process.env.PHONE_ALEX;
+  const clinic = process.env.OWNER_SMS_CLINIC || "Amstelveen";
+  if (!phone) throw new Error("no OWNER_PHONE set (add it in Render so previews can reach you)");
+  return sendSms(clinic, phone, "Alex", text);
+}
 app.get("/coach/cron", async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.query.key !== secret) return res.status(403).json({ ok: false, error: "forbidden" });
   const target = parseInt(process.env.COACH_TARGET) || parseInt(req.query.target) || 1100000;
+  const until = (req.query.until || process.env.COACH_UNTIL || "").trim();
   try {
-    const goals = chiroGoals(target, await chiroBaselines(30));
-    const results = [];
-    for (const g of goals) {
-      if (!g.phone) { results.push(`${g.n}: skipped (no phone)`); continue; }
-      try {
-        const msg = await draftCoaching(g);
-        await sendSms(g.smsClinic, g.phone, g.n, msg);
-        results.push(`${g.n}: sent`);
-      } catch (e) { results.push(`${g.n}: failed — ${e.message}`); }
+    const ams = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Amsterdam" }));
+    const dow = ams.getDay(); // 0=Sun .. 6=Sat
+    const dayName = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][dow];
+
+    // Campaign window: stop after `until`
+    if (until) {
+      const end = new Date(until + "T23:59:59+02:00");
+      if (!isNaN(end.getTime()) && ams > end) {
+        await notifyOwner(`Posturefixx auto-coaching ended on ${until}. To keep it going, set a later end date on the scheduler URL (until=YYYY-MM-DD) or COACH_UNTIL in Render.`).catch(()=>{});
+        return res.json({ ok: true, action: "campaign-ended", until });
+      }
     }
-    console.log("[coach/cron]", new Date().toISOString(), "·", results.join(" | "));
-    res.json({ ok: true, at: new Date().toISOString(), target, results });
+
+    // PREVIEW day: Sunday (for Monday) or Wednesday (for Thursday)
+    if (dow === 0 || dow === 3) {
+      const sendDay = dow === 0 ? "Monday" : "Thursday";
+      const goals = chiroGoals(target, await chiroBaselines(30));
+      const lines = await Promise.all(goals.map(async g => {
+        const msg = g.phone ? await draftCoaching(g) : "(no phone set - will be skipped)";
+        return `- ${g.n} (to ${g.smsClinic}): ${msg}`;
+      }));
+      const body = `Coaching preview - these go out ${sendDay} 9:00 to your chiros:\n\n${lines.join("\n\n")}\n\nReview or adjust: ${APP_URL}/coach${until ? `\nAuto-send runs until ${until}.` : ""}\n(Final versions use ${sendDay}'s latest numbers.)`;
+      await notifyOwner(body);
+      console.log("[coach/cron] preview sent for", sendDay);
+      return res.json({ ok: true, action: "preview-sent", for: sendDay });
+    }
+
+    // SEND day: Monday & Thursday
+    if (dow === 1 || dow === 4) {
+      const goals = chiroGoals(target, await chiroBaselines(30));
+      const results = await Promise.all(goals.map(async g => {
+        if (!g.phone) return `${g.n}: skipped (no phone)`;
+        try { const msg = await draftCoaching(g); await sendSms(g.smsClinic, g.phone, g.n, msg); return `${g.n}: sent`; }
+        catch (e) { return `${g.n}: failed - ${e.message}`; }
+      }));
+      console.log("[coach/cron]", dayName, results.join(" | "));
+      return res.json({ ok: true, action: "sent", day: dayName, results });
+    }
+
+    return res.json({ ok: true, action: "nothing-today", day: dayName });
   } catch (e) {
     console.error("[coach/cron] error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
