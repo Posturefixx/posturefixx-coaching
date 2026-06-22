@@ -26,6 +26,11 @@ const APP_DETAILS = process.env.PHUB_APP_DETAILS || "posturefixx-coaching=dr.ale
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Races a promise against a timeout so a slow upstream never hangs the request.
+function withTimeout(promise, ms, label){
+  return Promise.race([promise, new Promise((_,rej)=>setTimeout(()=>rej(new Error((label||"operation")+" timed out after "+ms+"ms")), ms))]);
+}
+
 // Generic GET against one clinic's PracticeHub. Retries on 429 (rate limit).
 async function phub(clinicName, path, params = {}, attempt = 0) {
   const c = CLINICS[clinicName];
@@ -34,6 +39,7 @@ async function phub(clinicName, path, params = {}, attempt = 0) {
   const qs = new URLSearchParams(params).toString();
   const url = `${c.base}${path}${qs ? "?" + qs : ""}`;
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
     headers: {
       "x-practicehub-key": c.key,
       "x-app-details": APP_DETAILS,
@@ -299,9 +305,14 @@ async function draftCoaching(g) {
     `Chiropractor: ${g.n}. This month so far: ~${g.nowWeekly} visits/week, PVA ${g.pva}.\n` +
     `Their goal for the week ahead: about ${g.goalWeekly} visits, lifting PVA toward ${g.goalPva}.\n` +
     `Write a short, warm SMS encouraging them toward that goal.`;
-  const res = await anthropic.messages.create({ model: MODEL, max_tokens: 250, system: VOICE,
-    messages: [{ role: "user", content: prompt }] });
-  return res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+  const fallback = `Hi ${g.n}! You're around ${g.nowWeekly} visits/week with a PVA of ${g.pva} \u2014 nice work. This week let's aim for ~${g.goalWeekly} and nudge that PVA toward ${g.goalPva}. Small steady steps; I'm here if you want to talk it through. \ud83d\udcaa`;
+  try {
+    const res = await withTimeout(
+      anthropic.messages.create({ model: MODEL, max_tokens: 250, system: VOICE, messages: [{ role: "user", content: prompt }] }),
+      12000, "draft for " + g.n);
+    const txt = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    return txt || fallback;
+  } catch (e) { console.error("[draftCoaching]", g.n, e.message); return fallback; }
 }
 
 // ── Sample data so you can SEE it working before PracticeHub is wired ────────
@@ -356,14 +367,13 @@ app.get("/coach", gate, async (req, res) => {
   const target = Math.max(700000, Math.min(1500000, parseInt(req.query.target) || 1100000));
   try {
     const goals = chiroGoals(target, await chiroBaselines(30));
-    const cards = [];
-    for (const g of goals) {
+    const cards = await Promise.all(goals.map(async (g) => {
       const msg = await draftCoaching(g);
-      cards.push(`<div style="border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0">
+      return `<div style="border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0">
         <b>${g.n}</b> — now ~${g.nowWeekly}/wk · PVA ${g.pva} → goal ~${g.goalWeekly}/wk · PVA ${g.goalPva}
         <p style="white-space:pre-wrap;line-height:1.5;margin:10px 0 0">${msg}</p>
-        <small style="color:#888">→ ${g.phone || "no phone set"} via ${g.smsClinic}</small></div>`);
-    }
+        <small style="color:#888">→ ${g.phone || "no phone set"} via ${g.smsClinic}</small></div>`;
+    }));
     res.send(`<body style="font-family:sans-serif;max-width:680px;margin:40px auto">${lockNote()}
       <h2>Coaching drafts — target €${(target/1e6).toFixed(2)}M</h2>
       ${cards.join("")}
@@ -380,15 +390,14 @@ app.post("/coach/send", gate, async (req, res) => {
   const target = parseInt(req.query.target) || 1100000;
   try {
     const goals = chiroGoals(target, await chiroBaselines(30));
-    const results = [];
-    for (const g of goals) {
-      if (!g.phone) { results.push(`${g.n}: skipped (no phone)`); continue; }
+    const results = await Promise.all(goals.map(async (g) => {
+      if (!g.phone) return `${g.n}: skipped (no phone)`;
       try {
         const msg = await draftCoaching(g);
         await sendSms(g.smsClinic, g.phone, g.n, msg);
-        results.push(`${g.n}: sent ✅`);
-      } catch (e) { results.push(`${g.n}: failed — ${e.message}`); }
-    }
+        return `${g.n}: sent ✅`;
+      } catch (e) { return `${g.n}: failed — ${e.message}`; }
+    }));
     res.send(`<body style="font-family:sans-serif;max-width:600px;margin:40px auto"><h2>Send results</h2><p>${results.join("<br>")}</p></body>`);
   } catch (e) { res.status(500).send(`<pre style="white-space:pre-wrap">Error: ${e.message}</pre>`); }
 });
