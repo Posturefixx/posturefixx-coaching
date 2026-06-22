@@ -1095,11 +1095,12 @@ ${phoneBlock}
 const PVA_SHEET_2026 = "1_oZ1Y3IizjZdQ5MwPZm--WgbEyNQ0-JlNKEys_wbJJU"; // PVA + earnings
 const PVA_SHEET_2025 = "1xRJ1vRT1GREkwDGuabo8w-Gquny0PY5rgxNaGZz7WmA"; // YoY (PVA only)
 
-// gviz fetches ONE tab at a time, BY NAME. If your PVA matrix and the earnings
-// table live on different tabs, list every tab to scan here. "" = the first tab.
-// You can override without editing code via Render env vars (comma-separated).
-const PVA_TABS_2026 = (process.env.PVA_TABS_2026 || "").split(",").map(s => s.trim()); // e.g. "PVA,Earnings"
-const PVA_TABS_2025 = (process.env.PVA_TABS_2025 || "").split(",").map(s => s.trim());
+// gviz fetches ONE tab at a time, BY NAME. Your data lives on tabs named after
+// the year ("2026" holds both the PVA matrix AND the earnings table; "2025"
+// holds the PVA matrix). Both are fetched through the same proven fetchSheetCSV
+// path that /ca uses. Override via Render env vars only if you rename the tabs.
+const PVA_TABS_2026 = (process.env.PVA_TABS_2026 || "2026").split(",").map(s => s.trim());
+const PVA_TABS_2025 = (process.env.PVA_TABS_2025 || "2025").split(",").map(s => s.trim());
 
 // PVA colour thresholds (the brief): green ≥10, amber 7–10, red <7.
 const PVA_GREEN = 10, PVA_AMBER = 7;
@@ -1416,6 +1417,88 @@ app.get("/coach/cron", async (req, res) => {
     console.error("[coach/cron] error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+
+// ============================================================================
+//  /revenue — monthly revenue line chart (manager-gated)
+//  • 2026 actual (Jan..latest) summed LIVE from the PVA-sheet earnings table
+//  • 2026 projection to December (linear trend on the filled months)
+//  • 2025 estimate (visits x 2026 €/visit) — baked historical estimate
+//  INTERIM until MT940 bank files arrive; then real bank monthly replaces this.
+// ============================================================================
+const REV_EST_2025 = [55841,50466,70533,55005,67905,52317,51541,61873,59245,74355,64740,43777];
+
+function linProj(actual) {
+  const pts = actual.map((v,i)=>[i,v]).filter(p=>p[1]!=null);
+  if (pts.length < 2) return Array(12).fill(null);
+  const n=pts.length, sx=pts.reduce((a,p)=>a+p[0],0), sy=pts.reduce((a,p)=>a+p[1],0);
+  const sxy=pts.reduce((a,p)=>a+p[0]*p[1],0), sxx=pts.reduce((a,p)=>a+p[0]*p[0],0);
+  const m=(n*sxy-sx*sy)/(n*sxx-sx*sx), b=(sy-m*sx)/n;
+  const last=pts[pts.length-1][0];
+  return Array.from({length:12},(_,i)=> i>last ? Math.max(0,Math.round(m*i+b)) : null);
+}
+
+function svgRevenue(actual, proj) {
+  const W=760,H=380,P={l:54,r:16,t:16,b:34};
+  const all=[...REV_EST_2025, ...actual.filter(v=>v!=null), ...proj.filter(v=>v!=null)];
+  const max=Math.max(...all)*1.12;
+  const x=m=>P.l+(m/11)*(W-P.l-P.r), y=v=>H-P.b-(v/max)*(H-P.t-P.b);
+  let g="";
+  for (let t=0;t<=max;t+=20000) g+=`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#eef2f7"/><text x="${P.l-8}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="#94a3b8">€${(t/1000)|0}k</text>`;
+  MONTHS.forEach((m,i)=>g+=`<text x="${x(i)}" y="${H-12}" text-anchor="middle" font-size="10" fill="#94a3b8">${m}</text>`);
+  const line=(arr,color,dash,r)=>{
+    const pts=arr.map((v,i)=>v==null?null:`${x(i)},${y(v)}`).filter(Boolean);
+    let s = pts.length>1 ? `<polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="2.5"${dash?` stroke-dasharray="${dash}"`:""}/>` : "";
+    arr.forEach((v,i)=>{ if(v!=null) s+=`<circle cx="${x(i)}" cy="${y(v)}" r="${r}" fill="${color}"><title>${MONTHS[i]}: €${Math.round(v).toLocaleString("en-US")}</title></circle>`; });
+    return s;
+  };
+  // bridge actual -> projection so the dashed line connects
+  const lastA = actual.reduce((acc,v,i)=>v!=null?i:acc,-1);
+  const projBridge = proj.slice(); if (lastA>=0) projBridge[lastA]=actual[lastA];
+  g += line(REV_EST_2025, "#94a3b8", "5 4", 2.5);     // 2025 estimate (grey dashed)
+  g += line(projBridge, "#2563eb", "5 4", 0);          // 2026 projection (blue dashed)
+  g += line(actual, "#2563eb", "", 3.5);               // 2026 actual (blue solid)
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}</svg>`;
+}
+
+app.get("/revenue", gate, async (req, res) => {
+  try {
+    const d = await loadPvaData();
+    const actual = Array.from({length:12},(_,m)=>{
+      let sum=null;
+      for (const k of d.keys){ const v=d.earn[k]?.[2026]?.[m]; if(v!=null){ sum=(sum||0)+v; } }
+      return sum;
+    });
+    const proj = linProj(actual);
+    const ytd = actual.filter(v=>v!=null).reduce((a,b)=>a+b,0);
+    const projRest = proj.filter(v=>v!=null).reduce((a,b)=>a+b,0);
+    const est2025 = REV_EST_2025.reduce((a,b)=>a+b,0);
+    const fmt=n=>"€"+Math.round(n).toLocaleString("en-US");
+    res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revenue — Posturefixx</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:840px;margin:24px auto;padding:0 16px;color:#16202E}
+h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom:18px}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}
+.legend{font-size:12px;color:#64748b;margin-top:10px;line-height:1.6}.dot{display:inline-block;width:22px;height:0;border-top:3px solid;vertical-align:middle;margin-right:5px}
+.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}
+.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
+.warn{background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+a{color:#2563EB}</style></head><body>
+<h1>Monthly revenue</h1><div class="sub">Company-wide · month by month · with projection to year-end</div>
+<div class="warn">Interim view. 2026 Jan–May is real (from your PVA earnings sheet, chiro-attributed basis — runs lower than the bank P&L). The rest is projected/estimated. Send the MT940 bank files and I'll replace this with exact, P&L-matching monthly figures per location.</div>
+<div class="kpis">
+  <div class="kpi"><b>${fmt(ytd)}</b><span>2026 actual so far</span></div>
+  <div class="kpi"><b>${fmt(ytd+projRest)}</b><span>2026 projected full year</span></div>
+  <div class="kpi"><b>${fmt(est2025)}</b><span>2025 estimated</span></div>
+</div>
+<div class="card">${svgRevenue(actual, proj)}
+<div class="legend">
+<span class="dot" style="border-color:#2563eb"></span><b>2026 actual</b> (solid) &nbsp;
+<span class="dot" style="border-color:#2563eb;border-top-style:dashed"></span><b>2026 projection</b> (dashed) &nbsp;
+<span class="dot" style="border-color:#94a3b8;border-top-style:dashed"></span><b>2025 estimate</b> (dashed). Hover any point for the figure.</div></div>
+<p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/pva">/pva</a> · <a href="/coach">/coach</a></p>
+</body></html>`);
+  } catch (e) { res.status(500).send("revenue error: " + e.message); }
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
