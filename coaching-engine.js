@@ -891,10 +891,12 @@ function computeCAStats(intakes) {
     if ((i.Package || "").toLowerCase() === "yes") s.packages++;
     if ((i.Meta || "").toLowerCase() === "yes") s.meta++;
     const cl = i._clinic || "Unknown";
-    if (!s.byClinic[cl]) s.byClinic[cl] = { intakes: 0, packages: 0, doorplannen: 0 };
+    if (!s.byClinic[cl]) s.byClinic[cl] = { intakes: 0, packages: 0, doorplannen: 0, meta: 0, totalAppts: 0 };
     s.byClinic[cl].intakes++;
+    s.byClinic[cl].totalAppts += aptsNum;
     if (aptsNum >= 3) s.byClinic[cl].doorplannen++;
     if ((i.Package || "").toLowerCase() === "yes") s.byClinic[cl].packages++;
+    if ((i.Meta || "").toLowerCase() === "yes") s.byClinic[cl].meta++;
   }
   // Compute percentages
   for (const name in stats) {
@@ -978,10 +980,15 @@ app.get("/ca", gate, async (_req, res) => {
   try {
     const { intakes, errors } = await loadAllIntakes();
     const stats = computeCAStats(intakes);
+    const notPlanned = intakes
+      .filter(i => i.Name && ((parseInt(i.Appointments, 10) || 0) < 3))
+      .map(i => ({ name: i.Name, ca: i.CA || "—", clinic: i._clinic || "—", chiro: i.Chiro || "—", appts: parseInt(i.Appointments, 10) || 0, package: (i.Package||"").toLowerCase()==="yes", meta: (i.Meta||"").toLowerCase()==="yes" }));
     data = {
       ok: true,
       totalIntakes: intakes.length,
       perCA: Object.values(stats).sort((a, b) => b.intakes - a.intakes),
+      notPlanned,
+      roster: CAS.map(c => c.name),
       errors,
     };
   } catch (e) {
@@ -1026,69 +1033,148 @@ function pctBar(pct, color) {
   return `<div style="background:#eee;border-radius:6px;overflow:hidden;height:8px;width:120px;display:inline-block;vertical-align:middle"><div style="background:${color};height:100%;width:${w}%"></div></div>`;
 }
 
-function renderCAPage(data) {
-  const rows = (data.perCA || []).map(s => {
-    const clinicBreak = Object.entries(s.byClinic)
-      .map(([cl, d]) => `${cl}: ${d.intakes}`)
-      .join(" · ");
-    const phoneSet = !!caPhone(s.name);
-    return `
-      <tr>
-        <td style="font-weight:600">${s.name}${phoneSet ? "" : ' <span style="color:#c00;font-size:11px">(no phone)</span>'}</td>
-        <td style="text-align:right">${s.intakes}</td>
-        <td>${pctBar(s.doorplannenPct, "#2563eb")} <span style="margin-left:6px">${Math.round(s.doorplannenPct)}%</span> <span style="color:#888;font-size:11px">(${s.doorplannen}/${s.intakes})</span></td>
-        <td>${pctBar(s.packagePct, "#16a34a")} <span style="margin-left:6px">${Math.round(s.packagePct)}%</span> <span style="color:#888;font-size:11px">(${s.packages}/${s.intakes})</span></td>
-        <td style="text-align:right">${s.avgAppts.toFixed(1)}</td>
-        <td style="text-align:right">${Math.round(s.metaPct)}%</td>
-        <td style="font-size:12px;color:#555">${clinicBreak}</td>
-        <td><a href="/ca/coach?target=${encodeURIComponent(s.name)}" style="background:#16202E;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-size:12px">Coach ${s.name}</a></td>
-      </tr>`;
-  }).join("");
-
-  const total = data.totalIntakes || 0;
-  const overall = (data.perCA || []).reduce((a, s) => {
-    a.intakes += s.intakes; a.doorplannen += s.doorplannen; a.packages += s.packages;
-    return a;
-  }, { intakes: 0, doorplannen: 0, packages: 0 });
-  const overallDoor = overall.intakes ? Math.round((overall.doorplannen / overall.intakes) * 100) : 0;
-  const overallPkg  = overall.intakes ? Math.round((overall.packages / overall.intakes) * 100) : 0;
-
-  const errBlock = (data.errors && data.errors.length) ? `<div style="background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#92400e">Some sheets couldn't load: ${data.errors.join(" · ")}</div>` : "";
-
-  return `<!doctype html><html><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CA Performance — Posturefixx</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 16px; color: #16202E; }
-  h1 { margin: 0 0 4px; font-size: 22px; }
-  .sub { color: #666; font-size: 13px; margin-bottom: 20px; }
-  .stat-row { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
-  .stat { background: #f8fafc; padding: 14px 18px; border-radius: 10px; min-width: 130px; }
-  .stat-val { font-size: 24px; font-weight: 700; }
-  .stat-lbl { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
-  table { border-collapse: collapse; width: 100%; font-size: 14px; }
-  th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #e5e7eb; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: #555; }
-  td { padding: 10px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
-</style></head><body>
-<h1>CA Performance</h1>
-<div class="sub">From doorplannen sheet · Intakes across all 4 clinics</div>
-${errBlock}
-<div class="stat-row">
-  <div class="stat"><div class="stat-val">${total}</div><div class="stat-lbl">Total intakes</div></div>
-  <div class="stat"><div class="stat-val">${overallDoor}%</div><div class="stat-lbl">Avg doorplannen</div></div>
-  <div class="stat"><div class="stat-val">${overallPkg}%</div><div class="stat-lbl">Avg package conv.</div></div>
-</div>
-<table>
-  <thead><tr>
-    <th>CA</th><th style="text-align:right">Intakes</th>
-    <th>Doorplannen %</th><th>Package %</th>
-    <th style="text-align:right">Avg appts</th><th style="text-align:right">Meta %</th>
-    <th>By clinic</th><th></th>
-  </tr></thead>
-  <tbody>${rows || '<tr><td colspan="8" style="text-align:center;padding:40px;color:#888">No intake data loaded</td></tr>'}</tbody>
-</table>
-<div style="margin-top:24px;font-size:12px;color:#888">Tip: open <a href="/plan">/plan</a> for the chiropractor coaching dashboard.</div>
-</body></html>`;
+function caClinicLabel(c){return c;}
+function renderCAPage(data){
+  var payload = {
+    perCA: (data.perCA||[]).map(function(s){return {name:s.name,intakes:s.intakes,doorplannen:s.doorplannen,packages:s.packages,meta:s.meta||0,totalAppts:s.totalAppts||0,byClinic:s.byClinic||{}};}),
+    notPlanned: data.notPlanned||[],
+    roster: data.roster||[],
+    clinics: ["Amstelveen","Bussum","Rotterdam","Utrecht"],
+    phones: (data.roster||[]).reduce(function(o,n){o[n]=!!caPhone(n);return o;},{})
+  };
+  var errBlock = (data.errors && data.errors.length) ? ("<div style='background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#92400e'>Some sheets could not load: "+data.errors.join(" \u00b7 ")+"</div>") : "";
+  var CA_CSS = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1200px;margin:24px auto;padding:0 16px;color:#16202E}"
+    + "h1{margin:0 0 4px;font-size:22px}.sub{color:#666;font-size:13px;margin-bottom:14px}"
+    + ".legend{display:flex;gap:16px;flex-wrap:wrap;background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:#475569}"
+    + ".legend b{color:#16202E}"
+    + ".filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}"
+    + ".fbtn{border:1px solid #d1d5db;background:#fff;color:#334155;padding:7px 13px;border-radius:999px;font-size:13px;cursor:pointer}"
+    + ".fbtn.on{background:#16202E;color:#fff;border-color:#16202E}"
+    + ".stat-row{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap}.stat{background:#f8fafc;padding:14px 18px;border-radius:10px;min-width:130px}"
+    + ".stat-val{font-size:24px;font-weight:700}.stat-lbl{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px}"
+    + "table{border-collapse:collapse;width:100%;font-size:14px}th{text-align:left;padding:10px 8px;border-bottom:2px solid #e5e7eb;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#555}"
+    + "td{padding:10px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}"
+    + ".barwrap{background:#eee;border-radius:6px;overflow:hidden;height:8px;width:120px;display:inline-block;vertical-align:middle}.barfill{height:100%}"
+    + ".muted{color:#9aa3af}.coachbtn{background:#16202E;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-size:12px}"
+    + ".sec{margin-top:30px}.sec h2{font-size:16px;margin:0 0 4px}.sec .sub{margin-bottom:12px}"
+    + ".pill{display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;margin-left:5px;vertical-align:middle}"
+    + ".pill.meta{background:#eff6ff;color:#2563eb}.pill.pkg{background:#ecfdf5;color:#16a34a}";
+  return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    + "<title>CA Performance \u2014 Posturefixx</title>"
+    + "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script>"
+    + "<style>"+CA_CSS+"</style></head><body>"
+    + "<h1>CA Performance</h1><div class='sub'>From the doorplannen sheet \u00b7 intakes across the clinics. Use the clinic filter and switch table / chart.</div>"
+    + errBlock
+    + "<div class='legend'>"
+    + "<span><b>Doorplannen %</b> \u2014 share of this CA\u2019s intakes that booked <b>3+ appointments</b> (planned the full first month)</span>"
+    + "<span><b>Package %</b> \u2014 share of intakes that <b>took a care package</b></span>"
+    + "<span><b>Meta %</b> \u2014 share of intakes whose <b>lead came from Meta/Facebook ads</b> (lead-source mix, not a performance score)</span>"
+    + "<span><b>Avg appts</b> \u2014 average appointments booked per intake</span>"
+    + "</div>"
+    + "<div id='filters' class='filters'></div>"
+    + "<div id='cards' class='stat-row'></div>"
+    + "<div id='viewtoggle' class='filters'></div>"
+    + "<div id='main'></div>"
+    + "<div id='notplanned' class='sec'></div>"
+    + "<div style='margin-top:24px;font-size:12px;color:#888'>Tip: open <a href='/plan'>/plan</a> for the chiropractor coaching dashboard.</div>"
+    + "<script>var DATA="+JSON.stringify(payload)+";("+caClient.toString()+")();</script>"
+    + "</body></html>";
+}
+function caClient(){
+  var SEL={clinic:'all',view:'table',chart:'bar'};
+  var CHART=null;
+  function $(id){return document.getElementById(id);}
+  function statsFor(clinic){
+    var names={}; DATA.roster.forEach(function(n){names[n]=1;}); DATA.perCA.forEach(function(s){names[s.name]=1;});
+    var out=[];
+    Object.keys(names).forEach(function(name){
+      var s=null; for(var k=0;k<DATA.perCA.length;k++){if(DATA.perCA[k].name===name){s=DATA.perCA[k];break;}}
+      var intk=0,door=0,pkg=0,meta=0,appts=0;
+      if(s){
+        if(clinic==='all'){intk=s.intakes;door=s.doorplannen;pkg=s.packages;meta=s.meta;appts=s.totalAppts;}
+        else if(s.byClinic[clinic]){var b=s.byClinic[clinic];intk=b.intakes;door=b.doorplannen;pkg=b.packages;meta=b.meta||0;appts=b.totalAppts||0;}
+      }
+      out.push({name:name,intakes:intk,door:door,pkg:pkg,meta:meta,appts:appts,
+        doorPct:intk?door/intk*100:0,pkgPct:intk?pkg/intk*100:0,metaPct:intk?meta/intk*100:0,avgAppts:intk?appts/intk:0});
+    });
+    out.sort(function(a,b){return b.intakes-a.intakes;});
+    return out;
+  }
+  function bar(pct,color){var w=Math.max(0,Math.min(100,pct));return "<div class='barwrap'><div class='barfill' style='width:"+w+"%;background:"+color+"'></div></div>";}
+  function notPlannedFor(clinic){return DATA.notPlanned.filter(function(c){return clinic==='all'||c.clinic===clinic;});}
+  function renderFilters(){
+    var opts=[['all','All clinics']].concat(DATA.clinics.map(function(c){return [c,c];}));
+    $('filters').innerHTML=opts.map(function(o){return "<button class='fbtn"+(SEL.clinic===o[0]?' on':'')+"' data-clinic='"+o[0]+"'>"+o[1]+"</button>";}).join('');
+    Array.prototype.forEach.call($('filters').querySelectorAll('button'),function(b){b.addEventListener('click',function(){SEL.clinic=b.getAttribute('data-clinic');render();});});
+  }
+  function renderCards(){
+    var rows=statsFor(SEL.clinic); var intk=0,door=0,pkg=0;
+    rows.forEach(function(r){intk+=r.intakes;door+=r.door;pkg+=r.pkg;});
+    var dP=intk?Math.round(door/intk*100):0, pP=intk?Math.round(pkg/intk*100):0;
+    var np=notPlannedFor(SEL.clinic).length;
+    $('cards').innerHTML=
+      "<div class='stat'><div class='stat-val'>"+intk+"</div><div class='stat-lbl'>Intakes</div></div>"
+     +"<div class='stat'><div class='stat-val'>"+dP+"%</div><div class='stat-lbl'>Avg doorplannen</div></div>"
+     +"<div class='stat'><div class='stat-val'>"+pP+"%</div><div class='stat-lbl'>Avg package</div></div>"
+     +"<div class='stat'><div class='stat-val'>"+np+"</div><div class='stat-lbl'>Not planned through</div></div>";
+  }
+  function renderViewToggle(){
+    var h="<button class='fbtn"+(SEL.view==='table'?' on':'')+"' data-v='table'>Table</button>"
+         +"<button class='fbtn"+(SEL.view==='chart'?' on':'')+"' data-v='chart'>Chart</button>";
+    if(SEL.view==='chart'){
+      h+="<span style='width:14px'></span>"
+       +"<button class='fbtn"+(SEL.chart==='bar'?' on':'')+"' data-c='bar'>Bar</button>"
+       +"<button class='fbtn"+(SEL.chart==='line'?' on':'')+"' data-c='line'>Line</button>";
+    }
+    $('viewtoggle').innerHTML=h;
+    Array.prototype.forEach.call($('viewtoggle').querySelectorAll('[data-v]'),function(b){b.addEventListener('click',function(){SEL.view=b.getAttribute('data-v');render();});});
+    Array.prototype.forEach.call($('viewtoggle').querySelectorAll('[data-c]'),function(b){b.addEventListener('click',function(){SEL.chart=b.getAttribute('data-c');render();});});
+  }
+  function renderTable(){
+    var rows=statsFor(SEL.clinic);
+    var body=rows.map(function(r){
+      var zero=r.intakes===0;
+      var clinicBreak='';
+      if(SEL.clinic==='all'){var s=null;for(var k=0;k<DATA.perCA.length;k++){if(DATA.perCA[k].name===r.name){s=DATA.perCA[k];break;}}
+        if(s)clinicBreak=Object.keys(s.byClinic).map(function(cl){return cl+': '+s.byClinic[cl].intakes;}).join(' \u00b7 ');}
+      var noPhone=DATA.phones[r.name]===false?" <span style='color:#c00;font-size:11px'>(no phone)</span>":"";
+      return "<tr"+(zero?" class='muted'":"")+">"
+        +"<td style='font-weight:600'>"+r.name+noPhone+"</td>"
+        +"<td style='text-align:right'>"+r.intakes+"</td>"
+        +"<td>"+bar(r.doorPct,'#2563eb')+" <span style='margin-left:6px'>"+Math.round(r.doorPct)+"%</span> <span style='color:#888;font-size:11px'>("+r.door+"/"+r.intakes+")</span></td>"
+        +"<td>"+bar(r.pkgPct,'#16a34a')+" <span style='margin-left:6px'>"+Math.round(r.pkgPct)+"%</span> <span style='color:#888;font-size:11px'>("+r.pkg+"/"+r.intakes+")</span></td>"
+        +"<td style='text-align:right'>"+r.avgAppts.toFixed(1)+"</td>"
+        +"<td style='text-align:right'>"+Math.round(r.metaPct)+"%</td>"
+        +"<td style='font-size:12px;color:#555'>"+clinicBreak+"</td>"
+        +"<td><a class='coachbtn' href='/ca/coach?target="+encodeURIComponent(r.name)+"'>Coach</a></td></tr>";
+    }).join('');
+    $('main').innerHTML="<table><thead><tr><th>CA</th><th style='text-align:right'>Intakes</th><th>Doorplannen %</th><th>Package %</th><th style='text-align:right'>Avg appts</th><th style='text-align:right'>Meta %</th><th>By clinic</th><th></th></tr></thead><tbody>"+(body||"<tr><td colspan='8' style='text-align:center;padding:40px;color:#888'>No intake data</td></tr>")+"</tbody></table>";
+  }
+  function renderChart(){
+    $('main').innerHTML="<div style='height:380px'><canvas id='cachart'></canvas></div>";
+    var rows=statsFor(SEL.clinic).filter(function(r){return r.intakes>0;});
+    var labels=rows.map(function(r){return r.name;});
+    var ds=[{label:'Doorplannen %',data:rows.map(function(r){return Math.round(r.doorPct);}),backgroundColor:'#2563eb',borderColor:'#2563eb'},
+            {label:'Package %',data:rows.map(function(r){return Math.round(r.pkgPct);}),backgroundColor:'#16a34a',borderColor:'#16a34a'}];
+    if(CHART){CHART.destroy();CHART=null;}
+    if(typeof Chart==='undefined'){$('main').innerHTML+="<div style='color:#888;font-size:12px'>Chart library still loading\u2026 switch to Table or retry.</div>";return;}
+    CHART=new Chart(document.getElementById('cachart'),{type:SEL.chart,data:{labels:labels,datasets:ds},
+      options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,max:100,ticks:{callback:function(v){return v+'%';}}}},plugins:{legend:{position:'top'}}}});
+  }
+  function renderNotPlanned(){
+    var list=notPlannedFor(SEL.clinic);
+    list.sort(function(a,b){return (a.ca+a.clinic).localeCompare(b.ca+b.clinic)|| a.appts-b.appts;});
+    var rowsH=list.map(function(c){
+      return "<tr><td style='font-weight:600'>"+c.name+(c.meta?"<span class='pill meta'>Meta</span>":"")+(c.package?"<span class='pill pkg'>package</span>":"")+"</td>"
+        +"<td>"+c.ca+"</td><td>"+c.clinic+"</td><td>"+c.chiro+"</td><td style='text-align:right'>"+c.appts+"</td></tr>";
+    }).join('');
+    $('notplanned').innerHTML="<h2>Clients who haven\u2019t planned through ("+list.length+")</h2>"
+      +"<div class='sub'>Intakes with <b>fewer than 3 appointments</b> booked \u2014 the follow-up list. "+(SEL.clinic==='all'?'All clinics':SEL.clinic)+".</div>"
+      +"<table><thead><tr><th>Client</th><th>CA</th><th>Clinic</th><th>Chiro</th><th style='text-align:right'>Appts</th></tr></thead><tbody>"
+      +(rowsH||"<tr><td colspan='5' style='text-align:center;padding:30px;color:#888'>Everyone planned through \u2014 nice.</td></tr>")+"</tbody></table>";
+  }
+  function render(){renderFilters();renderCards();renderViewToggle();if(SEL.view==='chart')renderChart();else renderTable();renderNotPlanned();}
+  render();
 }
 
 function renderCACoachPage(name, s, draft, phone) {
@@ -2137,12 +2223,12 @@ button{padding:9px 16px;border:none;background:#2563EB;color:#fff;border-radius:
 table{border-collapse:collapse;font-size:12.5px;white-space:nowrap}td,th{padding:7px 9px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{color:#64748b;font-size:11px;text-align:right}th:first-child,td:first-child{text-align:left}
 .ex{color:#b45309;font-size:10px;border:1px solid #fcd34d;background:#fffbeb;border-radius:4px;padding:1px 5px;margin-left:6px}
 .warn{background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:12px}a{color:#2563EB}</style></head><body>
-<h1>Practitioner earnings history</h1><div class="sub">Estimated from PracticeHub completed visits \u00d7 \u20ac${PRICE_PER_VISIT}. Pull as far back as PracticeHub serves \u2014 ex-chiros included. Actual pay (Nick, Holly, Courtney, Maria, Matthew &amp; Myles) is read from the MT940 bank statements. Lara &amp; Annefloor are paid through payroll, so they are not itemised as named bank transfers \u2014 their pay is modelled on /profit. A PVA history view shows past performance (incl. Nick, Holly, Courtney).</div>
+<h1>Practitioner earnings history</h1><div class="sub">Estimated from PracticeHub completed visits \u00d7 \u20ac${PRICE_PER_VISIT}. Pull as far back as PracticeHub serves \u2014 ex-chiros included. The \u201cPay + brought-in\u201d view shows actual euros paid to <b>every</b> chiro (bank for those who invoice by name, the holding for Alex, the books for Lara &amp; Annefloor) and, below it, what each brought in. A PVA history view shows past performance incl. Nick, Holly &amp; Courtney.</div>
 <div class="warn">This is an <b>estimate</b> (visits \u00d7 price), not exact euros, and it reads live from PracticeHub per clinic \u2014 a deep pull can take a moment. Increase \u201cmonths back\u201d until older months stop appearing; that\u2019s as far as the API will serve.</div>
 <div class="controls">
   <div><label>Months back</label><input type="number" id="hmonths" value="6" min="1" max="36"></div>
   <button onclick="loadHistory()">Pull from PracticeHub</button>
-  <div><label>View month</label><select id="monthFocus" onchange="rerender()" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px"><option value="all">All months (table)</option><option value="bank">Actual pay history (bank)</option><option value="pva">PVA history (sheets)</option></select></div>
+  <div><label>View month</label><select id="monthFocus" onchange="rerender()" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px"><option value="all">All months (table)</option><option value="bank">Pay + brought-in (per chiro)</option><option value="pva">PVA history (sheets)</option></select></div>
   <span id="status" style="color:#64748b;font-size:13px"></span>
 </div>
 <div class="card"><div id="tbl">Set months back and click Pull.</div></div>
@@ -2156,6 +2242,7 @@ function exTag(n){var f=(n.split(" ")[0]||"").toLowerCase();return CURRENT.index
 function laraTier(r){return 0.375*Math.min(r,5000)+0.425*Math.max(0,Math.min(r,10000)-5000)+0.45*Math.max(0,r-10000);}
 function nickThreshold(name,beforeMonth){var d=0;MONTHS.filter(function(m){return m<beforeMonth;}).forEach(function(m){var rev=(BYNAME[name]&&BYNAME[name][m])||0;var T=15000+d;d=(rev>=T)?0:(T-rev);});return 15000+d;}
 var BANK_PAY={"Nick Bunger":{"2022-10":10540.5,"2022-12":12126.12,"2023-01":4994.5,"2023-02":4253.3,"2023-04":6606.25,"2023-05":4555.25,"2023-06":5130.65,"2023-07":10032.5,"2023-08":3250.0,"2023-09":2391.0,"2023-10":8588.8,"2023-11":4500.0,"2023-12":10630.0,"2024-02":6145.0,"2024-03":7822.5,"2024-04":4500.0,"2024-05":1500.0,"2024-06":4500.0,"2024-07":4500.0,"2024-08":4500.0,"2024-09":4815.0,"2024-11":5095.0,"2024-12":6065.0,"2025-01":4500.0,"2025-02":4500.0,"2025-03":4500.0,"2025-04":4500.0,"2025-05":4500.0,"2025-06":6034.0,"2025-07":6322.5,"2025-08":3000.0,"2025-09":6000.0,"2025-10":3000.0,"2025-11":4500.0,"2025-12":4500.0},"Holly Schonberger":{"2023-01":4200.0,"2023-02":8650.0,"2023-03":4325.2,"2023-04":1050.0,"2023-05":7350.0,"2023-06":4200.0,"2023-07":4200.0,"2023-08":4200.0,"2023-10":4200.0,"2023-11":5100.0,"2023-12":8472.0,"2024-01":4200.0,"2024-03":8400.0,"2024-04":4200.0,"2024-06":8400.0,"2024-08":3500.0,"2024-09":4200.0,"2024-11":4200.0,"2024-12":8400.0,"2025-02":8400.0,"2025-03":2261.54},"Courtney Rokowski":{"2024-07":925.0,"2024-08":1258.0,"2024-09":2401.0,"2024-10":1339.0,"2024-11":1295.63,"2024-12":1900.5,"2025-01":5167.38,"2025-02":2933.0,"2025-03":3700.38,"2025-05":2357.0,"2025-06":2398.0,"2025-07":2247.0,"2025-08":2217.0},"Maria Feiler":{"2023-12":3672.0,"2024-01":3232.8,"2024-02":3672.0,"2024-03":3672.0,"2024-04":3672.0,"2024-05":3672.0,"2024-06":3672.0,"2024-07":3672.0,"2024-08":3672.0,"2024-09":3672.0},"Matthew Horgan":{"2026-02":2850.75,"2026-03":4570.69,"2026-04":4604.52,"2026-05":4094.16},"Myles Drakes":{"2026-04":4241.04,"2026-05":4548.86}};
+Object.assign(BANK_PAY,{"Alex Yu (holding)":{"2023-01":3431.65,"2023-02":3431.65,"2023-03":3431.65,"2023-04":3400.0,"2023-05":3431.65,"2023-06":3431.65,"2023-08":550.0,"2023-09":500.0,"2023-10":2381.65,"2023-11":3431.65,"2023-12":3431.65,"2024-01":3431.65,"2024-02":3016.3,"2024-03":2300.0,"2024-04":4229.66,"2024-05":3264.82,"2024-06":3264.82,"2024-07":3264.82,"2024-08":3264.82,"2024-09":5264.82,"2024-10":4529.64,"2024-11":3264.82,"2024-12":3764.82,"2025-01":4764.82,"2025-02":3264.84,"2025-03":5179.46,"2025-04":3264.82,"2025-05":3264.82,"2025-06":4000.0,"2025-07":4325.28,"2025-08":2300.0,"2025-09":3825.28,"2025-10":2025.28,"2025-11":5150.56,"2025-12":5325.28,"2026-01":1325.28,"2026-02":6650.56,"2026-03":4454.51,"2026-04":4454.51,"2026-05":3454.51},"Lara (books)":{"2024-09":1900,"2024-10":1900,"2024-11":1900,"2024-12":1900,"2025-01":2080,"2025-02":2062,"2025-03":1900,"2025-04":1900,"2025-05":2656,"2025-06":1900,"2025-07":3800,"2025-08":682,"2025-09":1900,"2025-10":1900,"2025-11":3534,"2025-12":2950,"2026-01":2170,"2026-02":3181,"2026-03":2561,"2026-04":3575,"2026-05":3229,"2026-06":2419},"Annefloor (books)":{"2026-01":4115.25,"2026-03":1317.05,"2026-04":1492.7,"2026-05":849.98}});
 var PVA_HISTORY={"Nick":{"2025-01":8.913,"2025-02":12.066,"2025-03":11.26,"2025-04":16.3,"2025-05":12.6,"2025-06":9.5,"2025-07":10.5,"2025-08":11.0,"2025-09":13.41,"2025-10":20.2,"2025-11":12.6},"Holly":{"2025-01":8.611,"2025-02":13.09,"2025-03":12.2},"Courtney":{"2025-01":7.0,"2025-02":8.285,"2025-03":8.47,"2025-04":8.9,"2025-05":9.7,"2025-06":5.9,"2025-07":11.11},"Myles":{"2025-08":3.1,"2025-09":10.06,"2025-10":8.9,"2025-11":8.0,"2025-12":7.8},"Annefloor":{"2025-12":8.5}};
 function bankKey(name){var n=name.toLowerCase();if(n.indexOf("bunger")>=0)return "Nick Bunger";if(n.indexOf("schonberger")>=0)return "Holly Schonberger";if(n.indexOf("rokowski")>=0||n.indexOf("rakowski")>=0)return "Courtney Rokowski";if(n.indexOf("feiler")>=0||n.indexOf("frier")>=0||n.indexOf("align")>=0||n==="maria"||n.indexOf("maria ")>=0)return "Maria Feiler";if(n.indexOf("horgan")>=0||n==="matthew"||n.indexOf("matthew ")>=0)return "Matthew Horgan";if(n.indexOf("drakes")>=0||n==="myles"||n.indexOf("myles ")>=0)return "Myles Drakes";return null;}
 function bankPay(name,month){var k=bankKey(name);return (k&&BANK_PAY[k]&&BANK_PAY[k][month]!=null)?BANK_PAY[k][month]:null;}
@@ -2163,10 +2250,26 @@ function renderBankHistory(){
   var people=Object.keys(BANK_PAY), set={};
   people.forEach(function(p){Object.keys(BANK_PAY[p]).forEach(function(m){set[m]=1;});});
   var ms=Object.keys(set).sort();
-  var h="<table><thead><tr><th>Practitioner</th>";ms.forEach(function(m){h+="<th>"+m+"</th>";});h+="<th>Total</th></tr></thead><tbody>";
-  people.forEach(function(p){h+="<tr><td>"+p+"<span class='ex'>ex</span></td>";var tot=0;ms.forEach(function(m){var v=BANK_PAY[p][m]||0;tot+=v;h+="<td class='num'>"+(v?eur(v):"·")+"</td>";});h+="<td class='num'><b>"+eur(tot)+"</b></td></tr>";});
+  var h="<div style='font-weight:700;font-size:14px;margin:2px 0 8px'>What each chiro was paid \u2014 real money out</div>";
+  h+="<table><thead><tr><th>Practitioner</th>";ms.forEach(function(m){h+="<th>"+m+"</th>";});h+="<th>Total</th></tr></thead><tbody>";
+  people.forEach(function(p){h+="<tr><td>"+p+exTag(p)+"</td>";var tot=0;ms.forEach(function(m){var v=BANK_PAY[p][m]||0;tot+=v;h+="<td class='num'>"+(v?eur(v):"\u00b7")+"</td>";});h+="<td class='num'><b>"+eur(tot)+"</b></td></tr>";});
   h+="</tbody></table>";
-  document.getElementById("tbl").innerHTML=h+"<div style='color:#94a3b8;font-size:11.5px;margin-top:8px'>Actual euro payments to these chiropractors, read from the MT940 bank statements and bucketed by the month paid — real money out, not an estimate.</div>";
+  h+="<div style='color:#94a3b8;font-size:11.5px;margin-top:8px'>Real euros out: <b>bank statements</b> for those who invoiced by name (Nick, Holly, Courtney, Maria, Matthew, Myles), the <b>holding</b> for Alex\u2019s salary, and the <b>expense books</b> for Lara &amp; Annefloor (payroll). Lara is Amstelveen-allocated; her Bussum share can be added.</div>";
+  h+=renderBroughtInBox();
+  document.getElementById("tbl").innerHTML=h;
+}
+function renderBroughtInBox(){
+  var names=Object.keys(BYNAME);
+  if(!names.length) return "<div style='margin-top:22px;padding:14px;border:1px dashed #d1d5db;border-radius:12px;color:#64748b;font-size:13px'>Click <b>Pull from PracticeHub</b> above to fill in what each chiro brought in (services) per month here.</div>";
+  var set={}; names.forEach(function(n){Object.keys(BYNAME[n]).forEach(function(m){set[m]=1;});});
+  var ms=Object.keys(set).sort();
+  var sorted=names.sort(function(a,b){var ta=0,tb=0;ms.forEach(function(m){ta+=BYNAME[a][m]||0;tb+=BYNAME[b][m]||0;});return tb-ta;});
+  var h="<div style='font-weight:700;font-size:14px;margin:26px 0 8px'>What each chiro brought in \u2014 services (estimated)</div>";
+  h+="<table><thead><tr><th>Practitioner</th>";ms.forEach(function(m){h+="<th>"+m+"</th>";});h+="<th>Total</th></tr></thead><tbody>";
+  sorted.forEach(function(n){h+="<tr><td>"+n+exTag(n)+"</td>";var tot=0;ms.forEach(function(m){var v=BYNAME[n][m]||0;tot+=v;h+="<td class='num'>"+(v?eur(v):"\u00b7")+"</td>";});h+="<td class='num'><b>"+eur(tot)+"</b></td></tr>";});
+  h+="</tbody></table>";
+  h+="<div style='color:#94a3b8;font-size:11.5px;margin-top:8px'>Estimated from PracticeHub completed visits \u00d7 \u20ac${PRICE_PER_VISIT}. Increase \u201cmonths back\u201d to extend.</div>";
+  return h;
 }
 function compFor(name,month){var bp=bankPay(name,month);if(bp!=null)return {pay:bp,note:"actual paid (bank)"};var first=(name.split(" ")[0]||"").toLowerCase();var rev=(BYNAME[name]&&BYNAME[name][month])||0;
   if(first==="holly")return {pay:4200,note:"€4,200 fixed"};
@@ -2181,7 +2284,7 @@ function loadHistory(){
     var names=Object.keys(byName);
     if(!names.length){document.getElementById("tbl").innerHTML="No data returned. "+(errs.length?("Errors: "+errs.join("; ")):"PracticeHub may not serve that range, or keys aren’t set.");return;}
     var sel=document.getElementById("monthFocus");
-    sel.innerHTML="<option value='all'>All months (table)</option><option value='bank'>Actual pay history (bank)</option><option value='pva'>PVA history (sheets)</option>"+MONTHS.slice().reverse().map(function(m){return "<option value='"+m+"'>"+m+"</option>";}).join("");
+    sel.innerHTML="<option value='all'>All months (table)</option><option value='bank'>Pay + brought-in (per chiro)</option><option value='pva'>PVA history (sheets)</option>"+MONTHS.slice().reverse().map(function(m){return "<option value='"+m+"'>"+m+"</option>";}).join("");
     document.getElementById("status").textContent=names.length+" practitioners · "+MONTHS.length+" months"+(errs.length?(" · "+errs.length+" clinic error(s)"):"");
     rerender();
   }
