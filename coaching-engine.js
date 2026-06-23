@@ -2231,6 +2231,346 @@ document.addEventListener("click",function(e){ var b=e.target.closest("[data-act
 fetch("/goals/data").then(function(r){return r.json();}).then(function(d){ if(d.error){document.getElementById("cards").innerHTML="<div class='card' style='color:#dc2626'>Couldn't load PracticeHub: "+d.error+"</div>";return;} DATA=d; render(); }).catch(function(e){document.getElementById("cards").innerHTML="<div class='card' style='color:#dc2626'>Load error: "+e+"</div>";});
 </script></body></html>`);
 });
+// ============================================================================
+//  META LEADS — lead-quality funnel from the per-clinic "facebook/instagram
+//  65 euro intake" sheets. Each lead: date → answered phone (booked / didn't
+//  book / call back) → paid intake (showed up) → started care → cancelled.
+//  Aggregated by clinic × year × month to compare lead quality across clinics.
+//  Live-reads each clinic sheet via gviz CSV (sheets must be link-shared "view").
+// ============================================================================
+// === META LEAD SHEETS START (add the other two once shared, with their gid) ===
+const META_LEAD_SHEETS = {
+  Utrecht:   { id:"1Ewa8X-TtxyiYOQmP8RR_8OmSF_h4NnTzgrCJL8mPAKY", gids:["93042368"] },
+  Rotterdam: { id:"1ssmloK-0IUuoWo0zKMtRV18M5gijNssTo1HBIyUDx2c", gids:["93042368"] },
+  // Amstelveen: { id:"PASTE_ID", gids:["93042368"] },   // share the sheet "anyone with link → viewer", then fill id
+  // Bussum:     { id:"PASTE_ID", gids:["93042368"] },
+};
+// === META LEAD SHEETS END ===
+
+function mlTruthy(v){ const s=String(v||"").trim().toLowerCase(); if(!s) return false; if(["no","n","0","-","false","x"].includes(s)) return false; return true; }
+function mlMonthKey(v){ const s=String(v||"").trim(); const m=s.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/); if(!m) return null; let mo=parseInt(m[1],10), yr=parseInt(m[3],10); if(yr<100) yr+=2000; if(mo<1||mo>12||yr<2019||yr>2035) return null; return yr+"-"+String(mo).padStart(2,"0"); }
+function mlFindCol(header){ const H=header.map(h=>String(h||"").toLowerCase().replace(/\s+/g," ").trim());
+  const find=(...names)=>{ for(const nm of names){ const i=H.findIndex(h=>h.includes(nm)); if(i>=0) return i; } return -1; };
+  return { date:find("datum","date"), name:find("name","naam"), status:find("answered phone","answered","status"),
+    paid:find("paid intake","paid","came","showed","intake done"), care:find("started care","start care","care"),
+    cancel:find("cancel"), first:find("1st contact","first contact"), second:find("2nd contact","second contact") };
+}
+function mlClassify(status){ const s=String(status||"").toLowerCase();
+  const booked=/made appointment|made appt|booked|afspraak gemaakt/.test(s);
+  const declined=/didn.?t book|didnt book|not interested|geen interesse/.test(s);
+  const callback=/call again|call back|callback|text message|whatsapp|no - |niet opgenomen|terugbellen/.test(s) && !booked;
+  const reached=booked||declined; // we actually spoke to them
+  return { booked, declined, callback, reached, hasStatus:!!s };
+}
+function mlAggregateRows(rows){
+  // find header row
+  let hr=-1, cols=null;
+  for(let i=0;i<Math.min(rows.length,25);i++){ const c=mlFindCol(rows[i]); if(c.status>=0 && (c.date>=0||c.name>=0)){ hr=i; cols=c; break; } }
+  if(hr<0) return { months:{}, totals:blankAgg(), parsed:0 };
+  const months={}; let parsed=0;
+  for(let r=hr+1;r<rows.length;r++){ const row=rows[r]||[]; const mk=cols.date>=0?mlMonthKey(row[cols.date]):null; if(!mk) continue;
+    const nm=cols.name>=0?String(row[cols.name]||"").trim():""; const status=cols.status>=0?row[cols.status]:"";
+    if(!nm && !String(status||"").trim()) continue; // skip empty
+    const cl=mlClassify(status);
+    const paid=cols.paid>=0?mlTruthy(row[cols.paid]):false;
+    const care=cols.care>=0?mlTruthy(row[cols.care]):false;
+    const cancelled=cols.cancel>=0?mlTruthy(row[cols.cancel]):false;
+    parsed++;
+    const a = months[mk] || (months[mk]=blankAgg());
+    a.leads++; if(cl.reached)a.reached++; if(cl.booked)a.booked++; if(cl.declined)a.declined++; if(cl.callback)a.callback++;
+    if(paid)a.paid++; if(care)a.care++; if(cancelled)a.cancelled++;
+  }
+  return { months, totals:sumAggs(Object.values(months)), parsed };
+}
+function blankAgg(){ return { leads:0, reached:0, booked:0, declined:0, callback:0, paid:0, care:0, cancelled:0 }; }
+function sumAggs(list){ const t=blankAgg(); list.forEach(a=>{ for(const k in t) t[k]+=a[k]||0; }); return t; }
+
+async function mlFetchClinic(id, gids){ const rowsAll=[];
+  for(const gid of (gids&&gids.length?gids:[""])){
+    const url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv${gid?("&gid="+gid):""}`;
+    try{ const r=await fetch(url); if(!r.ok) continue; const csv=await r.text(); const rows=parseCSV(csv); rowsAll.push(...rows); }catch(e){}
+  }
+  return rowsAll;
+}
+
+function mlDemo(){
+  const clinics={}; const mk=(y,m)=>y+"-"+String(m).padStart(2,"0");
+  const seed={ Amstelveen:[120,0.42,0.78,0.46], Utrecht:[95,0.38,0.72,0.40], Rotterdam:[150,0.30,0.62,0.30], Bussum:[70,0.40,0.75,0.44] };
+  Object.keys(seed).forEach(c=>{ const [base,book,show,care]=seed[c]; const months={};
+    for(let y=2024;y<=2026;y++){ for(let m=1;m<=(y===2026?6:12);m++){ const leads=Math.round(base/12*(0.7+Math.random()*0.6));
+      const booked=Math.round(leads*book*(0.85+Math.random()*0.3)); const reached=Math.round(booked*1.4);
+      const paid=Math.round(booked*show); const ca=Math.round(paid*care); months[mk(y,m)]={leads,reached,booked,declined:reached-booked,callback:leads-reached,paid,care:ca,cancelled:Math.round(paid*0.08)}; } }
+    clinics[c]={ months, totals:sumAggs(Object.values(months)) }; });
+  return clinics;
+}
+
+app.get("/meta-leads/data", gate, async (req,res)=>{
+  try{
+    if(req.query.demo==="1") return res.json({ demo:true, clinics:mlDemo(), configured:["Amstelveen","Utrecht","Rotterdam","Bussum"], missing:[] });
+    const clinics={}, missing=[], errors={};
+    for(const name of Object.keys(META_LEAD_SHEETS)){ const cfg=META_LEAD_SHEETS[name];
+      const rows=await mlFetchClinic(cfg.id, cfg.gids);
+      if(!rows.length){ errors[name]="could not read sheet (is it shared 'anyone with link → viewer'?)"; clinics[name]={months:{},totals:blankAgg(),parsed:0}; continue; }
+      clinics[name]=mlAggregateRows(rows);
+    }
+    ["Amstelveen","Bussum"].forEach(c=>{ if(!META_LEAD_SHEETS[c]) missing.push(c); });
+    res.json({ clinics, configured:Object.keys(META_LEAD_SHEETS), missing, errors });
+  }catch(e){ res.json({ error:e.message }); }
+});
+
+app.get("/meta-leads", gate, (req,res)=>{
+  const demo = req.query.demo==="1" ? "?demo=1" : "";
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Meta lead quality — Posturefixx</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#16202E}
+ h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}
+ .controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+ select{border:1px solid #d1d5db;border-radius:8px;padding:7px 10px;font-size:14px}
+ .rank{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+ .rankpill{border:1px solid #e5e7eb;border-radius:12px;padding:10px 14px;min-width:150px;flex:1}
+ .rankpill .pos{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em}
+ .rankpill .cl{font-size:15px;font-weight:700;margin-top:2px}
+ .rankpill .q{font-size:22px;font-weight:800;margin-top:4px}
+ .rankpill .v{font-size:11.5px;color:#64748b;margin-top:2px}
+ .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+ @media(max-width:720px){.grid{grid-template-columns:1fr}}
+ .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px}
+ .cname{font-size:16px;font-weight:700;margin-bottom:2px}.cnote{font-size:11.5px;color:#94a3b8;margin-bottom:10px}
+ .stage{margin:7px 0}
+ .stage .lab{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px}
+ .stage .lab b{font-weight:700}.stage .lab span{color:#64748b}
+ .bar{background:#f1f5f9;border-radius:6px;height:18px;overflow:hidden}
+ .bar>div{height:100%;border-radius:6px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px;color:#fff;font-size:10.5px;font-weight:600}
+ .head{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid #f1f5f9;margin-top:10px;padding-top:8px}
+ .head .big{font-size:20px;font-weight:800}.head .lbl{font-size:11px;color:#94a3b8}
+ .warn{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#92400e;margin-bottom:14px}
+ .chartwrap{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-top:16px}
+ a{color:#2563EB}
+</style></head><body>
+<h1>Meta lead quality</h1>
+<div class="sub">Every Facebook/Instagram lead, by clinic: did we reach them, did they <b>book</b>, did they <b>show up</b> (paid intake), did they <b>start care</b>. This is where you see which clinic gets better leads — and where leads leak out of the funnel. ${demo?"<b>(demo data)</b>":""}</div>
+<div class="controls">
+ <label>Year <select id="yearSel"></select></label>
+ <label>Trend clinic <select id="trendSel"></select></label>
+ <span class="sub" style="margin:0"><a href="/marketing">\u2190 marketing</a> \u00b7 <a href="/">home</a></span>
+</div>
+<div id="warn"></div>
+<div id="rank" class="rank"></div>
+<div id="grid" class="grid"></div>
+<div class="chartwrap"><canvas id="trend" height="120"></canvas></div>
+<script>
+var RAW=null, CH=null;
+var STAGES=[{k:'leads',label:'Leads',col:'#94a3b8'},{k:'reached',label:'Reached on phone',col:'#60a5fa'},{k:'booked',label:'Booked appointment',col:'#2563eb'},{k:'paid',label:'Showed up (paid intake)',col:'#0ea5e9'},{k:'care',label:'Started care',col:'#16a34a'}];
+function pct(n,d){ return d>0?Math.round(100*n/d)+'%':'\u2014'; }
+function sumMonths(months, yr){ var t={leads:0,reached:0,booked:0,declined:0,callback:0,paid:0,care:0,cancelled:0};
+  Object.keys(months||{}).forEach(function(mk){ if(yr==='all'||mk.slice(0,4)===yr){ var a=months[mk]; for(var k in t) t[k]+=a[k]||0; } }); return t; }
+function clinicAgg(yr){ var out={}; Object.keys(RAW.clinics).forEach(function(c){ out[c]=sumMonths(RAW.clinics[c].months, yr); }); return out; }
+function yearsPresent(){ var s={}; Object.keys(RAW.clinics).forEach(function(c){ Object.keys(RAW.clinics[c].months||{}).forEach(function(mk){ s[mk.slice(0,4)]=1; }); }); return Object.keys(s).sort(); }
+function leadToCare(a){ return a.care>0?a.care/a.leads:(a.booked>0?a.booked/a.leads:0); }
+function hasShowData(a){ return (a.paid+a.care)>0; }
+function render(){
+  var yr=document.getElementById('yearSel').value;
+  var agg=clinicAgg(yr);
+  var clinics=Object.keys(agg).filter(function(c){return agg[c].leads>0;});
+  // ranking by lead->care (or booked rate if no show data), volume shown
+  var ranked=clinics.slice().sort(function(a,b){ return leadToCare(agg[b])-leadToCare(agg[a]); });
+  document.getElementById('rank').innerHTML = ranked.map(function(c,i){ var a=agg[c]; var metric=hasShowData(a)?pct(a.care,a.leads):pct(a.booked,a.leads); var ml=hasShowData(a)?'lead \u2192 care':'lead \u2192 booked';
+    return "<div class='rankpill'><div class='pos'>#"+(i+1)+" \u00b7 "+ml+"</div><div class='cl'>"+c+"</div><div class='q'>"+metric+"</div><div class='v'>"+a.leads+" leads \u00b7 "+a.booked+" booked"+(hasShowData(a)?(" \u00b7 "+a.care+" started"):"")+"</div></div>"; }).join("") || "<div class='sub'>No leads for "+yr+".</div>";
+  document.getElementById('grid').innerHTML = ranked.map(function(c){ var a=agg[c]; var max=a.leads||1;
+    var noShow=!hasShowData(a);
+    var stages=STAGES.filter(function(s){ return !(noShow && (s.k==='paid'||s.k==='care')); });
+    var rows=stages.map(function(s){ var v=a[s.k]||0; var w=Math.max(2,Math.round(100*v/max));
+      return "<div class='stage'><div class='lab'><b>"+s.label+"</b><span>"+v+" \u00b7 "+pct(v,a.leads)+" of leads</span></div><div class='bar'><div style='width:"+w+"%;background:"+s.col+"'>"+(w>14?v:"")+"</div></div></div>"; }).join("");
+    var headMetric=noShow?pct(a.booked,a.leads):pct(a.care,a.leads); var headLbl=noShow?"booked rate (no show/care data yet)":"lead \u2192 care";
+    return "<div class='card'><div class='cname'>"+c+"</div><div class='cnote'>"+(noShow?"booking data only \u2014 paid-intake / started-care columns empty for this clinic":"full funnel")+"</div>"+rows
+      +"<div class='head'><div><div class='lbl'>Booked of reached</div><div class='big'>"+pct(a.booked,a.reached)+"</div></div>"
+      +(noShow?"":"<div><div class='lbl'>Showed of booked</div><div class='big'>"+pct(a.paid,a.booked)+"</div></div><div><div class='lbl'>Care of showed</div><div class='big'>"+pct(a.care,a.paid)+"</div></div>")
+      +"<div><div class='lbl'>"+headLbl+"</div><div class='big' style='color:#16a34a'>"+headMetric+"</div></div></div></div>"; }).join("");
+  drawTrend(yr);
+}
+function drawTrend(yr){
+  var c=document.getElementById('trendSel').value;
+  var clinicsList = c==='all'?Object.keys(RAW.clinics):[c];
+  // build month axis
+  var mset={}; clinicsList.forEach(function(cl){ Object.keys(RAW.clinics[cl].months||{}).forEach(function(mk){ if(yr==='all'||mk.slice(0,4)===yr) mset[mk]=1; }); });
+  var labels=Object.keys(mset).sort();
+  function series(key){ return labels.map(function(mk){ var s=0; clinicsList.forEach(function(cl){ var a=(RAW.clinics[cl].months||{})[mk]; if(a) s+=a[key]||0; }); return s; }); }
+  if(CH) CH.destroy();
+  if(!labels.length){ return; }
+  CH=new Chart(document.getElementById('trend'),{type:'line',data:{labels:labels,datasets:[
+    {label:'Leads',data:series('leads'),borderColor:'#94a3b8',backgroundColor:'transparent',tension:.3},
+    {label:'Booked',data:series('booked'),borderColor:'#2563eb',backgroundColor:'transparent',tension:.3},
+    {label:'Started care',data:series('care'),borderColor:'#16a34a',backgroundColor:'transparent',tension:.3}
+  ]},options:{plugins:{title:{display:true,text:'Monthly Meta leads \u2192 booked \u2192 started care'+(c==='all'?' (all clinics)':' \u2014 '+c)}},scales:{y:{beginAtZero:true}}}});
+}
+fetch("/meta-leads/data"+${JSON.stringify(demo)}).then(function(r){return r.json();}).then(function(d){
+  if(d.error){ document.getElementById('grid').innerHTML="<div class='card' style='color:#dc2626'>Couldn't load: "+d.error+"</div>"; return; }
+  RAW=d;
+  var warn=""; if(d.missing&&d.missing.length) warn+="Not wired yet: <b>"+d.missing.join(", ")+"</b> \u2014 share those two sheets ('anyone with link \u2192 viewer') and send me the IDs. ";
+  if(d.errors&&Object.keys(d.errors).length) warn+="Couldn't read: "+Object.keys(d.errors).map(function(k){return k+" ("+d.errors[k]+")";}).join("; ")+". ";
+  document.getElementById('warn').innerHTML = warn?("<div class='warn'>"+warn+"</div>"):"";
+  var yrs=yearsPresent(); var ys=document.getElementById('yearSel'); ys.innerHTML="<option value='all'>All years</option>"+yrs.map(function(y){return "<option value='"+y+"'>"+y+"</option>";}).join(""); if(yrs.length) ys.value=yrs[yrs.length-1];
+  var ts=document.getElementById('trendSel'); ts.innerHTML="<option value='all'>All clinics</option>"+Object.keys(RAW.clinics).map(function(c){return "<option value='"+c+"'>"+c+"</option>";}).join("");
+  ys.addEventListener('change',render); ts.addEventListener('change',function(){drawTrend(document.getElementById('yearSel').value);});
+  render();
+}).catch(function(e){ document.getElementById('grid').innerHTML="<div class='card' style='color:#dc2626'>Load error: "+e+"</div>"; });
+</script></body></html>`);
+});
+
+// ============================================================================
+//  TABLES — Syntropy chiropractic-table sales: units, your fee, by region, and
+//  a signup timeline of when chiropractors buy. Reads the Sales sheet live via
+//  gviz CSV (sheet must be link-shared "viewer"). Fysiotech order log (historical
+//  chiro-series fulfillment) can be wired as a second source once shared.
+// ============================================================================
+// === TABLE SHEETS START ===
+const TABLE_SHEETS = {
+  syntropySales: { id:"12hHpbLJ-csueNxGTNTXDfekVZTwnufcEmAWwGpJB52g", gid:"0" },
+  // fysiotechOrders: { id:"1IV3vYnyWa39WBO1ejuqUN8W02D4MYM47swPbRr_T85U", gid:"" }, // historical chiro-series log
+};
+const USD_EUR = 0.92; // approx, for blending $ and € retail into one figure
+// === TABLE SHEETS END ===
+
+function tblYM(s){ s=String(s||"").trim(); if(!s) return null;
+  const mon={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  const mn=s.match(/([a-z]{3,9})\.?\s+\d{1,2},?\s*(\d{4})/i); if(mn){ const k=mn[1].slice(0,3).toLowerCase(); if(mon[k]) return mn[2]+"-"+String(mon[k]).padStart(2,"0"); }
+  const sl=s.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/); if(sl){ let d=+sl[1],mo=+sl[2],y=+sl[3]; if(y<100)y+=2000; if(mo>12&&d<=12){ const t=mo; mo=d; d=t; } if(mo<1||mo>12||y<2019||y>2035) return null; return y+"-"+String(mo).padStart(2,"0"); }
+  return null;
+}
+function tblMoney(s){ s=String(s||"").trim(); if(!s) return {v:0,cur:null}; const cur=/\$/.test(s)?"USD":(/€/.test(s)?"EUR":null);
+  let n=s.replace(/[^0-9.,]/g,""); if(!n) return {v:0,cur:cur};
+  if(/,\d{2}$/.test(n) && n.indexOf(".")>-1 && n.lastIndexOf(",")>n.lastIndexOf(".")){ n=n.replace(/\./g,"").replace(",","."); }
+  else { n=n.replace(/,/g,""); }
+  const v=parseFloat(n); return {v:isFinite(v)?v:0, cur:cur};
+}
+function tblRegion(country){ const c=String(country||"").toLowerCase();
+  if(/\bus\b|usa|united states|america/.test(c)) return "USA";
+  if(/netherland|german|sweden|finland|\buk\b|united kingdom|spain|france|europe|\bnl\b/.test(c)) return "Europe";
+  if(/australia|new zealand/.test(c)) return "Oceania";
+  if(/singapore|asia|china|japan|hong kong|malaysia/.test(c)) return "Asia";
+  return country ? country.trim().replace(/\b\w/g,m=>m.toUpperCase()) : "Other";
+}
+function tblFind(header){ const H=header.map(h=>String(h||"").toLowerCase().replace(/\s+/g," ").trim());
+  const f=(...n)=>{ for(const nm of n){ const i=H.findIndex(h=>h.includes(nm)); if(i>=0) return i; } return -1; };
+  let dateCol=f("date"); if(dateCol<0) dateCol=0; // first col holds the timestamp, header is blank
+  return { date:dateCol, country:f("country"), name:f("name"), units:f("number of tables","tables","quantity","pieces"),
+    retail:f("retail total","retail"), alex:f("alex fee","alex"), syn:f("syntropy fee","syntropy") };
+}
+function tblParseSales(rows){
+  let hr=-1, c=null;
+  for(let i=0;i<Math.min(rows.length,12);i++){ const cc=tblFind(rows[i]); if(cc.units>=0 && (cc.alex>=0||cc.retail>=0)){ hr=i; c=cc; break; } }
+  if(hr<0) return { orders:[], parsed:0 };
+  const orders=[];
+  for(let r=hr+1;r<rows.length;r++){ const row=rows[r]||[]; const ym=tblYM(row[c.date]); if(!ym) continue;
+    const name=c.name>=0?String(row[c.name]||"").trim():""; if(!name && !row[c.units]) continue;
+    if(/new payment line/i.test(row.join(" "))) continue;
+    const uraw=c.units>=0?String(row[c.units]||"").trim():""; const units=parseInt(uraw.replace(/[^0-9]/g,""),10);
+    const noSale=/no sale|waiting/i.test(row.join(" "));
+    const sold=Number.isFinite(units)&&units>0&&!noSale;
+    const ret=c.retail>=0?tblMoney(row[c.retail]):{v:0,cur:null};
+    const retailEUR= ret.cur==="USD" ? ret.v*USD_EUR : ret.v;
+    const alex=c.alex>=0?tblMoney(row[c.alex]).v:0;
+    const syn=c.syn>=0?tblMoney(row[c.syn]).v:0;
+    orders.push({ ym, date:String(row[c.date]||"").trim(), name, country:c.country>=0?String(row[c.country]||"").trim():"", region:tblRegion(row[c.country]),
+      units:sold?units:0, sold, pending:noSale||(!sold&&!Number.isFinite(units)), retail:ret.v, retailCur:ret.cur, retailEUR, alex, syn });
+  }
+  return { orders, parsed:orders.length };
+}
+function tblAggregate(orders){
+  const byMonth={}, byRegion={}, byYear={}; let units=0, alexTot=0, synTot=0, retEUR=0, sold=0, pending=0;
+  orders.forEach(o=>{ if(o.sold){ units+=o.units; alexTot+=o.alex; synTot+=o.syn; retEUR+=o.retailEUR; sold++;
+      (byMonth[o.ym]=byMonth[o.ym]||{units:0,alex:0})&&0; byMonth[o.ym].units+=o.units; byMonth[o.ym].alex+=o.alex;
+      const y=o.ym.slice(0,4); byYear[y]=(byYear[y]||0)+o.units;
+      const rg=o.region||"Other"; (byRegion[rg]=byRegion[rg]||{units:0,alex:0,retEUR:0}); byRegion[rg].units+=o.units; byRegion[rg].alex+=o.alex; byRegion[rg].retEUR+=o.retailEUR;
+    } else { pending++; } });
+  return { totals:{ orders:orders.length, soldOrders:sold, pending, units, alexTot, synTot, retEUR }, byMonth, byRegion, byYear };
+}
+
+function tblDemo(){
+  const regions=[["USA",0.55],["Europe",0.25],["Asia",0.12],["Oceania",0.08]];
+  const orders=[]; const names=["Flow Chiro","Above Down","Wellbalanced","NaprapatFix","G3 Chiro","Highlands","Family Wellness","Kairos","MyoLab","FysioDN"];
+  for(let y=2025;y<=2026;y++){ for(let m=(y===2025?9:1);m<=(y===2026?6:12);m++){ const n=1+Math.floor(Math.random()*4);
+    for(let k=0;k<n;k++){ const rg=regions[Math.floor(Math.random()*regions.length)][0]; const u=1+Math.floor(Math.random()*3);
+      const isEU=rg==="Europe"; const alex=isEU?1075*u:1000*u; const retEUR=(isEU?6995:8995*USD_EUR)*u;
+      orders.push({ym:y+"-"+String(m).padStart(2,"0"),date:y+"-"+m,name:names[Math.floor(Math.random()*names.length)],country:rg,region:rg,units:u,sold:true,pending:false,retail:retEUR,retailCur:"EUR",retailEUR:retEUR,alex,syn:isEU?3050*u:0}); } } }
+  return orders;
+}
+
+async function tblFetch(id, gid){ const url=`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv${gid?("&gid="+gid):""}`;
+  try{ const r=await fetch(url); if(!r.ok) return null; return parseCSV(await r.text()); }catch(e){ return null; } }
+
+app.get("/tables/data", gate, async (req,res)=>{
+  try{
+    if(req.query.demo==="1"){ const orders=tblDemo(); return res.json({ demo:true, ...tblAggregate(orders), orders:orders.slice(-30).reverse() }); }
+    const cfg=TABLE_SHEETS.syntropySales; const rows=await tblFetch(cfg.id, cfg.gid);
+    if(!rows){ return res.json({ error:"could not read the Sales sheet \u2014 is it shared 'anyone with link \u2192 viewer'?" }); }
+    const { orders }=tblParseSales(rows);
+    res.json({ ...tblAggregate(orders), orders:orders.slice().reverse().slice(0,40), usdEur:USD_EUR });
+  }catch(e){ res.json({ error:e.message }); }
+});
+
+app.get("/tables", gate, (req,res)=>{
+  const demo = req.query.demo==="1" ? "?demo=1" : "";
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Table sales — Posturefixx</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#16202E}
+ h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}
+ .kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+ .kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:12px;padding:14px}
+ .kpi .v{font-size:24px;font-weight:800}.kpi .l{font-size:11.5px;color:#64748b;margin-top:2px}
+ .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}
+ .card h3{margin:0 0 10px;font-size:15px}
+ .rg{display:flex;align-items:center;gap:10px;margin:6px 0}
+ .rg .nm{width:90px;font-size:13px;font-weight:600}
+ .rg .bar{flex:1;background:#f1f5f9;border-radius:6px;height:18px;overflow:hidden}
+ .rg .bar>div{height:100%;background:#2563eb;border-radius:6px}
+ .rg .vl{width:150px;text-align:right;font-size:12px;color:#475569}
+ table{border-collapse:collapse;width:100%;font-size:12.5px}td,th{padding:7px 6px;border-bottom:1px solid #f4f6f9;text-align:right}th{color:#64748b;font-size:10.5px;text-transform:uppercase}td:first-child,th:first-child,td:nth-child(2),th:nth-child(2){text-align:left}
+ .pill{font-size:10px;padding:1px 7px;border-radius:999px}.pill.sold{background:#ecfdf5;color:#16a34a}.pill.pend{background:#fef3c7;color:#b45309}
+ .warn{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#92400e;margin-bottom:14px}
+ a{color:#2563EB}
+</style></head><body>
+<h1>Chiropractic table sales</h1>
+<div class="sub">Syntropy tables sold to chiropractors worldwide: units, <b>your fee</b>, where the buyers are, and when they sign up. ${demo?"<b>(demo data)</b>":""}</div>
+<div id="warn"></div>
+<div class="kpis" id="kpis"></div>
+<div class="card"><h3>When chiropractors buy (units per month)</h3><canvas id="timeline" height="110"></canvas></div>
+<div class="card"><h3>By region \u2014 who's buying</h3><div id="regions"></div></div>
+<div class="card"><h3>Recent orders</h3><div style="overflow-x:auto"><table id="orders"><thead><tr><th>Date</th><th>Customer</th><th>Country</th><th>Units</th><th>Retail</th><th>Your fee</th><th>Status</th></tr></thead><tbody></tbody></table></div></div>
+<p class="sub">Pages: <a href="/">home</a> \u00b7 <a href="/profit">/profit</a> \u00b7 <a href="/revenue">/revenue</a></p>
+<script>
+function eur(n){return "\u20ac"+Math.round(n||0).toLocaleString("en-US");}
+function render(d){
+  if(d.error){ document.getElementById("kpis").innerHTML="<div class='kpi' style='color:#dc2626'>"+d.error+"</div>"; return; }
+  var t=d.totals;
+  document.getElementById("kpis").innerHTML=[
+    ["v","<div class='v'>"+t.units+"</div><div class='l'>tables sold</div>"],
+    ["v","<div class='v'>"+eur(t.alexTot)+"</div><div class='l'>your fee (total)</div>"],
+    ["v","<div class='v'>"+t.soldOrders+"</div><div class='l'>paid orders"+(t.pending?(" \u00b7 "+t.pending+" pending"):"")+"</div>"],
+    ["v","<div class='v'>"+eur(t.retEUR)+"</div><div class='l'>retail value (\u20ac-equiv)</div>"]
+  ].map(function(x){return "<div class='kpi'>"+x[1]+"</div>";}).join("");
+  // regions
+  var rg=d.byRegion||{}; var keys=Object.keys(rg).sort(function(a,b){return rg[b].units-rg[a].units;});
+  var max=keys.reduce(function(m,k){return Math.max(m,rg[k].units);},1);
+  document.getElementById("regions").innerHTML=keys.map(function(k){var r=rg[k];return "<div class='rg'><div class='nm'>"+k+"</div><div class='bar'><div style='width:"+(100*r.units/max)+"%'></div></div><div class='vl'>"+r.units+" tables \u00b7 "+eur(r.alex)+" fee</div></div>";}).join("")||"<div class='sub'>No region data.</div>";
+  // orders
+  document.querySelector("#orders tbody").innerHTML=(d.orders||[]).map(function(o){return "<tr><td>"+o.date+"</td><td>"+o.name+"</td><td>"+(o.country||"")+"</td><td>"+(o.sold?o.units:"\u2014")+"</td><td>"+(o.retail?((o.retailCur==="USD"?"$":"\u20ac")+Math.round(o.retail).toLocaleString("en-US")):"\u2014")+"</td><td>"+(o.alex?eur(o.alex):"\u2014")+"</td><td><span class='pill "+(o.sold?"sold":"pend")+"'>"+(o.sold?"paid":"pending")+"</span></td></tr>";}).join("");
+  // timeline
+  var bm=d.byMonth||{}; var labels=Object.keys(bm).sort(); var units=labels.map(function(k){return bm[k].units;}); var cum=[],run=0; units.forEach(function(u){run+=u;cum.push(run);});
+  new Chart(document.getElementById("timeline"),{data:{labels:labels,datasets:[
+    {type:"bar",label:"Tables sold",data:units,backgroundColor:"#2563eb",yAxisID:"y"},
+    {type:"line",label:"Cumulative",data:cum,borderColor:"#16a34a",backgroundColor:"transparent",tension:.3,yAxisID:"y1"}
+  ]},options:{scales:{y:{beginAtZero:true,position:"left",title:{display:true,text:"per month"}},y1:{beginAtZero:true,position:"right",grid:{drawOnChartArea:false},title:{display:true,text:"cumulative"}}}}});
+}
+fetch("/tables/data"+${JSON.stringify(demo)}).then(function(r){return r.json();}).then(function(d){
+  if(!d.error){ var w=""; if(!${JSON.stringify(!!demo)}) w="Reading the Sales sheet live. The <b>Fysiotech order log</b> (historical chiro-series tables + serial numbers/shipping) isn't wired yet \u2014 say the word and I'll add it as a second view. Retail blends $ at ~"+(d.usdEur||0.92)+" \u20ac/$."; if(w) document.getElementById("warn").innerHTML="<div class='warn'>"+w+"</div>"; }
+  render(d);
+}).catch(function(e){ document.getElementById("kpis").innerHTML="<div class='kpi' style='color:#dc2626'>Load error: "+e+"</div>"; });
+</script></body></html>`);
+});
+
 app.get("/coach/cron", async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.query.key !== secret) return res.status(403).json({ ok: false, error: "forbidden" });
@@ -2477,7 +2817,7 @@ h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin-bottom
 .kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.kpi b{font-size:20px;display:block}.kpi span{font-size:12px;color:#64748b}
 table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 8px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{text-align:right;font-size:12px;color:#64748b;padding:8px}
 a{color:#2563EB}</style></head><body>
-<h1>Marketing by clinic</h1><div class="sub">Monthly ad spend (Google / Meta / Organic) per clinic \u00b7 cost per lead \u00b7 from bank payments</div>
+<h1>Marketing by clinic</h1><div class="sub">Monthly ad spend (Google / Meta / Organic) per clinic \u00b7 cost per lead \u00b7 from bank payments \u00b7 <a href="/meta-leads" style="font-weight:600">Meta lead quality \u2192</a></div>
 <div class="tabs" id="tabs"></div>${comparePanel}${clinicPanels}
 <p class="sub">Pages: <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/marketing">/marketing</a> \u00b7 <a href="/waste">/waste</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a> \u00b7 <a href="/coach">/coach</a></p>
 <script>
@@ -2642,18 +2982,37 @@ h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 16
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:9px 7px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}
 th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;text-align:right}th:first-child{text-align:left}
 .sum{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}.sum>div{flex:1;min-width:140px;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.sum b{font-size:20px;display:block}.sum span{font-size:12px;color:#64748b}
-.legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.6}ul{margin:8px 0 0;padding-left:18px;color:#475569;font-size:12.5px;line-height:1.7}a{color:#2563EB}</style></head><body>
-<h1>Profit per chiropractor</h1><div class="sub">Pay is calculated from each chiro's real deal. Edit the revenue to model a month; the slider sets the profit you want after paying everyone and your draw.</div>
+.legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.6}ul{margin:8px 0 0;padding-left:18px;color:#475569;font-size:12.5px;line-height:1.7}a{color:#2563EB}
+.tip{border-bottom:1px dotted #94a3b8;cursor:help}.sum .tip{border:none}.sum>div{cursor:help}
+.flowrow{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 0;border-bottom:1px solid #f6f8fb}
+.flowrow .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:8px;vertical-align:middle}
+.flowrow .pc{color:#94a3b8;font-size:11.5px;margin-left:8px}</style></head><body>
+<h1>Profit per chiropractor</h1><div class="sub">Pay is calculated from each chiro's real deal. <b>Profit is company-level</b> \u2014 what's left after paying everyone, all running costs, and your draw. The per-chiro columns split the shared costs by revenue so you can see each one's contribution. <span style="color:#94a3b8">Hover any column header for the exact calculation.</span></div>
 <div class="card">
   <div class="controls">
     <div><label>Month (recorded)</label><select id="monthSel" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;min-width:130px"></select></div>
     <div><label>Employer costs (gross \u2192 total, \u00d7)</label><input type="number" step="0.01" id="factor" value="1.27"></div>
-    <div><label>Other running costs \u20ac/mo (rent, ads, CAs\u2026)</label><input type="number" id="overhead" value="38000"></div>
+    <div style="flex:1;min-width:330px"><label>Other running costs \u20ac/mo \u2014 <b id="ohTot">\u20ac38,000</b> <span style="color:#94a3b8;font-weight:400">(editable; from your expense sheets)</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:3px">
+        <span style="font-size:11px;color:#64748b">Rent<br><input type="number" id="costRent" value="9600" style="width:78px"></span>
+        <span style="font-size:11px;color:#64748b">CA wages<br><input type="number" id="costCA" value="8000" style="width:78px"></span>
+        <span style="font-size:11px;color:#64748b">Marketing<br><input type="number" id="costMkt" value="10000" style="width:78px"></span>
+        <span style="font-size:11px;color:#64748b">Software<br><input type="number" id="costSw" value="2400" style="width:70px"></span>
+        <span style="font-size:11px;color:#64748b">Other<br><input type="number" id="costOther" value="8000" style="width:78px"></span>
+      </div>
+    </div>
     <div><label>Your draw \u20ac/mo</label><input type="number" id="draw" value="6000"></div>
     <div style="flex:1;min-width:220px"><label>Target profit on top: <b id="targetLbl">10%</b></label><input type="range" id="target" min="0" max="30" value="10" style="width:100%"></div>
   </div>
   <table>
-    <thead><tr><th>Chiro</th><th>Brings in /mo</th><th>Pay</th><th title="pay divided by revenue">Effective %</th><th>Cost share</th><th>Your-fee share</th><th>Profit</th><th>Margin</th></tr></thead>
+    <thead><tr><th>Chiro</th>
+      <th><span class="tip" title="The services revenue this chiro bills the clinic per month. Edit it to model a different month.">Brings in /mo</span></th>
+      <th><span class="tip" title="What this chiro is paid (gross/brutto) under their own contract \u2014 base + holiday + commission, or their %.">Pay</span></th>
+      <th><span class="tip" title="Pay divided by what they bring in. How much of every euro they generate goes to their own pay.">Effective %</span></th>
+      <th><span class="tip" title="Their share of the other running costs (rent, CAs, ads, software). Split by revenue: running costs \u00d7 (their revenue \u00f7 total revenue).">Cost share</span></th>
+      <th><span class="tip" title="Their share of your \u20ac/mo draw, split the same way by revenue.">Your-fee share</span></th>
+      <th><span class="tip" title="Their revenue minus their pay, minus their cost share, minus their fee share. What this chiro contributes to company profit.">Profit</span></th>
+      <th><span class="tip" title="That profit divided by their revenue. Green = at/above target, amber = positive but below target, red = losing money.">Margin</span></th></tr></thead>
     <tbody>${DEF.map(row).join("")}</tbody>
   </table>
   <div class="legend"><b>Pay</b> is computed live from each structure below \u2014 change a chiro's revenue and watch their pay (and the commission tiers) move. <b>Cost share / fee share</b> split the other running costs and your draw across chiros by revenue. Employer factor turns Myles' & Matthew's gross base into real cost.</div>
@@ -2662,14 +3021,20 @@ th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;te
 <div class="card">
   <b style="font-size:15px">All clinics together</b>
   <div class="sum">
-    <div><b id="cR"></b><span>brought in /mo</span></div>
-    <div><b id="cPay"></b><span>total chiro pay</span></div>
-    <div><b id="cP"></b><span>profit after pay, costs & your draw</span></div>
-    <div><b id="cM"></b><span>margin</span></div>
-    <div><b id="salCov"></b><span>your draw</span></div>
-    <div><b id="cNeed"></b><span>revenue lift to hit target</span></div>
+    <div title="Total services revenue billed across all clinics this month."><b id="cR"></b><span>brought in /mo</span></div>
+    <div title="Sum of every chiro's pay (gross/brutto) under their contracts."><b id="cPay"></b><span>total chiro pay</span></div>
+    <div title="Revenue minus all chiro pay, minus all other running costs, minus your draw. This is the company's profit."><b id="cP"></b><span>profit after pay, costs & your draw</span></div>
+    <div title="Company profit divided by revenue."><b id="cM"></b><span>margin</span></div>
+    <div title="Whether revenue minus pay and costs leaves enough to cover your full draw."><b id="salCov"></b><span>your draw</span></div>
+    <div title="How much you'd need to lift revenue (same cost base) to reach your target margin."><b id="cNeed"></b><span>revenue lift to hit target</span></div>
   </div>
   <div class="legend">Because Myles and Matthew carry a fixed base salary, growth helps more than it looks: as their revenue rises past their thresholds, the base gets diluted and commission only takes a slice of the extra \u2014 so each step up in revenue drops more to profit. That's why the slider's "revenue lift" isn't linear.</div>
+</div>
+<div class="card">
+  <b style="font-size:15px">Where the money goes</b>
+  <div class="sub" style="margin:4px 0 10px">Every euro brought in this month and where it ends up. The green slice at the end is the company profit \u2014 that's what the margin measures.</div>
+  <div id="flowBar" style="display:flex;height:28px;border-radius:8px;overflow:hidden;margin-bottom:12px;background:#f1f5f9"></div>
+  <div id="flowRows"></div>
 </div>
 <p class="sub">Pages: <a href="/">home</a> \u00b7 <a href="/scorecard">/scorecard</a> \u00b7 <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a></p>
 <script>
@@ -2708,7 +3073,10 @@ function payDetail(id,revs){var f=factor();
   return "";}
 function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
 function recompute(){
-  var O=+document.getElementById("overhead").value||0, draw=+document.getElementById("draw").value||0, target=(+document.getElementById("target").value||0)/100;
+  var costLines=[["Rent","costRent","#8b5cf6"],["CA wages","costCA","#0ea5e9"],["Marketing","costMkt","#f59e0b"],["Software","costSw","#14b8a6"],["Other","costOther","#94a3b8"]];
+  var O=costLines.reduce(function(s,c){return s+(+document.getElementById(c[1]).value||0);},0);
+  var draw=+document.getElementById("draw").value||0, target=(+document.getElementById("target").value||0)/100;
+  set("ohTot","\u20ac"+Math.round(O).toLocaleString("en-US"));
   set("targetLbl",(target*100).toFixed(0)+"%");
   var R=0,totalPay=0,data={};
   DEF.forEach(function(d){var revs=revsOf(d),rev=revs.reduce(function(a,b){return a+b;},0),pay=payOf(d.id,revs); data[d.id]={rev:rev,pay:pay,revs:revs}; R+=rev; totalPay+=pay;});
@@ -2722,6 +3090,20 @@ function recompute(){
   var need=null;
   for(var s=1;s<=4;s+=0.01){ var Rs=0,Ps=0; DEF.forEach(function(d){var revs=revsOf(d).map(function(v){return v*s;}); Rs+=revs.reduce(function(a,b){return a+b;},0); Ps+=payOf(d.id,revs);}); if(Rs&&(Rs-Ps-O-draw)/Rs>=target){need=s;break;} }
   var rn=document.getElementById("cNeed"); if(rn){ if(marginTot>=target) rn.textContent="\u2714 already there"; else if(need) rn.textContent="+"+Math.round((need-1)*100)+"%  (\u2248"+eur(R*(need-1))+"/mo)"; else rn.textContent="raise prices/cut costs"; }
+  // where the money goes
+  var comps=[{label:"Chiro pay",val:totalPay,col:"#2563eb"}];
+  costLines.forEach(function(c){comps.push({label:c[0],val:(+document.getElementById(c[1]).value||0),col:c[2]});});
+  comps.push({label:"Your draw",val:draw,col:"#475569"});
+  var costSum=comps.reduce(function(s,c){return s+c.val;},0);
+  var profitPos=Math.max(0,R-costSum);
+  var bar=document.getElementById("flowBar"), rows=document.getElementById("flowRows");
+  if(bar&&rows){
+    var segs=comps.concat(profitTot>=0?[{label:"Profit",val:profitPos,col:"#16a34a"}]:[]);
+    bar.innerHTML=segs.filter(function(s){return s.val>0;}).map(function(s){var w=R?(100*s.val/R):0;return "<div title='"+s.label+": "+eur(s.val)+" ("+(R?Math.round(100*s.val/R):0)+"%)' style='width:"+w+"%;background:"+s.col+"'></div>";}).join("");
+    var rowsHtml=comps.map(function(c){return "<div class='flowrow'><div><span class='dot' style='background:"+c.col+"'></span>"+c.label+"</div><div>"+eur(c.val)+"<span class='pc'>"+(R?Math.round(100*c.val/R):0)+"% of revenue</span></div></div>";}).join("");
+    rowsHtml+="<div class='flowrow' style='border-bottom:none;font-weight:700'><div><span class='dot' style='background:"+(profitTot>=0?"#16a34a":"#dc2626")+"'></span>Company profit</div><div style='color:"+(profitTot>=0?"#16a34a":"#dc2626")+"'>"+eur(profitTot)+"<span class='pc'>"+(marginTot*100).toFixed(0)+"% margin</span></div></div>";
+    rows.innerHTML="<div class='flowrow' style='font-weight:700'><div>Brought in</div><div>"+eur(R)+"<span class='pc'>100%</span></div></div>"+rowsHtml;
+  }
 }
 var PROFIT_REV={"2026-01":{"Alex":33658,"LaraA":8370,"LaraB":5405,"Myles":7685,"Annefloor":2765,"Matthew":5335},"2026-02":{"Alex":23765,"LaraA":6625,"LaraB":2860,"Myles":10065,"Annefloor":0,"Matthew":14895},"2026-03":{"Alex":30875,"LaraA":9425,"LaraB":7265,"Myles":10845,"Annefloor":2005,"Matthew":20413},"2026-04":{"Alex":13660,"LaraA":8385,"LaraB":7210,"Myles":18430,"Annefloor":1465,"Matthew":15830},"2026-05":{"Alex":14140,"LaraA":6405,"LaraB":5400,"Myles":18295,"Annefloor":2160,"Matthew":17888}};
 function monthLabel(k){var p=k.split("-");var mn=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return (mn[+p[1]]||p[1])+" "+p[0];}
@@ -3014,6 +3396,8 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/plan","Plan &amp; goals","Revenue-target slider, per-chiro visit/PVA goals from live PracticeHub, P&amp;L + spend-by-category per clinic."),
   card("/goals","\u2b50 Goals &amp; check-ins","Set each chiro a yearly \u20ac / visits-day / PVA target; project it live from PracticeHub and auto-send a biweekly goal SMS."),
   card("/contracts","Contracts &amp; pay","Plain-language summary of each chiro's deal (base, holiday, threshold, commission) \u2014 what feeds the Brutto pay calc."),
+  card("/meta-leads","\u2b50 Meta lead quality","Every FB/IG lead by clinic: reached \u2192 booked \u2192 showed up \u2192 started care. See which clinic gets better leads and where they leak."),
+  card("/tables","\ud83e\ude91 Table sales","Syntropy tables sold worldwide: units, your fee, by region, and a timeline of when chiropractors sign up to buy."),
   
   card("/coach","Coach the chiros","Drafts a warm SMS to each chiropractor toward your target. You review before it sends."),
   card("/pva","PVA / retention","Retention per chiropractor, month by month, with good/improve highlights for each."),
