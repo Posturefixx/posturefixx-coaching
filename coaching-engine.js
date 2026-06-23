@@ -830,22 +830,25 @@ function parseCSV(text) {
 function parseIntakesCSV(csvText, clinic) {
   const rows = parseCSV(csvText);
   const intakes = [];
-  let cols = null;
+  let cols = null, currentWeek = null;
   for (const r of rows) {
     if (!r || !r.length) continue;
     const cells = r.map(c => (c || "").trim());
+    const nonEmpty = cells.filter(Boolean);
+    // Week divider row, e.g. "Week 24" sitting above that week's intakes
+    const wk = cells.find(c => /^week\s*\d+/i.test(c));
+    if (wk && nonEmpty.length <= 2) { currentWeek = wk.replace(/\s+/g, " ").trim(); continue; }
     // Detect header row
     const hasName = cells.some(c => c === "Name");
     const hasCA = cells.some(c => c === "CA");
     const hasAppt = cells.some(c => c === "Appointments");
-    if (hasName && hasCA && hasAppt) {
-      cols = cells;
-      continue;
-    }
+    if (hasName && hasCA && hasAppt) { cols = cells; continue; }
     if (!cols) continue;
     // Build the row object
-    const obj = { _clinic: clinic };
+    const obj = { _clinic: clinic, _week: currentWeek || "Unlabelled" };
     cols.forEach((h, idx) => { if (h) obj[h] = cells[idx] || ""; });
+    // Allow a per-row Week/Date column to override the divider
+    if (obj.Week && /week\s*\d+/i.test(obj.Week)) obj._week = obj.Week.replace(/\s+/g, " ").trim();
     // Only count rows that have BOTH a name and a CA assigned
     if (obj.Name && obj.CA && obj.Name !== "Name") {
       obj.CA = normalizeCA(obj.CA);
@@ -979,15 +982,19 @@ app.get("/ca", gate, async (_req, res) => {
   let data;
   try {
     const { intakes, errors } = await loadAllIntakes();
-    const stats = computeCAStats(intakes);
-    const notPlanned = intakes
-      .filter(i => i.Name && ((parseInt(i.Appointments, 10) || 0) < 3))
-      .map(i => ({ name: i.Name, ca: i.CA || "—", clinic: i._clinic || "—", chiro: i.Chiro || "—", appts: parseInt(i.Appointments, 10) || 0, package: (i.Package||"").toLowerCase()==="yes", meta: (i.Meta||"").toLowerCase()==="yes" }));
+    const slim = intakes
+      .filter(i => i.Name)
+      .map(i => ({
+        name: i.Name, ca: i.CA || "—", clinic: i._clinic || "—",
+        week: i._week || "Unlabelled", chiro: i.Chiro || "—",
+        appts: parseInt(i.Appointments, 10) || 0,
+        package: (i.Package || "").toLowerCase() === "yes",
+        meta: (i.Meta || "").toLowerCase() === "yes",
+      }));
     data = {
       ok: true,
-      totalIntakes: intakes.length,
-      perCA: Object.values(stats).sort((a, b) => b.intakes - a.intakes),
-      notPlanned,
+      totalIntakes: slim.length,
+      intakes: slim,
       roster: CAS.map(c => c.name),
       errors,
     };
@@ -1034,10 +1041,237 @@ function pctBar(pct, color) {
 }
 
 function caClinicLabel(c){return c;}
+// ── PATIENT-LEVEL CORRELATION (PracticeHub ⇄ doorplannen sheet) ──────────────
+function normName(s){
+  return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z\s]/g," ").replace(/\s+/g," ").trim();
+}
+// tokens for a looser match (handles word-order / middle names / typos in one token)
+function nameTokens(s){ return normName(s).split(" ").filter(Boolean); }
+function namesMatch(a,b){
+  var na=normName(a), nb=normName(b);
+  if(!na||!nb) return false;
+  if(na===nb) return true;
+  var ta=nameTokens(a), tb=nameTokens(b);
+  if(ta.length<1||tb.length<1) return false;
+  // match if first+last token both shared, or all of the shorter set is contained
+  var setA={}; ta.forEach(function(t){setA[t]=1;});
+  var shared=tb.filter(function(t){return setA[t];}).length;
+  var need=Math.min(ta.length,tb.length);
+  return shared>=Math.min(2,need) && shared>=need-1;
+}
+
+// Pull per-patient records from one clinic's PracticeHub.
+async function phubPatientRecords(clinic, months){
+  var types = await phubAll(clinic, "/appointment_types", {}).catch(function(){return [];});
+  var intakeIds = new Set(); var excluded = new Set();
+  for(var i=0;i<types.length;i++){var t=types[i]; if(isIntake(t.name||"")) intakeIds.add(t.id); if(notAVisit(t.name||"")) excluded.add(t.id);}
+  var appts = await phubAll(clinic, "/appointments", { start: monthsAgoRange(months) });
+  var patients = await phubAll(clinic, "/patients", {}).catch(function(){return [];});
+  var pname = {};
+  for(var j=0;j<patients.length;j++){var p=patients[j];
+    pname[p.id] = ((p.first_name||"")+" "+(p.last_name||"")).trim() || p.name || p.full_name || p.fullName || ("#"+p.id);}
+  var per = {};
+  for(var k=0;k<appts.length;k++){
+    var a=appts[k]; var pid=a.patient_id; if(pid==null) continue;
+    if(!per[pid]) per[pid]={patientId:pid, name:pname[pid]||("#"+pid), clinic:clinic, booked:0, serviced:0, intakeDate:null, earliest:null, practitionerId:a.practitioner_id};
+    var rec=per[pid];
+    var cancelled = a.status==="cancelled" || a.cancelDate;
+    if(!cancelled){ rec.booked++; if(a.status==="processed" && !excluded.has(a.appointment_type_id)) rec.serviced++; }
+    var d=(a.start||"").slice(0,10);
+    if(d){
+      if(intakeIds.has(a.appointment_type_id)){ if(!rec.intakeDate || d<rec.intakeDate) rec.intakeDate=d; }
+      if(!rec.earliest || d<rec.earliest) rec.earliest=d;
+    }
+  }
+  return Object.keys(per).map(function(id){var r=per[id]; if(!r.intakeDate) r.intakeDate=r.earliest; return r;});
+}
+
+// Pure correlation engine — testable without any network.
+function correlate(sheetIntakes, phubByClinic){
+  var phubAll_=[];
+  Object.keys(phubByClinic).forEach(function(cl){ (phubByClinic[cl]||[]).forEach(function(r){ phubAll_.push(Object.assign({clinic:cl}, r)); }); });
+  // group PHub patients by normalized name → detect cross-location
+  var byKey={};
+  phubAll_.forEach(function(r){ var k=normName(r.name); if(!k)return; (byKey[k]=byKey[k]||[]).push(r); });
+  var multi = Object.keys(byKey).map(function(k){
+    var recs=byKey[k]; var clinics=Array.from(new Set(recs.map(function(r){return r.clinic;})));
+    return { name:recs[0].name, clinics:clinics, recs:recs,
+      totalBooked:recs.reduce(function(a,r){return a+(r.booked||0);},0),
+      totalServiced:recs.reduce(function(a,r){return a+(r.serviced||0);},0),
+      intakeDate:recs.map(function(r){return r.intakeDate;}).filter(Boolean).sort()[0]||null };
+  }).filter(function(x){return x.clinics.length>1;});
+
+  // reconcile each sheet intake against PHub
+  var reconciled = sheetIntakes.map(function(si){
+    var matches = phubAll_.filter(function(r){ return namesMatch(r.name, si.name); });
+    var clinics = Array.from(new Set(matches.map(function(m){return m.clinic;})));
+    return {
+      name:si.name, ca:si.ca, clinic:si.clinic, week:si.week, sheetAppts:si.appts,
+      found: matches.length>0,
+      phubBooked: matches.reduce(function(a,m){return a+(m.booked||0);},0),
+      phubServiced: matches.reduce(function(a,m){return a+(m.serviced||0);},0),
+      intakeDate: matches.map(function(m){return m.intakeDate;}).filter(Boolean).sort()[0]||null,
+      matchClinics: clinics, multiLocation: clinics.length>1,
+      phubName: matches.length && normName(matches[0].name)!==normName(si.name) ? matches[0].name : null
+    };
+  });
+
+  // PHub patients with no sheet row (missing intakes the other direction)
+  var missingInSheet = Object.keys(byKey).filter(function(k){
+    return !sheetIntakes.some(function(si){ return namesMatch(si.name, byKey[k][0].name); });
+  }).map(function(k){
+    var recs=byKey[k]; var clinics=Array.from(new Set(recs.map(function(r){return r.clinic;})));
+    return { name:recs[0].name, clinics:clinics,
+      booked:recs.reduce(function(a,r){return a+(r.booked||0);},0),
+      serviced:recs.reduce(function(a,r){return a+(r.serviced||0);},0),
+      intakeDate:recs.map(function(r){return r.intakeDate;}).filter(Boolean).sort()[0]||null };
+  });
+
+  return { reconciled:reconciled, multi:multi, missingInSheet:missingInSheet };
+}
+
+function reconcileDemo(){
+  return {
+    Amstelveen:[
+      {name:"Vincent Graafland",booked:5,serviced:3,intakeDate:"2026-05-15",practitionerId:1},
+      {name:"Coen Nikken",booked:13,serviced:11,intakeDate:"2026-05-02",practitionerId:1},
+      {name:"Albert Poutsma",booked:6,serviced:6,intakeDate:"2026-05-20",practitionerId:2}],
+    Utrecht:[
+      {name:"Vincent Graafland",booked:2,serviced:2,intakeDate:"2026-06-01",practitionerId:3},
+      {name:"Marcel Schmeets",booked:7,serviced:5,intakeDate:"2026-05-28",practitionerId:3}],
+    Rotterdam:[
+      {name:"Jeff Fortuin",booked:7,serviced:6,intakeDate:"2026-05-10",practitionerId:4},
+      {name:"Sandra Nieuwenhuis",booked:4,serviced:4,intakeDate:"2026-05-18",practitionerId:4}]
+  };
+}
+function reconcileDemoSheet(){
+  return [
+    {name:"Vincent Graafland",ca:"Anne",clinic:"Amstelveen",week:"Week 20",appts:3},
+    {name:"Coen Nikken",ca:"Vivian",clinic:"Amstelveen",week:"Week 19",appts:13},
+    {name:"Albert Poutsma",ca:"Archana",clinic:"Amstelveen",week:"Week 21",appts:6},
+    {name:"Marcel Schmeets",ca:"Anne",clinic:"Utrecht",week:"Week 22",appts:7},
+    {name:"Jeff Fortuin",ca:"Renata",clinic:"Rotterdam",week:"Week 20",appts:7},
+    {name:"Tahir Chotkan",ca:"Anne",clinic:"Rotterdam",week:"Week 23",appts:0}
+  ];
+}
+
+app.get("/reconcile", gate, async (req, res) => {
+  var months = Math.max(1, Math.min(24, parseInt(req.query.months,10) || 3));
+  var demo = req.query.demo === "1";
+  try {
+    var sheetIntakes, phubByClinic, errors = [];
+    if (demo) {
+      phubByClinic = reconcileDemo();
+      sheetIntakes = reconcileDemoSheet();
+    } else {
+      var loaded = await loadAllIntakes();
+      errors = loaded.errors || [];
+      sheetIntakes = loaded.intakes.filter(i=>i.Name).map(i=>({name:i.Name, ca:i.CA||"—", clinic:i._clinic||"—", week:i._week||"Unlabelled", appts:parseInt(i.Appointments,10)||0}));
+      phubByClinic = {};
+      for (const clinic of Object.keys(CLINICS)) {
+        try { phubByClinic[clinic] = await phubPatientRecords(clinic, months); }
+        catch (e) { errors.push(clinic + ": " + e.message); phubByClinic[clinic] = []; }
+      }
+    }
+    var result = correlate(sheetIntakes, phubByClinic);
+    res.send(renderReconcile(result, { months, demo, errors, totalSheet: sheetIntakes.length }));
+  } catch (e) {
+    res.status(500).send("Reconcile error: " + e.message);
+  }
+});
+
+function renderReconcile(result, meta){
+  var R=result.reconciled, M=result.multi, MIS=result.missingInSheet;
+  var matched=R.filter(function(r){return r.found;});
+  var notFound=R.filter(function(r){return !r.found;});
+  var multiCount=M.length;
+  var totSheet=R.reduce(function(a,r){return a+(r.sheetAppts||0);},0);
+  var totPhub=matched.reduce(function(a,r){return a+(r.phubServiced||0);},0);
+  var chartData = matched.map(function(r){return {name:r.name, sheet:r.sheetAppts||0, phub:r.phubServiced||0, booked:r.phubBooked||0};});
+  var errBlock=(meta.errors&&meta.errors.length)?("<div style='background:#fef3c7;padding:10px;border-radius:6px;margin:0 0 14px;font-size:12px;color:#92400e'>Some sources couldn\u2019t load: "+meta.errors.join(" \u00b7 ")+"</div>"):"";
+
+  function dateCell(d){return d?("<span style='font-variant-numeric:tabular-nums'>"+d+"</span>"):"<span style='color:#bbb'>\u2014</span>";}
+  function cmp(sheet,phub){
+    var diff=phub-sheet; var col=diff===0?"#16a34a":(diff>0?"#2563eb":"#dc2626");
+    return "<span style='color:"+col+";font-size:11px'>"+(diff>0?"+":"")+diff+"</span>";
+  }
+  var multiRows=M.map(function(m){
+    var per=m.recs.map(function(r){return r.clinic+": "+(r.serviced||0)+"/"+(r.booked||0);}).join(" \u00b7 ");
+    var ca="\u2014"; for(var i=0;i<R.length;i++){ if(R[i].found && normName(R[i].name)===normName(m.name)){ ca=R[i].ca; break; } }
+    return "<tr><td style='font-weight:600'>"+m.name+" <span class='pill multi'>multi-location</span></td>"
+      +"<td>"+m.clinics.join(", ")+"</td><td style='font-size:12px;color:#555'>"+per+"</td>"
+      +"<td style='text-align:right'>"+m.totalServiced+"/"+m.totalBooked+"</td><td>"+dateCell(m.intakeDate)+"</td><td>"+ca+"</td></tr>";
+  }).join("");
+  var rows=R.slice().sort(function(a,b){return (b.found?1:0)-(a.found?1:0) || (b.multiLocation?1:0)-(a.multiLocation?1:0);}).map(function(r){
+    var status = !r.found ? "<span class='pill bad'>not in PracticeHub</span>"
+      : (r.multiLocation ? "<span class='pill multi'>multi-location</span>" : "<span class='pill ok'>matched</span>");
+    var nmeNote = r.phubName ? (" <span style='color:#888;font-size:11px'>(PH: "+r.phubName+")</span>") : "";
+    return "<tr"+(r.multiLocation?" style='background:#fff7ed'":(!r.found?" style='background:#fef2f2'":""))+">"
+      +"<td style='font-weight:600'>"+r.name+nmeNote+"</td>"
+      +"<td>"+r.ca+"</td><td>"+r.clinic+(r.matchClinics&&r.matchClinics.length?" <span style='color:#888;font-size:11px'>\u2192 "+r.matchClinics.join(", ")+"</span>":"")+"</td>"
+      +"<td>"+dateCell(r.intakeDate)+"</td>"
+      +"<td style='text-align:right'>"+(r.sheetAppts||0)+"</td>"
+      +"<td style='text-align:right'>"+(r.found?(r.phubServiced+"/"+r.phubBooked):"\u2014")+" "+(r.found?cmp(r.sheetAppts||0,r.phubServiced||0):"")+"</td>"
+      +"<td>"+status+"</td></tr>";
+  }).join("");
+  var misRows=MIS.map(function(m){
+    return "<tr><td style='font-weight:600'>"+m.name+"</td><td>"+m.clinics.join(", ")+"</td><td>"+dateCell(m.intakeDate)+"</td><td style='text-align:right'>"+m.serviced+"/"+m.booked+"</td></tr>";
+  }).join("");
+
+  var css="body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1180px;margin:24px auto;padding:0 16px;color:#16202E}"
+   +"h1{margin:0 0 4px;font-size:22px}h2{font-size:16px;margin:26px 0 4px}.sub{color:#666;font-size:13px;margin-bottom:16px}"
+   +".stat-row{display:flex;gap:14px;margin:14px 0 6px;flex-wrap:wrap}.stat{background:#f8fafc;padding:13px 17px;border-radius:10px;min-width:120px}"
+   +".stat-val{font-size:23px;font-weight:700}.stat-lbl{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px}"
+   +"table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:8px}th{text-align:left;padding:9px 8px;border-bottom:2px solid #e5e7eb;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#555}"
+   +"td{padding:9px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}"
+   +".pill{display:inline-block;font-size:10px;padding:1px 8px;border-radius:999px;vertical-align:middle}"
+   +".pill.ok{background:#ecfdf5;color:#16a34a}.pill.multi{background:#fff7ed;color:#c2410c}.pill.bad{background:#fef2f2;color:#dc2626}"
+   +".controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px}.controls label{font-size:11px;color:#666;display:block;margin-bottom:3px}"
+   +"input{padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;width:80px}.btn{background:#2563eb;color:#fff;border:none;padding:9px 16px;border-radius:8px;font-size:14px;cursor:pointer;text-decoration:none}"
+   +".note{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;font-size:12.5px;color:#1e40af;margin:14px 0}";
+
+  return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+   +"<title>Reconcile \u2014 PracticeHub \u22c4 sheet</title><script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script>"
+   +"<style>"+css+"</style></head><body>"
+   +"<h1>Patient reconciliation</h1>"
+   +"<div class='sub'>Every intake from the sheet matched by name to PracticeHub \u2014 cross-location patients flagged, intake dates pulled, and appointments compared (PracticeHub vs sheet)."+(meta.demo?" <b>Demo data.</b>":"")+"</div>"
+   +errBlock
+   +"<div class='controls'>"
+   +"<form method='get' action='/reconcile' style='display:flex;gap:10px;align-items:flex-end'>"
+   +"<div><label>Months back</label><input type='number' name='months' value='"+meta.months+"' min='1' max='24'></div>"
+   +"<button class='btn' type='submit'>Pull from PracticeHub</button></form>"
+   +"<a class='btn' style='background:#64748b' href='/reconcile?demo=1'>Demo</a>"
+   +"</div>"
+   +"<div class='note'>This page reads patient names from PracticeHub (<code>/patients</code>) to match across the four separate clinic accounts and against the sheet. Name matches are best-effort (accents, word order, one-token typos handled) \u2014 rows where the PracticeHub name differs show it as <i>(PH: \u2026)</i> so you can eyeball it.</div>"
+   +"<div class='stat-row'>"
+   +"<div class='stat'><div class='stat-val'>"+meta.totalSheet+"</div><div class='stat-lbl'>Sheet intakes</div></div>"
+   +"<div class='stat'><div class='stat-val'>"+matched.length+"</div><div class='stat-lbl'>Matched in PH</div></div>"
+   +"<div class='stat'><div class='stat-val'>"+notFound.length+"</div><div class='stat-lbl'>Not in PH</div></div>"
+   +"<div class='stat'><div class='stat-val'>"+multiCount+"</div><div class='stat-lbl'>Multi-location</div></div>"
+   +"<div class='stat'><div class='stat-val'>"+totPhub+" / "+totSheet+"</div><div class='stat-lbl'>PH serviced / sheet appts</div></div>"
+   +"</div>"
+   +"<h2>PracticeHub vs sheet \u2014 appointments per patient</h2><div class='sub'>One line for PracticeHub (serviced), one for the sheet. Gaps show where the sheet and the system disagree.</div>"
+   +"<div style='height:340px'><canvas id='cmp'></canvas></div>"
+   +(M.length?("<h2>Cross-location patients \u2014 special</h2><div class='sub'>Same person booked at more than one clinic. Serviced/booked shown per location, with the CA who took the intake.</div>"
+      +"<table><thead><tr><th>Patient</th><th>Locations</th><th>Per location (serviced/booked)</th><th style='text-align:right'>Total</th><th>Intake date</th><th>CA</th></tr></thead><tbody>"+multiRows+"</tbody></table>"):"")
+   +"<h2>All sheet intakes \u00d7 PracticeHub</h2><div class='sub'>Intake date is the date of the intake appointment in PracticeHub. Appts column = PracticeHub serviced/booked, with the difference vs the sheet.</div>"
+   +"<table><thead><tr><th>Patient</th><th>CA</th><th>Sheet clinic</th><th>Intake date</th><th style='text-align:right'>Sheet appts</th><th style='text-align:right'>PH serv/booked</th><th>Status</th></tr></thead><tbody>"+(rows||"<tr><td colspan='7' style='text-align:center;padding:30px;color:#888'>No intakes</td></tr>")+"</tbody></table>"
+   +(MIS.length?("<h2>In PracticeHub, not in the sheet ("+MIS.length+")</h2><div class='sub'>Patients with appointments in PracticeHub whose intake isn\u2019t logged on the sheet \u2014 the missing intakes.</div>"
+      +"<table><thead><tr><th>Patient</th><th>Clinic(s)</th><th>Intake date</th><th style='text-align:right'>Serviced/booked</th></tr></thead><tbody>"+misRows+"</tbody></table>"):"")
+   +"<div style='margin-top:24px;font-size:12px;color:#888'>Pages: <a href='/ca'>/ca</a> \u00b7 <a href='/plan'>/plan</a> \u00b7 <a href='/'>home</a></div>"
+   +"<script>var CD="+JSON.stringify(chartData)+";"
+   +"(function(){if(typeof Chart==='undefined'||!CD.length)return;"
+   +"new Chart(document.getElementById('cmp'),{type:'line',data:{labels:CD.map(function(d){return d.name;}),"
+   +"datasets:[{label:'PracticeHub (serviced)',data:CD.map(function(d){return d.phub;}),borderColor:'#2563eb',backgroundColor:'#2563eb',tension:.2},"
+   +"{label:'Sheet (appointments)',data:CD.map(function(d){return d.sheet;}),borderColor:'#16a34a',backgroundColor:'#16a34a',tension:.2}]},"
+   +"options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'top'}},scales:{y:{beginAtZero:true,title:{display:true,text:'appointments'}}}}});})();</script>"
+   +"</body></html>";
+}
+
 function renderCAPage(data){
   var payload = {
-    perCA: (data.perCA||[]).map(function(s){return {name:s.name,intakes:s.intakes,doorplannen:s.doorplannen,packages:s.packages,meta:s.meta||0,totalAppts:s.totalAppts||0,byClinic:s.byClinic||{}};}),
-    notPlanned: data.notPlanned||[],
+    intakes: data.intakes||[],
     roster: data.roster||[],
     clinics: ["Amstelveen","Bussum","Rotterdam","Utrecht"],
     phones: (data.roster||[]).reduce(function(o,n){o[n]=!!caPhone(n);return o;},{})
@@ -1047,10 +1281,11 @@ function renderCAPage(data){
     + "h1{margin:0 0 4px;font-size:22px}.sub{color:#666;font-size:13px;margin-bottom:14px}"
     + ".legend{display:flex;gap:16px;flex-wrap:wrap;background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:#475569}"
     + ".legend b{color:#16202E}"
-    + ".filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}"
+    + ".filterlabel{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin:0 4px 6px 2px}"
+    + ".filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}"
     + ".fbtn{border:1px solid #d1d5db;background:#fff;color:#334155;padding:7px 13px;border-radius:999px;font-size:13px;cursor:pointer}"
     + ".fbtn.on{background:#16202E;color:#fff;border-color:#16202E}"
-    + ".stat-row{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap}.stat{background:#f8fafc;padding:14px 18px;border-radius:10px;min-width:130px}"
+    + ".stat-row{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap}.stat{background:#f8fafc;padding:14px 18px;border-radius:10px;min-width:120px}"
     + ".stat-val{font-size:24px;font-weight:700}.stat-lbl{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px}"
     + "table{border-collapse:collapse;width:100%;font-size:14px}th{text-align:left;padding:10px 8px;border-bottom:2px solid #e5e7eb;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#555}"
     + "td{padding:10px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}"
@@ -1058,12 +1293,14 @@ function renderCAPage(data){
     + ".muted{color:#9aa3af}.coachbtn{background:#16202E;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-size:12px}"
     + ".sec{margin-top:30px}.sec h2{font-size:16px;margin:0 0 4px}.sec .sub{margin-bottom:12px}"
     + ".pill{display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;margin-left:5px;vertical-align:middle}"
-    + ".pill.meta{background:#eff6ff;color:#2563eb}.pill.pkg{background:#ecfdf5;color:#16a34a}";
+    + ".pill.meta{background:#eff6ff;color:#2563eb}.pill.pkg{background:#ecfdf5;color:#16a34a}"
+    + ".twocol{display:flex;gap:22px;flex-wrap:wrap}.twocol>div{flex:1;min-width:320px}"
+    + ".hint{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;font-size:12.5px;color:#92400e;margin-bottom:16px}";
   return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
     + "<title>CA Performance \u2014 Posturefixx</title>"
     + "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script>"
     + "<style>"+CA_CSS+"</style></head><body>"
-    + "<h1>CA Performance</h1><div class='sub'>From the doorplannen sheet \u00b7 intakes across the clinics. Use the clinic filter and switch table / chart.</div>"
+    + "<h1>CA Performance</h1><div class='sub'>From the \u201cimplementing the new script\u201d doorplannen sheet. Filter by clinic and week; switch table / chart.</div>"
     + errBlock
     + "<div class='legend'>"
     + "<span><b>Doorplannen %</b> \u2014 share of this CA\u2019s intakes that booked <b>3+ appointments</b> (planned the full first month)</span>"
@@ -1071,52 +1308,73 @@ function renderCAPage(data){
     + "<span><b>Meta %</b> \u2014 share of intakes whose <b>lead came from Meta/Facebook ads</b> (lead-source mix, not a performance score)</span>"
     + "<span><b>Avg appts</b> \u2014 average appointments booked per intake</span>"
     + "</div>"
-    + "<div id='filters' class='filters'></div>"
+    + "<div id='weekhint'></div>"
+    + "<div class='filterlabel'>Clinic</div><div id='filters' class='filters'></div>"
+    + "<div class='filterlabel'>Week</div><div id='weekfilters' class='filters'></div>"
     + "<div id='cards' class='stat-row'></div>"
     + "<div id='viewtoggle' class='filters'></div>"
     + "<div id='main'></div>"
-    + "<div id='notplanned' class='sec'></div>"
-    + "<div style='margin-top:24px;font-size:12px;color:#888'>Tip: open <a href='/plan'>/plan</a> for the chiropractor coaching dashboard.</div>"
+    + "<div id='lists' class='sec'></div>"
+    + "<div style='margin-top:24px;font-size:12px;color:#888'>Tip: open <a href='/plan'>/plan</a> for the chiropractor dashboard · <a href='/reconcile'>/reconcile</a> to match these intakes against PracticeHub (cross-location patients, intake dates, appts vs sheet).</div>"
     + "<script>var DATA="+JSON.stringify(payload)+";("+caClient.toString()+")();</script>"
     + "</body></html>";
 }
 function caClient(){
-  var SEL={clinic:'all',view:'table',chart:'bar'};
+  var SEL={clinic:'all',week:'all',view:'table',chart:'bar'};
   var CHART=null;
   function $(id){return document.getElementById(id);}
-  function statsFor(clinic){
-    var names={}; DATA.roster.forEach(function(n){names[n]=1;}); DATA.perCA.forEach(function(s){names[s.name]=1;});
-    var out=[];
-    Object.keys(names).forEach(function(name){
-      var s=null; for(var k=0;k<DATA.perCA.length;k++){if(DATA.perCA[k].name===name){s=DATA.perCA[k];break;}}
-      var intk=0,door=0,pkg=0,meta=0,appts=0;
-      if(s){
-        if(clinic==='all'){intk=s.intakes;door=s.doorplannen;pkg=s.packages;meta=s.meta;appts=s.totalAppts;}
-        else if(s.byClinic[clinic]){var b=s.byClinic[clinic];intk=b.intakes;door=b.doorplannen;pkg=b.packages;meta=b.meta||0;appts=b.totalAppts||0;}
-      }
-      out.push({name:name,intakes:intk,door:door,pkg:pkg,meta:meta,appts:appts,
-        doorPct:intk?door/intk*100:0,pkgPct:intk?pkg/intk*100:0,metaPct:intk?meta/intk*100:0,avgAppts:intk?appts/intk:0});
+  function weekNum(w){var m=(w||'').match(/\d+/);return m?parseInt(m[0],10):9999;}
+  function allWeeks(){
+    var w={}; DATA.intakes.forEach(function(i){w[i.week]=1;});
+    var arr=Object.keys(w);
+    arr.sort(function(a,b){return weekNum(a)-weekNum(b);});
+    return arr;
+  }
+  function filtered(){
+    return DATA.intakes.filter(function(i){
+      return (SEL.clinic==='all'||i.clinic===SEL.clinic)&&(SEL.week==='all'||i.week===SEL.week);
     });
+  }
+  function statsRows(){
+    var items=filtered();
+    var map={}; DATA.roster.forEach(function(n){map[n]={name:n,intakes:0,door:0,pkg:0,meta:0,appts:0,byClinic:{}};});
+    items.forEach(function(i){
+      var m=map[i.ca]; if(!m){m=map[i.ca]={name:i.ca,intakes:0,door:0,pkg:0,meta:0,appts:0,byClinic:{}};}
+      m.intakes++; m.appts+=i.appts; if(i.appts>=3)m.door++; if(i.package)m.pkg++; if(i.meta)m.meta++;
+      if(!m.byClinic[i.clinic])m.byClinic[i.clinic]=0; m.byClinic[i.clinic]++;
+    });
+    var out=Object.keys(map).map(function(n){var m=map[n];return {name:n,intakes:m.intakes,door:m.door,pkg:m.pkg,meta:m.meta,appts:m.appts,byClinic:m.byClinic,
+      doorPct:m.intakes?m.door/m.intakes*100:0,pkgPct:m.intakes?m.pkg/m.intakes*100:0,metaPct:m.intakes?m.meta/m.intakes*100:0,avgAppts:m.intakes?m.appts/m.intakes:0};});
     out.sort(function(a,b){return b.intakes-a.intakes;});
     return out;
   }
   function bar(pct,color){var w=Math.max(0,Math.min(100,pct));return "<div class='barwrap'><div class='barfill' style='width:"+w+"%;background:"+color+"'></div></div>";}
-  function notPlannedFor(clinic){return DATA.notPlanned.filter(function(c){return clinic==='all'||c.clinic===clinic;});}
+  function renderWeekHint(){
+    var ws=allWeeks();
+    if(ws.length===1&&ws[0]==='Unlabelled'){
+      $('weekhint').innerHTML="<div class='hint'>No weekly split yet \u2014 to get a per-week view, put a <b>\u201cWeek 24\u201d</b> row directly above that week\u2019s intakes in the sheet (same as your Week 23\u201326 layout). Everything below it is then tagged to that week automatically.</div>";
+    } else { $('weekhint').innerHTML=""; }
+  }
   function renderFilters(){
     var opts=[['all','All clinics']].concat(DATA.clinics.map(function(c){return [c,c];}));
     $('filters').innerHTML=opts.map(function(o){return "<button class='fbtn"+(SEL.clinic===o[0]?' on':'')+"' data-clinic='"+o[0]+"'>"+o[1]+"</button>";}).join('');
     Array.prototype.forEach.call($('filters').querySelectorAll('button'),function(b){b.addEventListener('click',function(){SEL.clinic=b.getAttribute('data-clinic');render();});});
+    var ws=allWeeks();
+    var wopts=[['all','All weeks']].concat(ws.map(function(w){return [w,w];}));
+    $('weekfilters').innerHTML=wopts.map(function(o){return "<button class='fbtn"+(SEL.week===o[0]?' on':'')+"' data-week='"+o[0]+"'>"+o[1]+"</button>";}).join('');
+    Array.prototype.forEach.call($('weekfilters').querySelectorAll('button'),function(b){b.addEventListener('click',function(){SEL.week=b.getAttribute('data-week');render();});});
   }
   function renderCards(){
-    var rows=statsFor(SEL.clinic); var intk=0,door=0,pkg=0;
+    var rows=statsRows(); var intk=0,door=0,pkg=0;
     rows.forEach(function(r){intk+=r.intakes;door+=r.door;pkg+=r.pkg;});
     var dP=intk?Math.round(door/intk*100):0, pP=intk?Math.round(pkg/intk*100):0;
-    var np=notPlannedFor(SEL.clinic).length;
+    var notP=intk-door;
     $('cards').innerHTML=
-      "<div class='stat'><div class='stat-val'>"+intk+"</div><div class='stat-lbl'>Intakes</div></div>"
+      "<div class='stat'><div class='stat-val'>"+intk+"</div><div class='stat-lbl'>Intakes seen</div></div>"
+     +"<div class='stat'><div class='stat-val'>"+door+"</div><div class='stat-lbl'>Planned through</div></div>"
+     +"<div class='stat'><div class='stat-val'>"+notP+"</div><div class='stat-lbl'>Not planned through</div></div>"
      +"<div class='stat'><div class='stat-val'>"+dP+"%</div><div class='stat-lbl'>Avg doorplannen</div></div>"
-     +"<div class='stat'><div class='stat-val'>"+pP+"%</div><div class='stat-lbl'>Avg package</div></div>"
-     +"<div class='stat'><div class='stat-val'>"+np+"</div><div class='stat-lbl'>Not planned through</div></div>";
+     +"<div class='stat'><div class='stat-val'>"+pP+"%</div><div class='stat-lbl'>Avg package</div></div>";
   }
   function renderViewToggle(){
     var h="<button class='fbtn"+(SEL.view==='table'?' on':'')+"' data-v='table'>Table</button>"
@@ -1131,49 +1389,57 @@ function caClient(){
     Array.prototype.forEach.call($('viewtoggle').querySelectorAll('[data-c]'),function(b){b.addEventListener('click',function(){SEL.chart=b.getAttribute('data-c');render();});});
   }
   function renderTable(){
-    var rows=statsFor(SEL.clinic);
+    var rows=statsRows();
     var body=rows.map(function(r){
       var zero=r.intakes===0;
-      var clinicBreak='';
-      if(SEL.clinic==='all'){var s=null;for(var k=0;k<DATA.perCA.length;k++){if(DATA.perCA[k].name===r.name){s=DATA.perCA[k];break;}}
-        if(s)clinicBreak=Object.keys(s.byClinic).map(function(cl){return cl+': '+s.byClinic[cl].intakes;}).join(' \u00b7 ');}
+      var clinicBreak=SEL.clinic==='all'?Object.keys(r.byClinic).map(function(cl){return cl+': '+r.byClinic[cl];}).join(' \u00b7 '):'';
       var noPhone=DATA.phones[r.name]===false?" <span style='color:#c00;font-size:11px'>(no phone)</span>":"";
       return "<tr"+(zero?" class='muted'":"")+">"
         +"<td style='font-weight:600'>"+r.name+noPhone+"</td>"
         +"<td style='text-align:right'>"+r.intakes+"</td>"
-        +"<td>"+bar(r.doorPct,'#2563eb')+" <span style='margin-left:6px'>"+Math.round(r.doorPct)+"%</span> <span style='color:#888;font-size:11px'>("+r.door+"/"+r.intakes+")</span></td>"
+        +"<td style='text-align:right'>"+r.door+"</td>"
+        +"<td style='text-align:right'>"+(r.intakes-r.door)+"</td>"
+        +"<td>"+bar(r.doorPct,'#2563eb')+" <span style='margin-left:6px'>"+Math.round(r.doorPct)+"%</span></td>"
         +"<td>"+bar(r.pkgPct,'#16a34a')+" <span style='margin-left:6px'>"+Math.round(r.pkgPct)+"%</span> <span style='color:#888;font-size:11px'>("+r.pkg+"/"+r.intakes+")</span></td>"
         +"<td style='text-align:right'>"+r.avgAppts.toFixed(1)+"</td>"
         +"<td style='text-align:right'>"+Math.round(r.metaPct)+"%</td>"
         +"<td style='font-size:12px;color:#555'>"+clinicBreak+"</td>"
         +"<td><a class='coachbtn' href='/ca/coach?target="+encodeURIComponent(r.name)+"'>Coach</a></td></tr>";
     }).join('');
-    $('main').innerHTML="<table><thead><tr><th>CA</th><th style='text-align:right'>Intakes</th><th>Doorplannen %</th><th>Package %</th><th style='text-align:right'>Avg appts</th><th style='text-align:right'>Meta %</th><th>By clinic</th><th></th></tr></thead><tbody>"+(body||"<tr><td colspan='8' style='text-align:center;padding:40px;color:#888'>No intake data</td></tr>")+"</tbody></table>";
+    $('main').innerHTML="<table><thead><tr><th>CA</th><th style='text-align:right'>Intakes</th><th style='text-align:right'>Planned</th><th style='text-align:right'>Not</th><th>Doorplannen %</th><th>Package %</th><th style='text-align:right'>Avg appts</th><th style='text-align:right'>Meta %</th><th>By clinic</th><th></th></tr></thead><tbody>"+(body||"<tr><td colspan='10' style='text-align:center;padding:40px;color:#888'>No intake data</td></tr>")+"</tbody></table>";
   }
   function renderChart(){
     $('main').innerHTML="<div style='height:380px'><canvas id='cachart'></canvas></div>";
-    var rows=statsFor(SEL.clinic).filter(function(r){return r.intakes>0;});
+    var rows=statsRows().filter(function(r){return r.intakes>0;});
     var labels=rows.map(function(r){return r.name;});
     var ds=[{label:'Doorplannen %',data:rows.map(function(r){return Math.round(r.doorPct);}),backgroundColor:'#2563eb',borderColor:'#2563eb'},
             {label:'Package %',data:rows.map(function(r){return Math.round(r.pkgPct);}),backgroundColor:'#16a34a',borderColor:'#16a34a'}];
     if(CHART){CHART.destroy();CHART=null;}
-    if(typeof Chart==='undefined'){$('main').innerHTML+="<div style='color:#888;font-size:12px'>Chart library still loading\u2026 switch to Table or retry.</div>";return;}
+    if(typeof Chart==='undefined'){$('main').innerHTML+="<div style='color:#888;font-size:12px'>Chart library still loading\u2026 switch to Table.</div>";return;}
     CHART=new Chart(document.getElementById('cachart'),{type:SEL.chart,data:{labels:labels,datasets:ds},
       options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,max:100,ticks:{callback:function(v){return v+'%';}}}},plugins:{legend:{position:'top'}}}});
   }
-  function renderNotPlanned(){
-    var list=notPlannedFor(SEL.clinic);
-    list.sort(function(a,b){return (a.ca+a.clinic).localeCompare(b.ca+b.clinic)|| a.appts-b.appts;});
-    var rowsH=list.map(function(c){
-      return "<tr><td style='font-weight:600'>"+c.name+(c.meta?"<span class='pill meta'>Meta</span>":"")+(c.package?"<span class='pill pkg'>package</span>":"")+"</td>"
-        +"<td>"+c.ca+"</td><td>"+c.clinic+"</td><td>"+c.chiro+"</td><td style='text-align:right'>"+c.appts+"</td></tr>";
-    }).join('');
-    $('notplanned').innerHTML="<h2>Clients who haven\u2019t planned through ("+list.length+")</h2>"
-      +"<div class='sub'>Intakes with <b>fewer than 3 appointments</b> booked \u2014 the follow-up list. "+(SEL.clinic==='all'?'All clinics':SEL.clinic)+".</div>"
-      +"<table><thead><tr><th>Client</th><th>CA</th><th>Clinic</th><th>Chiro</th><th style='text-align:right'>Appts</th></tr></thead><tbody>"
-      +(rowsH||"<tr><td colspan='5' style='text-align:center;padding:30px;color:#888'>Everyone planned through \u2014 nice.</td></tr>")+"</tbody></table>";
+  function clientRow(c){
+    return "<tr><td style='font-weight:600'>"+c.name+(c.meta?"<span class='pill meta'>Meta</span>":"")+(c.package?"<span class='pill pkg'>package</span>":"")+"</td>"
+      +"<td>"+c.ca+"</td><td>"+c.clinic+"</td><td>"+c.chiro+"</td><td style='text-align:right'>"+c.appts+"</td></tr>";
   }
-  function render(){renderFilters();renderCards();renderViewToggle();if(SEL.view==='chart')renderChart();else renderTable();renderNotPlanned();}
+  function listTable(items){
+    items=items.slice().sort(function(a,b){return (a.ca+a.clinic).localeCompare(b.ca+b.clinic)|| a.appts-b.appts;});
+    return "<table><thead><tr><th>Client</th><th>CA</th><th>Clinic</th><th>Chiro</th><th style='text-align:right'>Appts</th></tr></thead><tbody>"
+      +(items.map(clientRow).join('')||"<tr><td colspan='5' style='text-align:center;padding:24px;color:#888'>None</td></tr>")+"</tbody></table>";
+  }
+  function renderLists(){
+    var items=filtered();
+    var planned=items.filter(function(i){return i.appts>=3;});
+    var notp=items.filter(function(i){return i.appts<3;});
+    var scope=(SEL.clinic==='all'?'All clinics':SEL.clinic)+(SEL.week==='all'?'':' \u00b7 '+SEL.week);
+    $('lists').innerHTML=
+      "<div class='twocol'>"
+      +"<div><h2>Not planned through ("+notp.length+")</h2><div class='sub'>Fewer than 3 appointments \u2014 the follow-up list. "+scope+".</div>"+listTable(notp)+"</div>"
+      +"<div><h2>Planned through ("+planned.length+")</h2><div class='sub'>3+ appointments booked. "+scope+".</div>"+listTable(planned)+"</div>"
+      +"</div>";
+  }
+  function render(){renderWeekHint();renderFilters();renderCards();renderViewToggle();if(SEL.view==='chart')renderChart();else renderTable();renderLists();}
   render();
 }
 
