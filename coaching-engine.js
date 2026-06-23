@@ -600,7 +600,7 @@ app.get("/plan", gate, (req, res) => {
   </section>
 
   <div id="pl-tabs"></div>
-  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/coach">/coach</a></p>
+  <p class="sub">Pages: <a href="/plan">/plan</a> · <a href="/revenue">/revenue</a> · <a href="/marketing">/marketing</a> · <a href="/waste">/waste</a> · <a href="/pva">/pva</a> · <a href="/ca">/ca</a> · <a href="/goals">/goals</a> · <a href="/coach">/coach</a></p>
 </div>
 <script>
   var PL={"Amstelveen": {"2025": {"rev": 336619, "op": 92859, "exp": {"Personnel \u00b7 staff": 46691, "Other/Misc": 46449, "Personnel \u00b7 contractor chiro": 42924, "Marketing": 34786, "Rent": 33958, "Bank/Payment fees": 15741, "Travel/Transport": 6274, "Accounting/Professional": 5716, "Supplies/Retail": 4738, "Insurance": 3662, "Software/SaaS": 2711}, "below": {"Intercompany/Owner": 59519, "Tax": 10513, "Financing/Loan repay": 15496, "Internal \u00b7 transfer/loan in": -1432}}, "2026": {"rev": 167304, "op": 46401, "exp": {"Personnel \u00b7 staff": 34567, "Personnel \u00b7 contractor chiro": 18697, "Rent": 14821, "Marketing": 12676, "Other/Misc": 10575, "Accounting/Professional": 8295, "Bank/Payment fees": 7815, "Supplies/Retail": 5795, "Travel/Transport": 4865, "Insurance": 1567, "Software/SaaS": 1224}, "below": {"Financing/Loan repay": 6825, "Intercompany/Owner": 19500, "Internal \u00b7 transfer/loan in": -286, "Tax": 12123}}}, "Utrecht": {"2025": {"rev": 230704, "op": 45155, "exp": {"Personnel \u00b7 contractor chiro": 63660, "Personnel \u00b7 staff": 52861, "Marketing": 20327, "Other/Misc": 15133, "Bank/Payment fees": 13054, "Accounting/Professional": 9229, "Rent": 3944, "Supplies/Retail": 3538, "Software/SaaS": 1450, "Travel/Transport": 1305, "Insurance": 699, "Energy/Utilities": 210}, "below": {"Tax": 16855, "Financing/Loan repay": 629, "Intercompany/Owner": 31954}}, "2026": {"rev": 108567, "op": 17336, "exp": {"Personnel \u00b7 staff": 37926, "Personnel \u00b7 contractor chiro": 22782, "Marketing": 8966, "Bank/Payment fees": 6664, "Accounting/Professional": 6448, "Other/Misc": 4429, "Rent": 1294, "Supplies/Retail": 1020, "Travel/Transport": 667, "Software/SaaS": 646, "Insurance": 305}, "below": {"Financing/Loan repay": 358, "Tax": 11447, "Intercompany/Owner": 1500}}}, "Bussum": {"2025": {"rev": 167853, "op": 55260, "exp": {"Personnel \u00b7 contractor chiro": 38246, "Personnel \u00b7 staff": 25666, "Marketing": 15233, "Bank/Payment fees": 10135, "Accounting/Professional": 6676, "Other/Misc": 5143, "Energy/Utilities": 3596, "Travel/Transport": 3011, "Rent": 2377, "Supplies/Retail": 1494, "Software/SaaS": 785, "Insurance": 231}, "below": {"Financing/Loan repay": 37979, "Tax": 10596, "Intercompany/Owner": 3555, "Internal \u00b7 transfer/loan in": -1000}}, "2026": {"rev": 69072, "op": 26883, "exp": {"Personnel \u00b7 staff": 11068, "Personnel \u00b7 contractor chiro": 10622, "Marketing": 6110, "Bank/Payment fees": 4452, "Accounting/Professional": 3151, "Other/Misc": 2200, "Travel/Transport": 2099, "Energy/Utilities": 1581, "Software/SaaS": 364, "Insurance": 231, "Rent": 200}, "below": {"Financing/Loan repay": 12290, "Tax": 5255, "Intercompany/Owner": 7500}}}, "Rotterdam": {"2025": {"rev": 32828, "op": -18862, "exp": {"Supplies/Retail": 22514, "Personnel \u00b7 staff": 12921, "Rent": 7154, "Other/Misc": 5271, "Marketing": 2295, "Accounting/Professional": 862, "Software/SaaS": 495}, "below": {"Tax": 3994, "Financing/Loan repay": 1030, "Intercompany/Owner": 1150, "Internal \u00b7 transfer/loan in": -25320}}, "2026": {"rev": 79551, "op": 34444, "exp": {"Personnel \u00b7 staff": 12899, "Marketing": 10246, "Rent": 8821, "Other/Misc": 5905, "Accounting/Professional": 3842, "Supplies/Retail": 2327, "Bank/Payment fees": 422, "Software/SaaS": 214}, "below": {"Financing/Loan repay": 2527, "Intercompany/Owner": 14900, "Tax": 4947}}}, "Holding": {"2025": {"rev": 161243, "op": 94981, "exp": {"Personnel \u00b7 contractor chiro": 28680, "Supplies/Retail": 16734, "Other/Misc": 10478, "Accounting/Professional": 4037, "Marketing": 2622, "Travel/Transport": 1432, "Rent": 1431, "Bank/Payment fees": 772}, "below": {"Intercompany/Owner": 48010, "Tax": 18904, "Financing/Loan repay": 27488}}, "2026": {"rev": 107336, "op": 51569, "exp": {"Personnel \u00b7 contractor chiro": 37736, "Other/Misc": 10678, "Personnel \u00b7 staff": 4229, "Accounting/Professional": 1516, "Travel/Transport": 1120, "Rent": 250}, "below": {"Tax": 14895, "Intercompany/Owner": 20339, "Financing/Loan repay": 4883}}}}, ORDER=["Amstelveen", "Utrecht", "Bussum", "Rotterdam", "Holding"], LABEL={"Holding": "Notable (holding)"}, MONTHLY=[71488, 65154, 80199, 75479, 78357], PACE=74135.4, ASOF="Jun 2026";
@@ -1934,6 +1934,293 @@ async function notifyOwner(text) {
   if (!phone) throw new Error("no OWNER_PHONE set (add it in Render so previews can reach you)");
   return sendSms(clinic, phone, "Alex", text);
 }
+// ============================================================================
+//  GOALS — per-chiro targets (annual €, visits/day, or PVA), projected live
+//  from PracticeHub, with biweekly goal-aware coaching check-ins.
+//  Edit the block below OR set GOALS_SHEET to a link-shared Google Sheet
+//  (columns: Chiro, AnnualTargetEUR, PVATarget, VisitsPerDayTarget, CadenceWeeks).
+// ============================================================================
+// === CHIRO GOALS START (edit these — paste the whole file to deploy) ===
+const CHIRO_GOALS = {
+  Myles:     { annual: 120000, pva: 12,   perDay: null, cadence: 2 },
+  Lara:      { annual: null,   pva: null, perDay: null, cadence: 2 },
+  Matthew:   { annual: null,   pva: null, perDay: null, cadence: 2 },
+  Alex:      { annual: null,   pva: null, perDay: null, cadence: 2 },
+  Annefloor: { annual: null,   pva: null, perDay: null, cadence: 2 },
+};
+// === CHIRO GOALS END ===
+const GOALS_SHEET = process.env.GOALS_SHEET || ""; // optional link-shared sheet id
+
+function parseGoalsCSV(csv){
+  const rows = parseCSV(csv); if(!rows.length) return {};
+  const hdr = rows[0].map(c=>(c||"").trim().toLowerCase());
+  const ix = n => hdr.findIndex(h=>h.replace(/[^a-z]/g,"").includes(n));
+  const ci=ix("chiro"), ca=ix("annual"), cp=ix("pva"), cv=ix("visitsperday")>=0?ix("visitsperday"):ix("perday"), cc=ix("cadence");
+  const num = s => { const v=parseFloat(String(s||"").replace(/[^0-9.]/g,"")); return Number.isFinite(v)?v:null; };
+  const out={};
+  for(let r=1;r<rows.length;r++){
+    const cells=rows[r]||[]; const name=(cells[ci]||"").trim(); if(!name) continue;
+    out[name]={ annual:ca>=0?num(cells[ca]):null, pva:cp>=0?num(cells[cp]):null, perDay:cv>=0?num(cells[cv]):null, cadence:cc>=0?(num(cells[cc])||2):2 };
+  }
+  return out;
+}
+async function loadGoals(){
+  if(GOALS_SHEET){
+    try{
+      const r = await fetch(`https://docs.google.com/spreadsheets/d/${GOALS_SHEET}/export?format=csv`);
+      if(r.ok){ const g=parseGoalsCSV(await r.text()); if(Object.keys(g).length) return { goals:g, source:"sheet" }; }
+    }catch(e){ /* fall back */ }
+  }
+  return { goals: CHIRO_GOALS, source:"baked" };
+}
+
+// turn whatever unit the goal is set in into a common shape
+function goalShape(g, days){
+  const P=PRICE_PER_VISIT, wkDays=days||3.5;
+  let annual = g && g.annual ? g.annual : null;
+  const perDayGoal = g && g.perDay ? g.perDay : null;
+  if(!annual && perDayGoal){ const monthV = perDayGoal*wkDays*4.33; annual = monthV*P*12; }
+  let monthVisitsNeeded=null, weekVisitsNeeded=null, perDayNeeded=perDayGoal||null;
+  if(annual){ monthVisitsNeeded=(annual/12)/P; weekVisitsNeeded=monthVisitsNeeded/4.33; perDayNeeded=weekVisitsNeeded/wkDays; }
+  return { annual, monthVisitsNeeded, weekVisitsNeeded, perDayNeeded, pvaTarget:(g&&g.pva)||null, cadence:(g&&g.cadence)||2 };
+}
+// live progress from a 30-day PracticeHub baseline
+function goalProgress(b, g, days){
+  const s=goalShape(g, days), P=PRICE_PER_VISIT;
+  const visits30=b.visits||0, weekNow=visits30/4.33, perDayNow=weekNow/(days||3.5);
+  const annualRun=visits30*P*12, monthRun=visits30*P;
+  const hasGoal=!!(s.annual||s.perDayNeeded);
+  const gapWeek=s.weekVisitsNeeded!=null?(s.weekVisitsNeeded-weekNow):null;
+  const pct=s.annual?(annualRun/s.annual):(s.perDayNeeded?perDayNow/s.perDayNeeded:null);
+  return { hasGoal, annual:s.annual, annualRun, monthRun, visits30, weekNow, perDayNow,
+           weekNeeded:s.weekVisitsNeeded, perDayNeeded:s.perDayNeeded, gapWeek,
+           pvaNow:b.pva, pvaTarget:s.pvaTarget, intakes:b.intakes, cadence:s.cadence, pct };
+}
+
+async function draftGoalCoaching(name, p){
+  const goalLine = p.annual ? `Their goal is \u20ac${Math.round(p.annual).toLocaleString("en-US")} for the year`
+    : (p.perDayNeeded ? `Their goal is about ${p.perDayNeeded.toFixed(0)} visits per working day` : `No euro goal set`);
+  const need = p.weekNeeded!=null
+    ? `To hit it they need ~${Math.round(p.weekNeeded)} visits/week; right now they're ~${Math.round(p.weekNow)}/week (${p.gapWeek>0.5?Math.round(p.gapWeek)+" short":"on track or ahead"}).`
+    : "";
+  const pvaLine = p.pvaTarget ? `PVA is ${p.pvaNow} vs a target of ${p.pvaTarget}.` : `PVA is ${p.pvaNow}.`;
+  const focus = (p.pvaTarget && p.pvaNow!=null && p.pvaNow < p.pvaTarget)
+    ? "the focus should be retention — pre-booking the full care plan at the report of findings (doorplannen)"
+    : "the focus should be filling the schedule — converting more intakes to care and reactivation";
+  const prompt = `Biweekly goal check-in for ${name}.\n${goalLine}.\n${need}\n${pvaLine}\nFor the next two weeks, ${focus}.\nWrite the SMS now: name their goal, celebrate where they are, give ONE concrete action for the next two weeks.`;
+  const fallback = `Hi ${name}! Two-week check-in on your goal${p.annual?` of \u20ac${Math.round(p.annual).toLocaleString("en-US")}`:""}. You're around ${Math.round(p.weekNow)} visits/week${p.weekNeeded!=null?`, aiming for ~${Math.round(p.weekNeeded)}`:""} \u2014 ${p.gapWeek>0.5?`about ${Math.round(p.gapWeek)} to find`:`right on pace`}. ${p.pvaTarget&&p.pvaNow!=null&&p.pvaNow<p.pvaTarget?`Let's lift PVA toward ${p.pvaTarget} by booking the full plan at every report of findings.`:`Keep the schedule full and retention tight.`} I'm with you on this.`;
+  try{
+    const r=await withTimeout(anthropic.messages.create({model:MODEL,max_tokens:250,system:VOICE,messages:[{role:"user",content:prompt}]}),12000,"goal "+name);
+    const t=r.content.filter(x=>x.type==="text").map(x=>x.text).join("").trim();
+    return t||fallback;
+  }catch(e){ return fallback; }
+}
+
+app.get("/goals/data", gate, async (_req,res)=>{
+  try{
+    const { goals, source } = await loadGoals();
+    const base = await chiroBaselines(30);
+    const chiros = base.map(b=>{ const g=goals[b.n]||{}; const days=PLAN_DAYS[b.n]||3.5; return { n:b.n, clinics:b.clinics, days, phone:!!b.phone, goal:g, ...goalProgress(b,g,days) }; });
+    res.json({ source, price: PRICE_PER_VISIT, chiros });
+  }catch(e){ res.json({ error:e.message }); }
+});
+
+app.get("/goals/draft", gate, async (req,res)=>{
+  try{
+    const name=req.query.name; const { goals }=await loadGoals();
+    const base=await chiroBaselines(30); const b=base.find(x=>x.n.toLowerCase()===String(name||"").toLowerCase());
+    if(!b) return res.json({ ok:false, error:"unknown chiro" });
+    const g=goals[b.n]||{}, days=PLAN_DAYS[b.n]||3.5, prog=goalProgress(b,g,days);
+    if(!prog.hasGoal) return res.json({ ok:false, error:"no goal set for "+b.n });
+    const message=await draftGoalCoaching(b.n, prog);
+    res.json({ ok:true, name:b.n, message, phone:!!b.phone });
+  }catch(e){ res.json({ ok:false, error:e.message }); }
+});
+
+app.post("/goals/send", gate, async (req,res)=>{
+  try{
+    const { target, text } = req.body||{};
+    const { goals }=await loadGoals(); const base=await chiroBaselines(30);
+    const list = (target==="all") ? base : base.filter(b=>b.n.toLowerCase()===String(target||"").toLowerCase());
+    if(!list.length) return res.json({ ok:false, error:"unknown chiro" });
+    const results=await Promise.all(list.map(async b=>{
+      const g=goals[b.n]||{}, days=PLAN_DAYS[b.n]||3.5, prog=goalProgress(b,g,days);
+      if(!prog.hasGoal) return `${b.n}: skipped (no goal)`;
+      if(!b.phone) return `${b.n}: skipped (no phone)`;
+      try{ const msg=(text && target!=="all")?text:await draftGoalCoaching(b.n,prog); await sendSms(b.smsClinic,b.phone,b.n,msg); return `${b.n}: sent`; }
+      catch(e){ return `${b.n}: failed — ${e.message}`; }
+    }));
+    res.json({ ok:true, results });
+  }catch(e){ res.json({ ok:false, error:e.message }); }
+});
+
+// ISO week number (for biweekly parity)
+function isoWeek(d){ const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=t.getUTCDay()||7; t.setUTCDate(t.getUTCDate()+4-day); const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1)); return Math.ceil((((t-ys)/86400000)+1)/7); }
+
+// Biweekly goal check-ins. Point a scheduler at this DAILY 09:00 Amsterdam:
+//   /goals/cron?key=CRON_SECRET
+// Even ISO week → Monday sends to chiros (who have a goal), Sunday previews to you.
+app.get("/goals/cron", async (req,res)=>{
+  const secret=process.env.CRON_SECRET;
+  if(!secret||req.query.key!==secret) return res.status(403).json({ ok:false, error:"forbidden" });
+  try{
+    const ams=new Date(new Date().toLocaleString("en-US",{timeZone:"Europe/Amsterdam"}));
+    const dow=ams.getDay();
+    const { goals }=await loadGoals();
+    const base=await chiroBaselines(30);
+    const withGoal=base.map(b=>({b,g:goals[b.n]||{},prog:goalProgress(b,goals[b.n]||{},PLAN_DAYS[b.n]||3.5)})).filter(x=>x.prog.hasGoal);
+    // Sunday before an even-week Monday → owner preview
+    if(dow===0){
+      const tomorrow=new Date(ams.getTime()+86400000);
+      if(isoWeek(tomorrow)%2!==0) return res.json({ ok:true, action:"nothing (next week is odd)" });
+      const lines=await Promise.all(withGoal.map(async x=>{ const m=x.b.phone?await draftGoalCoaching(x.b.n,x.prog):"(no phone — will skip)"; return `- ${x.b.n}: ${m}`; }));
+      await notifyOwner(`Biweekly goal check-ins go out tomorrow (Mon 9:00):\n\n${lines.join("\n\n")}\n\nReview/adjust: ${APP_URL}/goals`).catch(()=>{});
+      return res.json({ ok:true, action:"preview-sent", chiros:withGoal.length });
+    }
+    // Even-week Monday → send
+    if(dow===1){
+      if(isoWeek(ams)%2!==0) return res.json({ ok:true, action:"nothing (odd week)" });
+      const results=await Promise.all(withGoal.map(async x=>{ if(!x.b.phone) return `${x.b.n}: skipped (no phone)`; try{ const m=await draftGoalCoaching(x.b.n,x.prog); await sendSms(x.b.smsClinic,x.b.phone,x.b.n,m); return `${x.b.n}: sent`; }catch(e){ return `${x.b.n}: failed — ${e.message}`; } }));
+      return res.json({ ok:true, action:"sent", results });
+    }
+    return res.json({ ok:true, action:"nothing today" });
+  }catch(e){ res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.get("/goals", gate, (_req,res)=>{
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Goals — Posturefixx</title>
+<style>
+ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:26px auto;padding:0 16px;color:#16202E}
+ h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}
+ .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}
+ .gname{font-size:16px;font-weight:700}.gclin{color:#94a3b8;font-size:12px;font-weight:400}
+ .row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin:10px 0}
+ .row label{font-size:11px;color:#64748b;display:block;margin-bottom:3px}
+ .row input{width:120px;border:1px solid #d1d5db;border-radius:8px;padding:7px 9px;font-size:14px}
+ .prog{background:#f1f5f9;border-radius:8px;height:14px;overflow:hidden;margin:8px 0 4px;position:relative}
+ .prog>div{height:100%;border-radius:8px}
+ .stats{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:#475569;margin-top:6px}
+ .stats b{color:#16202E}
+ .btn{border:none;background:#2563EB;color:#fff;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px;cursor:pointer}
+ .btn.alt{background:#fff;color:#16202E;border:1px solid #d1d5db}
+ .btn.send{background:#16a34a}
+ textarea{width:100%;min-height:90px;border:1px solid #d1d5db;border-radius:8px;padding:10px;font-size:14px;font-family:inherit;box-sizing:border-box;margin-top:8px;display:none}
+ .res{font-size:12px;margin-top:6px}
+ .tag{display:inline-block;font-size:10px;padding:1px 8px;border-radius:999px;margin-left:6px;vertical-align:middle}
+ .tag.ok{background:#ecfdf5;color:#16a34a}.tag.behind{background:#fef3c7;color:#b45309}.tag.none{background:#f1f5f9;color:#94a3b8}
+ .save{background:#0f172a;color:#cbd5e1;border-radius:10px;padding:12px;font-size:11.5px;white-space:pre;overflow:auto;display:none;margin-top:8px}
+ a{color:#2563EB}
+</style></head><body>
+<h1>Goals &amp; biweekly check-ins</h1>
+<div class="sub">Set a target per chiropractor — a yearly \u20ac number, a visits-per-day target, or a PVA target. The system projects from live PracticeHub and the fortnightly SMS coaches them toward <i>their</i> number. <span id="src"></span></div>
+<div id="cards"><div class="card">Loading live numbers from PracticeHub…</div></div>
+<div class="card">
+  <b>Save your goals</b>
+  <div class="sub" style="margin:4px 0 8px">Goals live in the file (or a Goals sheet). After editing above, generate the block and paste it over the <code>CHIRO GOALS</code> section in your file, then deploy. Or set a <code>GOALS_SHEET</code> in Render to edit them in Google Sheets with no redeploy.</div>
+  <button class="btn alt" onclick="genSave()">Generate goals to paste</button>
+  <div id="savebox" class="save"></div>
+</div>
+<div class="card">
+  <b>Automate it</b>
+  <div class="sub" style="margin:4px 0 0">Have your scheduler call <code>/goals/cron?key=YOUR_CRON_SECRET</code> daily at 09:00. It previews to you the Sunday before, and sends to each chiro on the Monday of every <b>even</b> ISO week — a clean biweekly rhythm. Only chiros with a goal set get a message.</div>
+</div>
+<p class="sub">Pages: <a href="/">home</a> \u00b7 <a href="/plan">/plan</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/coach">/coach</a> \u00b7 <a href="/scorecard">/scorecard</a></p>
+<script>
+var DATA=null;
+function eur(n){return "\u20ac"+Math.round(n||0).toLocaleString("en-US");}
+function tag(p){
+  if(!p.hasGoal) return "<span class='tag none'>no goal set</span>";
+  if(p.pct==null) return "";
+  return p.pct>=0.98 ? "<span class='tag ok'>on pace</span>" : "<span class='tag behind'>"+Math.round(p.pct*100)+"% of pace</span>";
+}
+function card(c){
+  var g=c.goal||{};
+  var projLine = c.hasGoal ? ("At your current pace (~"+Math.round(c.weekNow)+" visits/wk) you'd land near <b>"+eur(c.annualRun)+"/yr</b>"+(c.annual?(" vs your <b>"+eur(c.annual)+"</b> goal"):"")+".") :
+    "No goal yet — add one to start projecting and coaching toward it.";
+  var needLine = (c.weekNeeded!=null) ? ("Needs <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+(c.gapWeek>0.5?("<b style='color:#b45309'>about "+Math.round(c.gapWeek)+"/wk to find</b>"):"<b style='color:#16a34a'>on track</b>")+".") : "";
+  var pvaLine = "PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b>"+(c.pvaTarget?(" / target "+c.pvaTarget):"")+" \u00b7 intakes "+(c.intakes||0)+" (30d)";
+  var pct=Math.max(0,Math.min(1,c.pct||0));
+  var barCol = pct>=0.98?"#16a34a":pct>=0.7?"#f59e0b":"#dc2626";
+  return "<div class='card' data-name='"+c.n+"'>"
+    +"<div class='gname'>"+c.n+" <span class='gclin'>"+(c.clinics||[]).join(" + ")+"</span>"+tag(c)+(c.phone?"":" <span class='gclin' style='color:#dc2626'>(no phone set)</span>")+"</div>"
+    +"<div class='row'>"
+    +"<div><label>Yearly \u20ac target</label><input type='number' data-f='annual' value='"+(g.annual!=null?g.annual:"")+"' placeholder='e.g. 120000'></div>"
+    +"<div><label>PVA target</label><input type='number' step='0.1' data-f='pva' value='"+(g.pva!=null?g.pva:"")+"' placeholder='e.g. 12'></div>"
+    +"<div><label>Visits/day target</label><input type='number' step='0.1' data-f='perDay' value='"+(g.perDay!=null?g.perDay:"")+"' placeholder='optional'></div>"
+    +"<button class='btn alt' onclick='applyRow(\\''+c.n+'\\')'>Update projection</button>"
+    +"</div>"
+    +(c.hasGoal?("<div class='prog'><div style='width:"+(pct*100).toFixed(0)+"%;background:"+barCol+"'></div></div>"):"")
+    +"<div class='stats'><span>"+projLine+"</span></div>"
+    +(needLine?("<div class='stats'><span>"+needLine+"</span></div>"):"")
+    +"<div class='stats'><span>"+pvaLine+"</span></div>"
+    +"<div style='margin-top:10px'>"
+    +"<button class='btn' onclick='preview(\\''+c.n+'\\')'>Preview SMS</button> "
+    +"<button class='btn send' onclick='sendOne(\\''+c.n+'\\')'>Send check-in</button>"
+    +"</div>"
+    +"<textarea data-ta='"+c.n+"'></textarea>"
+    +"<div class='res' data-res='"+c.n+"'></div>"
+    +"</div>";
+}
+function render(){
+  if(!DATA){return;}
+  document.getElementById("src").textContent = DATA.source==="sheet" ? "Goals are read live from your Goals sheet." : "Goals are read from the file.";
+  document.getElementById("cards").innerHTML = DATA.chiros.map(card).join("")
+    + "<div style='text-align:right'><button class='btn send' onclick='sendAll()'>Send check-in to everyone with a goal</button></div>";
+}
+function rowVals(name){
+  var card=document.querySelector("[data-name='"+name+"']"), o={};
+  card.querySelectorAll("input[data-f]").forEach(function(i){var v=i.value.trim();o[i.getAttribute("data-f")]=v===""?null:parseFloat(v);});
+  return o;
+}
+function applyRow(name){
+  var o=rowVals(name), c=DATA.chiros.find(function(x){return x.n===name;}); if(!c)return;
+  c.goal={annual:o.annual,pva:o.pva,perDay:o.perDay,cadence:(c.goal&&c.goal.cadence)||2};
+  // recompute locally
+  var days=c.days||3.5, P=DATA.price, wk=days*4.33;
+  var annual=o.annual; if(!annual&&o.perDay){annual=o.perDay*wk*P*12;}
+  var weekNeeded=annual?((annual/12)/P)/4.33:null, perDayNeeded=weekNeeded!=null?weekNeeded/days:(o.perDay||null);
+  c.annual=annual; c.weekNeeded=weekNeeded; c.perDayNeeded=perDayNeeded; c.pvaTarget=o.pva;
+  c.hasGoal=!!(annual||perDayNeeded); c.gapWeek=weekNeeded!=null?(weekNeeded-c.weekNow):null;
+  c.pct=annual?(c.annualRun/annual):(perDayNeeded?c.perDayNow/perDayNeeded:null);
+  render();
+}
+function preview(name){
+  var ta=document.querySelector("[data-ta='"+name+"']"), res=document.querySelector("[data-res='"+name+"']");
+  res.textContent="Drafting…";
+  fetch("/goals/draft?name="+encodeURIComponent(name)).then(function(r){return r.json();}).then(function(j){
+    if(j.ok){ ta.style.display="block"; ta.value=j.message; res.textContent=""; }
+    else { res.innerHTML="<span style='color:#b45309'>"+(j.error||"could not draft")+"</span>"; }
+  }).catch(function(e){ res.innerHTML="<span style='color:#dc2626'>"+e+"</span>"; });
+}
+function sendOne(name){
+  var ta=document.querySelector("[data-ta='"+name+"']"), res=document.querySelector("[data-res='"+name+"']");
+  var text=ta.style.display==="block"?ta.value:null;
+  if(!confirm("Send the goal check-in to "+name+" now?"))return;
+  res.textContent="Sending…";
+  fetch("/goals/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:name,text:text})}).then(function(r){return r.json();}).then(function(j){
+    res.innerHTML = j.ok ? "<span style='color:#16a34a'>"+j.results.join("; ")+"</span>" : "<span style='color:#dc2626'>"+(j.error||"failed")+"</span>";
+  }).catch(function(e){ res.innerHTML="<span style='color:#dc2626'>"+e+"</span>"; });
+}
+function sendAll(){
+  if(!confirm("Send a goal check-in SMS to every chiro who has a goal set?"))return;
+  fetch("/goals/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:"all"})}).then(function(r){return r.json();}).then(function(j){
+    alert(j.ok?("Done:\\n"+j.results.join("\\n")):("Error: "+(j.error||"failed")));
+  }).catch(function(e){ alert("Error: "+e); });
+}
+function genSave(){
+  var lines=DATA.chiros.map(function(c){var g=c.goal||{};
+    return "  "+c.n+": { annual: "+(g.annual!=null?g.annual:"null")+", pva: "+(g.pva!=null?g.pva:"null")+", perDay: "+(g.perDay!=null?g.perDay:"null")+", cadence: "+((g.cadence)||2)+" },";});
+  var block="const CHIRO_GOALS = {\\n"+lines.join("\\n")+"\\n};";
+  var el=document.getElementById("savebox"); el.style.display="block"; el.textContent=block;
+}
+fetch("/goals/data").then(function(r){return r.json();}).then(function(d){
+  if(d.error){document.getElementById("cards").innerHTML="<div class='card' style='color:#dc2626'>Couldn't load PracticeHub: "+d.error+"</div>";return;}
+  DATA=d; render();
+}).catch(function(e){ document.getElementById("cards").innerHTML="<div class='card' style='color:#dc2626'>Load error: "+e+"</div>"; });
+</script>
+</body></html>`);
+});
+
 app.get("/coach/cron", async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.query.key !== secret) return res.status(403).json({ ok: false, error: "forbidden" });
@@ -2715,6 +3002,8 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
 <p class="sub">Coach the team, pull the numbers automatically, watch the behaviours move the money.</p>
 <h3>Start here</h3><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px"><a href="/scorecard" style="display:block;border:1px solid #2563EB;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#eff6ff"><b style="font-size:15px">\u2b50 Per-clinic scorecard</b><div style="color:#1e3a8a;font-size:12.5px;margin-top:4px;line-height:1.45">Revenue, PVA, CA script adherence and lead conversion side by side \u2014 does following the systems show up as growth?</div></a></div><h3>Coach the team</h3>${grid([
   card("/plan","Plan &amp; goals","Revenue-target slider, per-chiro visit/PVA goals from live PracticeHub, P&amp;L + spend-by-category per clinic."),
+  card("/goals","\u2b50 Goals &amp; check-ins","Set each chiro a yearly \u20ac / visits-day / PVA target; project it live from PracticeHub and auto-send a biweekly goal SMS."),
+  
   card("/coach","Coach the chiros","Drafts a warm SMS to each chiropractor toward your target. You review before it sends."),
   card("/pva","PVA / retention","Retention per chiropractor, month by month, with good/improve highlights for each."),
   card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts.")
