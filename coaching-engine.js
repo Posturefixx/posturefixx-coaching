@@ -2502,7 +2502,7 @@ table{border-collapse:collapse;font-size:12.5px;white-space:nowrap}td,th{padding
 <script>
 var CLINICS=["Amstelveen","Utrecht","Bussum","Rotterdam"];
 var CURRENT=["alex","lara","myles","matthew","annefloor"];
-var BYNAME={}, MONTHS=[];
+var BYNAME={}, MONTHS=[], PULLING=false, BROUGHT_ERR="";
 function eur(n){return "€"+Math.round(n||0).toLocaleString("en-US");}
 function exTag(n){var f=(n.split(" ")[0]||"").toLowerCase();return CURRENT.indexOf(f)<0?"<span class='ex'>ex</span>":"";}
 function laraTier(r){return 0.375*Math.min(r,5000)+0.425*Math.max(0,Math.min(r,10000)-5000)+0.45*Math.max(0,r-10000);}
@@ -2513,6 +2513,7 @@ var PVA_HISTORY={"Nick":{"2025-01":8.913,"2025-02":12.066,"2025-03":11.26,"2025-
 function bankKey(name){var n=name.toLowerCase();if(n.indexOf("bunger")>=0)return "Nick Bunger";if(n.indexOf("schonberger")>=0)return "Holly Schonberger";if(n.indexOf("rokowski")>=0||n.indexOf("rakowski")>=0)return "Courtney Rokowski";if(n.indexOf("feiler")>=0||n.indexOf("frier")>=0||n.indexOf("align")>=0||n==="maria"||n.indexOf("maria ")>=0)return "Maria Feiler";if(n.indexOf("horgan")>=0||n==="matthew"||n.indexOf("matthew ")>=0)return "Matthew Horgan";if(n.indexOf("drakes")>=0||n==="myles"||n.indexOf("myles ")>=0)return "Myles Drakes";return null;}
 function bankPay(name,month){var k=bankKey(name);return (k&&BANK_PAY[k]&&BANK_PAY[k][month]!=null)?BANK_PAY[k][month]:null;}
 function renderBankHistory(){
+  if(!Object.keys(BYNAME).length && !PULLING && !BROUGHT_ERR){ PULLING=true; loadHistory(); }
   var people=Object.keys(BANK_PAY), set={};
   people.forEach(function(p){Object.keys(BANK_PAY[p]).forEach(function(m){set[m]=1;});});
   var ms=Object.keys(set).sort();
@@ -2522,11 +2523,49 @@ function renderBankHistory(){
   h+="</tbody></table>";
   h+="<div style='color:#94a3b8;font-size:11.5px;margin-top:8px'>Real euros out: <b>bank statements</b> for those who invoiced by name (Nick, Holly, Courtney, Maria, Matthew, Myles), the <b>holding</b> for Alex\u2019s salary, and the <b>expense books</b> for Lara &amp; Annefloor (payroll). Lara is Amstelveen-allocated; her Bussum share can be added.</div>";
   h+=renderBroughtInBox();
+  h+=renderNetBox();
   document.getElementById("tbl").innerHTML=h;
+}
+// Map a PracticeHub name to its pay record (bank, holding or books)
+function payKey(name){
+  var k=bankKey(name); if(k) return k;
+  var f=(name.split(" ")[0]||"").toLowerCase();
+  if(f==="alex") return "Alex Yu (holding)";
+  if(f==="lara") return "Lara (books)";
+  if(f==="annefloor") return "Annefloor (books)";
+  return null;
+}
+// Net to the clinic = what they brought in (services) minus what we paid them,
+// summed over exactly the months we pulled (like-for-like).
+function renderNetBox(){
+  var names=Object.keys(BYNAME);
+  if(!names.length) return "";
+  var monthsSet={}; names.forEach(function(n){Object.keys(BYNAME[n]).forEach(function(m){monthsSet[m]=1;});});
+  var ms=Object.keys(monthsSet);
+  var rows=names.map(function(n){
+    var inSum=0; ms.forEach(function(m){inSum+=BYNAME[n][m]||0;});
+    var pk=payKey(n), paidSum=0, hasPay=false;
+    if(pk&&BANK_PAY[pk]){ ms.forEach(function(m){ if(BANK_PAY[pk][m]!=null){ paidSum+=BANK_PAY[pk][m]; hasPay=true; } }); }
+    return {name:n, brought:inSum, paid:paidSum, hasPay:hasPay, net:inSum-paidSum};
+  }).filter(function(r){return r.brought>0;}).sort(function(a,b){return b.net-a.net;});
+  if(!rows.length) return "";
+  var h="<div style='font-weight:700;font-size:14px;margin:26px 0 8px'>Net to the clinic \u2014 brought in minus paid <span style='font-weight:400;color:#94a3b8;font-size:12px'>(same months as pulled above)</span></div>";
+  h+="<table><thead><tr><th>Practitioner</th><th>Brought in</th><th>Paid out</th><th>Net to clinic</th></tr></thead><tbody>";
+  rows.forEach(function(r){
+    var paidTxt=r.hasPay?eur(r.paid):"<span style='color:#cbd5e1'>no pay on file</span>";
+    var netTxt=r.hasPay?("<b style='color:"+(r.net>=0?"#16a34a":"#dc2626")+"'>"+eur(r.net)+"</b>"):"\u2014";
+    h+="<tr><td>"+r.name+exTag(r.name)+"</td><td class='num'>"+eur(r.brought)+"</td><td class='num'>"+paidTxt+"</td><td class='num'>"+netTxt+"</td></tr>";
+  });
+  h+="</tbody></table>";
+  h+="<div style='color:#94a3b8;font-size:11.5px;margin-top:8px'>What each chiropractor actually contributes: services brought in (visits \u00d7 \u20ac${PRICE_PER_VISIT}) minus their pay, over the same window. Green = net positive to the clinic. This is gross of rent, CAs and other shared costs \u2014 it\u2019s the per-chiro margin before overhead, not final profit.</div>";
+  return h;
 }
 function renderBroughtInBox(){
   var names=Object.keys(BYNAME);
-  if(!names.length) return "<div style='margin-top:22px;padding:14px;border:1px dashed #d1d5db;border-radius:12px;color:#64748b;font-size:13px'>Click <b>Pull from PracticeHub</b> above to fill in what each chiro brought in (services) per month here.</div>";
+  if(!names.length){
+    if(BROUGHT_ERR) return "<div style='margin-top:22px;padding:14px;border:1px dashed #fca5a5;border-radius:12px;color:#b91c1c;font-size:13px'>Couldn\u2019t load what each chiro brought in from PracticeHub: "+BROUGHT_ERR+". Click <b>Pull from PracticeHub</b> to retry.</div>";
+    return "<div style='margin-top:22px;padding:14px;border:1px dashed #d1d5db;border-radius:12px;color:#64748b;font-size:13px'>\u23f3 Loading what each chiro brought in from PracticeHub\u2026 (a deep pull across all four clinics can take a moment \u2014 it fills in here automatically).</div>";
+  }
   var set={}; names.forEach(function(n){Object.keys(BYNAME[n]).forEach(function(m){set[m]=1;});});
   var ms=Object.keys(set).sort();
   var sorted=names.sort(function(a,b){var ta=0,tb=0;ms.forEach(function(m){ta+=BYNAME[a][m]||0;tb+=BYNAME[b][m]||0;});return tb-ta;});
@@ -2544,13 +2583,23 @@ function compFor(name,month){var bp=bankPay(name,month);if(bp!=null)return {pay:
   return null;}
 function loadHistory(){
   var months=+document.getElementById("hmonths").value||6;
+  BROUGHT_ERR="";
   var byName={}, monthsSet={}, errs=[]; var i=0;
   function finish(){
-    BYNAME=byName; MONTHS=Object.keys(monthsSet).sort();
+    BYNAME=byName; MONTHS=Object.keys(monthsSet).sort(); PULLING=false;
     var names=Object.keys(byName);
-    if(!names.length){document.getElementById("tbl").innerHTML="No data returned. "+(errs.length?("Errors: "+errs.join("; ")):"PracticeHub may not serve that range, or keys aren’t set.");return;}
     var sel=document.getElementById("monthFocus");
+    if(!names.length){
+      BROUGHT_ERR = errs.length ? errs.join("; ") : "PracticeHub returned no visits for this range";
+      if(sel && sel.value==="bank"){ renderBankHistory(); }
+      else { document.getElementById("tbl").innerHTML="No data returned. "+(errs.length?("Errors: "+errs.join("; ")):"PracticeHub may not serve that range, or keys aren’t set."); }
+      document.getElementById("status").textContent=errs.length?(errs.length+" clinic error(s)"):"no data";
+      return;
+    }
+    BROUGHT_ERR="";
+    var keep=sel.value;
     sel.innerHTML="<option value='all'>All months (table)</option><option value='bank'>Pay + brought-in (per chiro)</option><option value='pva'>PVA history (sheets)</option>"+MONTHS.slice().reverse().map(function(m){return "<option value='"+m+"'>"+m+"</option>";}).join("");
+    if(keep){var has=Array.prototype.some.call(sel.options,function(o){return o.value===keep;}); if(has)sel.value=keep;}
     document.getElementById("status").textContent=names.length+" practitioners · "+MONTHS.length+" months"+(errs.length?(" · "+errs.length+" clinic error(s)"):"");
     rerender();
   }
