@@ -2137,12 +2137,12 @@ button{padding:9px 16px;border:none;background:#2563EB;color:#fff;border-radius:
 table{border-collapse:collapse;font-size:12.5px;white-space:nowrap}td,th{padding:7px 9px;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}th{color:#64748b;font-size:11px;text-align:right}th:first-child,td:first-child{text-align:left}
 .ex{color:#b45309;font-size:10px;border:1px solid #fcd34d;background:#fffbeb;border-radius:4px;padding:1px 5px;margin-left:6px}
 .warn{background:#fef3c7;color:#92400e;padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:12px}a{color:#2563EB}</style></head><body>
-<h1>Practitioner earnings history</h1><div class="sub">Estimated from PracticeHub completed visits \u00d7 \u20ac${PRICE_PER_VISIT}. Pull as far back as PracticeHub serves \u2014 ex-chiros included. Actual pay for Nick, Holly &amp; Courtney is read from the MT940 bank statements.</div>
+<h1>Practitioner earnings history</h1><div class="sub">Estimated from PracticeHub completed visits \u00d7 \u20ac${PRICE_PER_VISIT}. Pull as far back as PracticeHub serves \u2014 ex-chiros included. Actual pay (Nick, Holly, Courtney, Maria, Matthew &amp; Myles) is read from the MT940 bank statements. Lara &amp; Annefloor are paid through payroll, so they are not itemised as named bank transfers \u2014 their pay is modelled on /profit. A PVA history view shows past performance (incl. Nick, Holly, Courtney).</div>
 <div class="warn">This is an <b>estimate</b> (visits \u00d7 price), not exact euros, and it reads live from PracticeHub per clinic \u2014 a deep pull can take a moment. Increase \u201cmonths back\u201d until older months stop appearing; that\u2019s as far as the API will serve.</div>
 <div class="controls">
   <div><label>Months back</label><input type="number" id="hmonths" value="6" min="1" max="36"></div>
   <button onclick="loadHistory()">Pull from PracticeHub</button>
-  <div><label>View month</label><select id="monthFocus" onchange="rerender()" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px"><option value="all">All months (table)</option><option value="bank">Actual pay history (bank)</option></select></div>
+  <div><label>View month</label><select id="monthFocus" onchange="rerender()" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px"><option value="all">All months (table)</option><option value="bank">Actual pay history (bank)</option><option value="pva">PVA history (sheets)</option></select></div>
   <span id="status" style="color:#64748b;font-size:13px"></span>
 </div>
 <div class="card"><div id="tbl">Set months back and click Pull.</div></div>
@@ -2155,8 +2155,9 @@ function eur(n){return "€"+Math.round(n||0).toLocaleString("en-US");}
 function exTag(n){var f=(n.split(" ")[0]||"").toLowerCase();return CURRENT.indexOf(f)<0?"<span class='ex'>ex</span>":"";}
 function laraTier(r){return 0.375*Math.min(r,5000)+0.425*Math.max(0,Math.min(r,10000)-5000)+0.45*Math.max(0,r-10000);}
 function nickThreshold(name,beforeMonth){var d=0;MONTHS.filter(function(m){return m<beforeMonth;}).forEach(function(m){var rev=(BYNAME[name]&&BYNAME[name][m])||0;var T=15000+d;d=(rev>=T)?0:(T-rev);});return 15000+d;}
-var BANK_PAY={"Nick Bunger":{"2022-10":10540.5,"2022-12":12126.12,"2023-01":4994.5,"2023-02":4253.3,"2023-04":6606.25,"2023-05":4555.25,"2023-06":5130.65,"2023-07":10032.5,"2023-08":3250.0,"2023-09":2391.0,"2023-10":8588.8,"2023-11":4500.0,"2023-12":10630.0,"2024-02":6145.0,"2024-03":7822.5,"2024-04":4500.0,"2024-05":1500.0,"2024-06":4500.0,"2024-07":4500.0,"2024-08":4800.0,"2024-09":4815.0,"2024-10":4787.5,"2024-11":5095.0,"2024-12":6065.0,"2025-01":4500.0,"2025-02":4500.0,"2025-03":4500.0,"2025-04":4500.0,"2025-05":4500.0,"2025-06":6034.0,"2025-07":6322.5,"2025-08":3000.0,"2025-09":6000.0,"2025-10":3000.0,"2025-11":4500.0,"2025-12":4500.0},"Holly Schonberger":{"2022-10":303.0,"2023-01":4200.0,"2023-02":8650.0,"2023-03":4325.2,"2023-04":1050.0,"2023-05":7350.0,"2023-06":4200.0,"2023-07":4200.0,"2023-08":4200.0,"2023-10":4200.0,"2023-11":5100.0,"2023-12":8472.0,"2024-01":4200.0,"2024-03":8400.0,"2024-04":4200.0,"2024-06":8400.0,"2024-07":4200.0,"2024-08":3500.0,"2024-09":4900.0,"2024-11":4200.0,"2024-12":8400.0,"2025-02":8400.0,"2025-03":2261.54},"Courtney Rokowski":{"2024-07":925.0,"2024-08":1258.0,"2024-09":2401.0,"2024-10":1339.0,"2024-11":1295.63,"2024-12":1900.5,"2025-01":5167.38,"2025-02":2933.0,"2025-03":3700.38,"2025-05":2357.0,"2025-06":2398.0,"2025-07":2247.0,"2025-08":2217.0}};
-function bankKey(name){var n=name.toLowerCase();if(n.indexOf("bunger")>=0)return "Nick Bunger";if(n.indexOf("schonberger")>=0)return "Holly Schonberger";if(n.indexOf("rokowski")>=0||n.indexOf("rakowski")>=0)return "Courtney Rokowski";return null;}
+var BANK_PAY={"Nick Bunger":{"2022-10":10540.5,"2022-12":12126.12,"2023-01":4994.5,"2023-02":4253.3,"2023-04":6606.25,"2023-05":4555.25,"2023-06":5130.65,"2023-07":10032.5,"2023-08":3250.0,"2023-09":2391.0,"2023-10":8588.8,"2023-11":4500.0,"2023-12":10630.0,"2024-02":6145.0,"2024-03":7822.5,"2024-04":4500.0,"2024-05":1500.0,"2024-06":4500.0,"2024-07":4500.0,"2024-08":4500.0,"2024-09":4815.0,"2024-11":5095.0,"2024-12":6065.0,"2025-01":4500.0,"2025-02":4500.0,"2025-03":4500.0,"2025-04":4500.0,"2025-05":4500.0,"2025-06":6034.0,"2025-07":6322.5,"2025-08":3000.0,"2025-09":6000.0,"2025-10":3000.0,"2025-11":4500.0,"2025-12":4500.0},"Holly Schonberger":{"2023-01":4200.0,"2023-02":8650.0,"2023-03":4325.2,"2023-04":1050.0,"2023-05":7350.0,"2023-06":4200.0,"2023-07":4200.0,"2023-08":4200.0,"2023-10":4200.0,"2023-11":5100.0,"2023-12":8472.0,"2024-01":4200.0,"2024-03":8400.0,"2024-04":4200.0,"2024-06":8400.0,"2024-08":3500.0,"2024-09":4200.0,"2024-11":4200.0,"2024-12":8400.0,"2025-02":8400.0,"2025-03":2261.54},"Courtney Rokowski":{"2024-07":925.0,"2024-08":1258.0,"2024-09":2401.0,"2024-10":1339.0,"2024-11":1295.63,"2024-12":1900.5,"2025-01":5167.38,"2025-02":2933.0,"2025-03":3700.38,"2025-05":2357.0,"2025-06":2398.0,"2025-07":2247.0,"2025-08":2217.0},"Maria Feiler":{"2023-12":3672.0,"2024-01":3232.8,"2024-02":3672.0,"2024-03":3672.0,"2024-04":3672.0,"2024-05":3672.0,"2024-06":3672.0,"2024-07":3672.0,"2024-08":3672.0,"2024-09":3672.0},"Matthew Horgan":{"2026-02":2850.75,"2026-03":4570.69,"2026-04":4604.52,"2026-05":4094.16},"Myles Drakes":{"2026-04":4241.04,"2026-05":4548.86}};
+var PVA_HISTORY={"Nick":{"2025-01":8.913,"2025-02":12.066,"2025-03":11.26,"2025-04":16.3,"2025-05":12.6,"2025-06":9.5,"2025-07":10.5,"2025-08":11.0,"2025-09":13.41,"2025-10":20.2,"2025-11":12.6},"Holly":{"2025-01":8.611,"2025-02":13.09,"2025-03":12.2},"Courtney":{"2025-01":7.0,"2025-02":8.285,"2025-03":8.47,"2025-04":8.9,"2025-05":9.7,"2025-06":5.9,"2025-07":11.11},"Myles":{"2025-08":3.1,"2025-09":10.06,"2025-10":8.9,"2025-11":8.0,"2025-12":7.8},"Annefloor":{"2025-12":8.5}};
+function bankKey(name){var n=name.toLowerCase();if(n.indexOf("bunger")>=0)return "Nick Bunger";if(n.indexOf("schonberger")>=0)return "Holly Schonberger";if(n.indexOf("rokowski")>=0||n.indexOf("rakowski")>=0)return "Courtney Rokowski";if(n.indexOf("feiler")>=0||n.indexOf("frier")>=0||n.indexOf("align")>=0||n==="maria"||n.indexOf("maria ")>=0)return "Maria Feiler";if(n.indexOf("horgan")>=0||n==="matthew"||n.indexOf("matthew ")>=0)return "Matthew Horgan";if(n.indexOf("drakes")>=0||n==="myles"||n.indexOf("myles ")>=0)return "Myles Drakes";return null;}
 function bankPay(name,month){var k=bankKey(name);return (k&&BANK_PAY[k]&&BANK_PAY[k][month]!=null)?BANK_PAY[k][month]:null;}
 function renderBankHistory(){
   var people=Object.keys(BANK_PAY), set={};
@@ -2180,7 +2181,7 @@ function loadHistory(){
     var names=Object.keys(byName);
     if(!names.length){document.getElementById("tbl").innerHTML="No data returned. "+(errs.length?("Errors: "+errs.join("; ")):"PracticeHub may not serve that range, or keys aren’t set.");return;}
     var sel=document.getElementById("monthFocus");
-    sel.innerHTML="<option value='all'>All months (table)</option><option value='bank'>Actual pay history (bank)</option>"+MONTHS.slice().reverse().map(function(m){return "<option value='"+m+"'>"+m+"</option>";}).join("");
+    sel.innerHTML="<option value='all'>All months (table)</option><option value='bank'>Actual pay history (bank)</option><option value='pva'>PVA history (sheets)</option>"+MONTHS.slice().reverse().map(function(m){return "<option value='"+m+"'>"+m+"</option>";}).join("");
     document.getElementById("status").textContent=names.length+" practitioners · "+MONTHS.length+" months"+(errs.length?(" · "+errs.length+" clinic error(s)"):"");
     rerender();
   }
@@ -2196,7 +2197,21 @@ function loadHistory(){
   }
   next();
 }
-function rerender(){var f=document.getElementById("monthFocus").value; if(f==="all")renderAll(); else if(f==="bank")renderBankHistory(); else renderMonth(f);}
+function renderPvaHistory(){
+  var people=Object.keys(PVA_HISTORY), set={};
+  people.forEach(function(p){Object.keys(PVA_HISTORY[p]).forEach(function(m){set[m]=1;});});
+  var ms=Object.keys(set).sort();
+  if(!ms.length){document.getElementById("tbl").innerHTML="No PVA history available.";return;}
+  var h="<table><thead><tr><th>Practitioner</th>"; ms.forEach(function(m){h+="<th>"+m+"</th>";}); h+="<th>Avg</th></tr></thead><tbody>";
+  people.sort().forEach(function(p){
+    h+="<tr><td>"+p+exTag(p)+"</td>"; var sum=0,n=0;
+    ms.forEach(function(m){var v=PVA_HISTORY[p][m]; if(v!=null){sum+=v;n++;h+="<td class='num'>"+v.toFixed(1)+"</td>";} else h+="<td class='num'>·</td>";});
+    h+="<td class='num'><b>"+(n?(sum/n).toFixed(1):"·")+"</b></td></tr>";
+  });
+  h+="</tbody></table>";
+  document.getElementById("tbl").innerHTML=h+"<div style='color:#94a3b8;font-size:11.5px;margin-top:8px'>Monthly PVA (patient-visit-average) from your PVA sheets \u2014 2025, including chiros who have left. Higher = patients staying in care longer. This view is from the sheets, so it works without pulling PracticeHub.</div>";
+}
+function rerender(){var f=document.getElementById("monthFocus").value; if(f==="all")renderAll(); else if(f==="bank")renderBankHistory(); else if(f==="pva")renderPvaHistory(); else renderMonth(f);}
 function renderAll(){
   var ms=MONTHS, names=Object.keys(BYNAME).sort(function(a,b){var ta=0,tb=0;ms.forEach(function(m){ta+=BYNAME[a][m]||0;tb+=BYNAME[b][m]||0;});return tb-ta;});
   var h="<table><thead><tr><th>Practitioner</th>"; ms.forEach(function(m){h+="<th>"+m+"</th>";}); h+="<th>Total</th></tr></thead><tbody>";
