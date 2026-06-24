@@ -309,6 +309,29 @@ async function chiroBaselines(days = 30) {
 
 // ── Turn a revenue target into each chiro's visit + PVA goal ──────────────────
 const PRICE_PER_VISIT = 59;
+
+// Dutch 2026 net take-home estimate from a gross box-1 employment salary.
+// Brackets (under AOW): 35.75% \u2264\u20ac38,883 \u00b7 37.56% \u20ac38,883\u2013\u20ac78,426 \u00b7 49.50% >\u20ac78,426.
+// Credits: algemene heffingskorting (max \u20ac3,115, \u22126.398% from \u20ac29,736, \u20ac0 at \u20ac78,426)
+// and arbeidskorting (max \u20ac5,685, \u22126.51% from \u20ac45,592). The 30% ruling makes only
+// 70% of gross taxable, and the credits are computed on that lower base too (which
+// is why it lifts net by more than a flat 30%). Estimate only \u2014 ignores pension
+// contributions and assumes employee (employer pays the Zvw contribution).
+function dutchNet2026(gross, ruling30){
+  if(!gross || gross<=0) return 0;
+  const taxable = ruling30 ? gross*0.70 : gross;
+  const b1=38883, b2=78426, r1=0.3575, r2=0.3756, r3=0.4950;
+  let tax = Math.min(taxable,b1)*r1;
+  if(taxable>b1) tax += (Math.min(taxable,b2)-b1)*r2;
+  if(taxable>b2) tax += (taxable-b2)*r3;
+  let ahk = taxable>29736 ? Math.max(0, 3115-0.06398*(taxable-29736)) : 3115;
+  let ak  = taxable>45592 ? Math.max(0, 5685-0.0651*(taxable-45592)) : 5685;
+  const netTax = Math.max(0, tax - ahk - ak);
+  return Math.round(gross - netTax);
+}
+// Who holds the 30% ruling (expats recruited from abroad). Env-overridable.
+const RULING30 = new Set((process.env.RULING30 || "Myles,Matthew").split(",").map(s=>s.trim()).filter(Boolean));
+
 function chiroGoals(target, baselines) {
   const sumV = baselines.reduce((s, b) => s + b.visits, 0) || 1;
   const reqMonthlyVisits = (target / 12) / PRICE_PER_VISIT;
@@ -2069,6 +2092,7 @@ function goalProgress(b, g, days){
   else if(g.perDay) pct=perDayNow/g.perDay;
   return { hasGoal, type, visits30, weekNow, perDayNow, monthRev, annualRun,
     bruttoMonthNow, bruttoAnnualNow, bruttoBase:bm.base, bruttoComm:bm.commission, bruttoHoliday:bm.holiday, owner:!!bm.owner,
+    ruling30: RULING30.has(name), nettoAnnualNow: bm.owner ? null : dutchNet2026(bruttoAnnualNow, RULING30.has(name)),
     annualGoal, broughtInGoal, bruttoGoal, weekNeeded, perDayNeeded, revNeededMonth, gapWeek,
     pvaNow:b.pva, pvaTarget:g.pva||null, intakes:b.intakes, cadence:g.cadence||2, pct,
     payNote:bm.note, payVerified:bm.verified };
@@ -2231,15 +2255,22 @@ function card(c){
   var goalIsBrutto = (g.type==="brutto");
   var needLine="";
   if(c.hasGoal && c.weekNeeded!=null){
-    if(goalIsBrutto) needLine = "To earn "+eur(c.bruttoGoal)+" brutto/yr, needs ~"+eur(c.broughtInGoal)+" brought in \u2192 <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+(c.gapWeek>0.5?"<b style='color:#b45309'>~"+Math.round(c.gapWeek)+"/wk to find</b>":"<b style='color:#16a34a'>on track</b>");
-    else needLine = "Needs <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+(c.gapWeek>0.5?"<b style='color:#b45309'>~"+Math.round(c.gapWeek)+"/wk to find</b>":"<b style='color:#16a34a'>on track</b>");
+    var pv = (c.weekNeeded && c.broughtInGoal) ? Math.round(c.broughtInGoal/(c.weekNeeded*52)) : null;
+    var aheadPct = c.broughtInGoal ? Math.round(c.annualRun / c.broughtInGoal * 100) : null;
+    var basis = (c.broughtInGoal && c.weekNeeded) ? " <span style='color:#94a3b8;font-weight:400'>(~"+Math.round(c.weekNeeded)+"/wk \u00d7 52 wk"+(pv?" \u00d7 \u20ac"+pv+"/visit":"")+" \u2248 "+eur(c.broughtInGoal)+"/yr)</span>" : "";
+    var status;
+    if(c.gapWeek>0.5) status = "<b style='color:#b45309'>~"+Math.round(c.gapWeek)+"/wk to find</b>";
+    else if(aheadPct!=null && aheadPct>=110) status = "<b style='color:#16a34a'>ahead</b> \u2014 ~"+Math.round(c.weekNow)+"/wk now vs ~"+Math.round(c.weekNeeded)+"/wk for the goal; pacing "+eur(c.annualRun)+" vs "+eur(c.broughtInGoal)+" (~"+aheadPct+"%)"+(aheadPct>=130?" <span style='color:#b45309'>\u00b7 goal is below their pace, consider raising it</span>":"");
+    else status = "<b style='color:#16a34a'>on track</b>";
+    if(goalIsBrutto) needLine = "To earn "+eur(c.bruttoGoal)+" brutto/yr, needs ~"+eur(c.broughtInGoal)+" brought in \u2192 <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+status+basis;
+    else needLine = "Needs <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+status+basis;
   }
   var pvaLine="PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b>"+(c.pvaTarget?(" / target "+c.pvaTarget):"")+" \u00b7 intakes "+(c.intakes||0)+" (30d)";
   return "<div class='card' data-name='"+c.n+"' data-v='"+c.visits30+"' data-pva='"+(c.pvaNow==null?'':c.pvaNow)+"' data-int='"+(c.intakes||0)+"' data-days='"+c.days+"'>"
     +"<div class='gname'>"+c.n+" <span class='gclin'>"+(c.clinics||[]).join(" + ")+"</span>"+tagFor(c)+(c.payVerified?"":" <span class='tag est'>pay = estimate</span>")+(c.phone?"":" <span class='gclin' style='color:#dc2626'>(no phone)</span>")+"</div>"
     +"<div class='twocol'>"
     +"<div class='box clinicbox'><div class='lbl'>Brings into clinic (pace)</div><div class='big'>"+eur(c.annualRun)+"/yr</div><div class='det'>~"+Math.round(c.weekNow)+" visits/wk \u00b7 "+eur(c.monthRev)+"/mo</div></div>"
-    +"<div class='box bruttobox'><div class='lbl'>Brutto pay (pace)</div><div class='big'>"+(isOwner?"\u2014":eur(c.bruttoAnnualNow)+"/yr")+"</div><div class='det'>"+bruttoDetail+"</div></div>"
+    +"<div class='box bruttobox'><div class='lbl'>Brutto pay (pace)</div><div class='big'>"+(isOwner?"\u2014":eur(c.bruttoAnnualNow)+"/yr")+"</div><div class='det'>"+bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"")+"</div></div>"
     +"</div>"
     +"<div class='row'>"
     +"<div><label>Goal is</label><select data-f='type'><option value='brought_in'"+(goalIsBrutto?"":" selected")+">\u20ac brought into clinic</option><option value='brutto'"+(goalIsBrutto?" selected":"")+">\u20ac brutto take-home</option></select></div>"
