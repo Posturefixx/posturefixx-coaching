@@ -560,7 +560,7 @@ app.get("/kpi", gate, async (req, res) => {
 });
 
 // ── PLAN DATA — one PracticeHub pull, returns each chiro's real numbers as JSON ─
-const PLAN_DAYS = { Myles: 3.5, Lara: 3.5, Matthew: 4, Alex: 3 }; // days worked/week
+const PLAN_DAYS = { Myles: 4, Lara: 3.5, Matthew: 4, Alex: 3 }; // days worked/week
 const MAX_PER_DAY = 45;   // a chiro can realistically see ~40-50/day — change here anytime
 
 app.get("/plan/data", gate, async (_req, res) => {
@@ -2051,6 +2051,42 @@ function bruttoMonthly(name, R, monthNum){
 function revForBrutto(name, targetMonthlyBrutto, monthNum){
   let lo=0, hi=100000; for(let i=0;i<44;i++){ const mid=(lo+hi)/2; if(bruttoMonthly(name,mid,monthNum).total < targetMonthlyBrutto) lo=mid; else hi=mid; } return (lo+hi)/2;
 }
+// Inverse of dutchNet2026: the gross brutto that yields a target annual net.
+function grossForNet(targetNet, ruling30){
+  let lo=0, hi=600000; for(let i=0;i<48;i++){ const mid=(lo+hi)/2; if(dutchNet2026(mid,ruling30) < targetNet) lo=mid; else hi=mid; } return (lo+hi)/2;
+}
+// THE SOLVER. One knob in, everything out. Core identity: monthly visits =
+// avg monthly intakes (live, fixed) × PVA. Days/week is fixed per chiro. From any
+// one of {brought_in, brutto, netto, pva, perday} we back out monthly visits and
+// then derive every other figure. mode/value is the single thing the user sets.
+function solvePlan(name, mode, value, intakes, days, ruling30, mNum){
+  const P=PRICE_PER_VISIT, WPM=4.33;
+  value=Number(value);
+  if(!mode || !isFinite(value) || value<=0) return { ok:false };
+  let monthlyVisits;
+  if(mode==="brought_in")      monthlyVisits = value/12/P;
+  else if(mode==="brutto")     monthlyVisits = revForBrutto(name, value/12, mNum)/P;
+  else if(mode==="netto")      monthlyVisits = revForBrutto(name, grossForNet(value, ruling30)/12, mNum)/P;
+  else if(mode==="pva"){ if(!(intakes>0)) return { ok:false, err:"no intake data yet" }; monthlyVisits = value*intakes; }
+  else if(mode==="perday")     monthlyVisits = value*(days||3.5)*WPM;
+  else return { ok:false };
+  const broughtIn = monthlyVisits*12*P;
+  const brutto    = bruttoMonthly(name, monthlyVisits*P, mNum).total*12;
+  const netto     = dutchNet2026(brutto, ruling30);
+  const pva       = intakes>0 ? monthlyVisits/intakes : null;
+  const perWeek   = monthlyVisits/WPM;
+  const perDay    = (days>0) ? perWeek/days : null;
+  return { ok:true, mode, value, monthlyVisits, broughtIn, brutto, netto, pva, perWeek, perDay, intakes, days };
+}
+// Map a stored goal (annual+type / pva / perDay) to a single (mode,value) knob.
+function goalToInput(g){
+  if(!g) return null;
+  if(g.setMode && g.setValue!=null) return { mode:g.setMode, value:g.setValue };
+  if(g.annual!=null) return { mode: g.type==="brutto" ? "brutto" : "brought_in", value:g.annual };
+  if(g.pva!=null) return { mode:"pva", value:g.pva };
+  if(g.perDay!=null) return { mode:"perday", value:g.perDay };
+  return null;
+}
 // === PAY STRUCTURES END ===
 
 function parseGoalsCSV(csv){
@@ -2076,25 +2112,29 @@ function goalProgress(b, g, days){
   const monthRev=visits30*P, annualRun=monthRev*12;
   const bm=bruttoMonthly(name, monthRev, mNum);
   const bruttoMonthNow=bm.total, bruttoAnnualNow=bruttoMonthNow*12;
-  const type = (g.type==="brutto") ? "brutto" : "brought_in";
-  let annualGoal = g.annual!=null ? g.annual : (g.perDay ? g.perDay*wkDays*4.33*P*12 : null);
-  let weekNeeded=null, perDayNeeded=null, revNeededMonth=null, broughtInGoal=null, bruttoGoal=null;
-  const hasGoal = !!(annualGoal || g.perDay);
-  if(annualGoal!=null){
-    if(type==="brutto"){ bruttoGoal=annualGoal; revNeededMonth=revForBrutto(name, annualGoal/12, mNum); broughtInGoal=revNeededMonth*12; }
-    else { broughtInGoal=annualGoal; revNeededMonth=annualGoal/12; bruttoGoal=bruttoMonthly(name, revNeededMonth, mNum).total*12; }
-    const monthVisitsNeeded=revNeededMonth/P; weekNeeded=monthVisitsNeeded/4.33; perDayNeeded=weekNeeded/wkDays;
-  } else if(g.perDay){ perDayNeeded=g.perDay; weekNeeded=g.perDay*wkDays; revNeededMonth=weekNeeded*4.33*P; broughtInGoal=revNeededMonth*12; bruttoGoal=bruttoMonthly(name, revNeededMonth, mNum).total*12; }
+  const ruling30 = RULING30.has(name);
+  const nettoAnnualNow = bm.owner ? null : dutchNet2026(bruttoAnnualNow, ruling30);
+  // ---- Target: ONE knob set, everything else solved (visits = intakes × PVA) ----
+  const input = goalToInput(g);
+  const hasGoal = !!input;
+  let sol = hasGoal ? solvePlan(name, input.mode, input.value, b.intakes||0, wkDays, ruling30, mNum) : null;
+  if(sol && !sol.ok) sol=null;
+  const tMode = input ? input.mode : null, tValue = input ? input.value : null;
+  const type = tMode==="brutto" ? "brutto" : tMode==="netto" ? "netto" : "brought_in";
+  const broughtInGoal = sol ? sol.broughtIn : null;
+  const bruttoGoal    = sol ? sol.brutto    : null;
+  const nettoGoal     = sol ? sol.netto     : null;
+  const pvaGoal       = sol ? sol.pva       : null;
+  const weekNeeded    = sol ? sol.perWeek   : null;
+  const perDayNeeded  = sol ? sol.perDay    : null;
+  const solErr        = (input && !sol) ? "needs live intake data" : null;
   const gapWeek = weekNeeded!=null ? (weekNeeded-weekNow) : null;
-  let pct=null;
-  if(type==="brutto" && bruttoGoal) pct=bruttoAnnualNow/bruttoGoal;
-  else if(annualGoal) pct=annualRun/annualGoal;
-  else if(g.perDay) pct=perDayNow/g.perDay;
-  return { hasGoal, type, visits30, weekNow, perDayNow, monthRev, annualRun,
+  let pct=null; if(broughtInGoal) pct=annualRun/broughtInGoal;
+  return { hasGoal, type, tMode, tValue, visits30, weekNow, perDayNow, monthRev, annualRun,
     bruttoMonthNow, bruttoAnnualNow, bruttoBase:bm.base, bruttoComm:bm.commission, bruttoHoliday:bm.holiday, owner:!!bm.owner,
-    ruling30: RULING30.has(name), nettoAnnualNow: bm.owner ? null : dutchNet2026(bruttoAnnualNow, RULING30.has(name)),
-    annualGoal, broughtInGoal, bruttoGoal, weekNeeded, perDayNeeded, revNeededMonth, gapWeek,
-    pvaNow:b.pva, pvaTarget:g.pva||null, intakes:b.intakes, cadence:g.cadence||2, pct,
+    ruling30, nettoAnnualNow,
+    broughtInGoal, bruttoGoal, nettoGoal, pvaGoal, weekNeeded, perDayNeeded, gapWeek, solErr,
+    pvaNow:b.pva, pvaTarget:(pvaGoal!=null?Math.round(pvaGoal*10)/10:null), intakes:b.intakes, cadence:g.cadence||2, pct,
     payNote:bm.note, payVerified:bm.verified };
 }
 
@@ -2120,9 +2160,9 @@ app.get("/goals/data", gate, async (_req,res)=>{
 
 // Live recompute for one edited card (no PracticeHub re-pull — client passes its known 30d numbers)
 app.post("/goals/recalc", gate, (req,res)=>{
-  try{ const { name, visits30, pva, intakes, days, annual, pva_target, perDay, type }=req.body||{};
+  try{ const { name, visits30, pva, intakes, days, mode, value }=req.body||{};
     const b={ n:name, visits:Number(visits30)||0, pva:(pva==null?null:Number(pva)), intakes:Number(intakes)||0 };
-    const g={ annual:(annual==null||annual===""?null:Number(annual)), pva:(pva_target==null||pva_target===""?null:Number(pva_target)), perDay:(perDay==null||perDay===""?null:Number(perDay)), type:(type==="brutto"?"brutto":"brought_in") };
+    const g={ setMode:(mode||null), setValue:(value==null||value===""?null:Number(value)), cadence:2 };
     res.json({ ok:true, ...goalProgress(b, g, Number(days)||3.5), goal:g });
   }catch(e){ res.json({ ok:false, error:e.message }); }
 });
@@ -2253,34 +2293,41 @@ function card(c){
   var bruttoDetail = isOwner ? "via holding" : (eur(c.bruttoBase*12)+" base + "+eur(c.bruttoComm*12)+" comm"+(c.bruttoHoliday?" + "+eur(c.bruttoHoliday*12)+" holiday":""));
   var pct=Math.max(0,Math.min(1,c.pct||0)); var barCol=pct>=0.98?"#16a34a":pct>=0.7?"#f59e0b":"#dc2626";
   var goalIsBrutto = (g.type==="brutto");
-  var needLine="";
-  if(c.hasGoal && c.weekNeeded!=null){
-    var pv = (c.weekNeeded && c.broughtInGoal) ? Math.round(c.broughtInGoal/(c.weekNeeded*52)) : null;
-    var aheadPct = c.broughtInGoal ? Math.round(c.annualRun / c.broughtInGoal * 100) : null;
-    var basis = (c.broughtInGoal && c.weekNeeded) ? " <span style='color:#94a3b8;font-weight:400'>(~"+Math.round(c.weekNeeded)+"/wk \u00d7 52 wk"+(pv?" \u00d7 \u20ac"+pv+"/visit":"")+" \u2248 "+eur(c.broughtInGoal)+"/yr)</span>" : "";
-    var status;
-    if(c.gapWeek>0.5) status = "<b style='color:#b45309'>~"+Math.round(c.gapWeek)+"/wk to find</b>";
-    else if(aheadPct!=null && aheadPct>=110) status = "<b style='color:#16a34a'>ahead</b> \u2014 ~"+Math.round(c.weekNow)+"/wk now vs ~"+Math.round(c.weekNeeded)+"/wk for the goal; pacing "+eur(c.annualRun)+" vs "+eur(c.broughtInGoal)+" (~"+aheadPct+"%)"+(aheadPct>=130?" <span style='color:#b45309'>\u00b7 goal is below their pace, consider raising it</span>":"");
-    else status = "<b style='color:#16a34a'>on track</b>";
-    if(goalIsBrutto) needLine = "To earn "+eur(c.bruttoGoal)+" brutto/yr, needs ~"+eur(c.broughtInGoal)+" brought in \u2192 <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+status+basis;
-    else needLine = "Needs <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+status+basis;
+  var modeLabel={brought_in:"\u20ac brought into clinic", brutto:"\u20ac brutto pay", netto:"\u20ac netto take-home", pva:"PVA", perday:"visits / day"};
+  var curMode=c.tMode||"brought_in";
+  var curVal=(c.tValue!=null?c.tValue:"");
+  function opt(v){ return "<option value='"+v+"'"+(curMode===v?" selected":"")+">"+modeLabel[v]+"</option>"; }
+  var modeSel="<select data-f='mode'>"+opt("brought_in")+opt("brutto")+opt("netto")+opt("pva")+opt("perday")+"</select>";
+  var valPlace=(curMode==="pva")?"15":(curMode==="perday")?"9":"100000";
+
+  var out="";
+  if(c.solErr){ out="<div class='need' style='color:#b45309'>Set a number to project \u2014 "+c.solErr+".</div>"; }
+  else if(c.hasGoal && c.broughtInGoal!=null){
+    var nettoStr=c.nettoGoal!=null?(" \u00b7 netto <b>"+eur(c.nettoGoal)+"</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")):"";
+    var pvaStr=c.pvaGoal!=null?("PVA <b>"+c.pvaGoal.toFixed(1)+"</b>"):"PVA <span style='color:#94a3b8'>(needs live intakes)</span>";
+    out="<div class='need'>To hit this: brought in <b>"+eur(c.broughtInGoal)+"</b> \u00b7 brutto <b>"+eur(c.bruttoGoal)+"</b>"+nettoStr+" <span style='color:#94a3b8'>est.</span></div>"
+      +"<div class='need'>"+pvaStr+" \u00b7 <b>~"+(c.perDayNeeded!=null?Math.round(c.perDayNeeded):"\u2014")+"/day</b> (\u2248"+Math.round(c.weekNeeded)+"/wk) \u2014 on <b>"+(c.intakes||0)+"</b> intakes/mo \u00d7 PVA, at <b>"+c.days+"</b> days/wk</div>";
+    var gap=c.gapWeek, cmp;
+    if(gap>0.5) cmp="<b style='color:#b45309'>~"+Math.round(gap)+"/wk short</b>";
+    else if(c.pct!=null && c.pct>=1.10) cmp="<b style='color:#16a34a'>ahead</b> (~"+Math.round(c.pct*100)+"% of target)"+(c.pct>=1.30?" <span style='color:#b45309'>\u00b7 target is below their pace, raise it</span>":"");
+    else cmp="<b style='color:#16a34a'>on track</b>";
+    out+="<div class='need'>Current pace ~"+Math.round(c.weekNow)+"/wk \u2014 "+cmp+"</div>";
   }
-  var pvaLine="PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b>"+(c.pvaTarget?(" / target "+c.pvaTarget):"")+" \u00b7 intakes "+(c.intakes||0)+" (30d)";
+  var pvaLine="Live now: PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b> \u00b7 intakes <b>"+(c.intakes||0)+"</b> (30d, PracticeHub)";
   return "<div class='card' data-name='"+c.n+"' data-v='"+c.visits30+"' data-pva='"+(c.pvaNow==null?'':c.pvaNow)+"' data-int='"+(c.intakes||0)+"' data-days='"+c.days+"'>"
     +"<div class='gname'>"+c.n+" <span class='gclin'>"+(c.clinics||[]).join(" + ")+"</span>"+tagFor(c)+(c.payVerified?"":" <span class='tag est'>pay = estimate</span>")+(c.phone?"":" <span class='gclin' style='color:#dc2626'>(no phone)</span>")+"</div>"
     +"<div class='twocol'>"
     +"<div class='box clinicbox'><div class='lbl'>Brings into clinic (pace)</div><div class='big'>"+eur(c.annualRun)+"/yr</div><div class='det'>~"+Math.round(c.weekNow)+" visits/wk \u00b7 "+eur(c.monthRev)+"/mo</div></div>"
-    +"<div class='box bruttobox'><div class='lbl'>Brutto pay (pace)</div><div class='big'>"+(isOwner?"\u2014":eur(c.bruttoAnnualNow)+"/yr")+"</div><div class='det'>"+bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"")+"</div></div>"
+    +"<div class='box bruttobox'><div class='lbl'>Brutto / netto pay (pace)</div><div class='big'>"+(isOwner?"\u2014":eur(c.bruttoAnnualNow)+"/yr")+"</div><div class='det'>"+bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"")+"</div></div>"
     +"</div>"
     +"<div class='row'>"
-    +"<div><label>Goal is</label><select data-f='type'><option value='brought_in'"+(goalIsBrutto?"":" selected")+">\u20ac brought into clinic</option><option value='brutto'"+(goalIsBrutto?" selected":"")+">\u20ac brutto take-home</option></select></div>"
-    +"<div><label>Yearly \u20ac target</label><input type='number' data-f='annual' value='"+(g.annual!=null?g.annual:"")+"' placeholder='120000'></div>"
-    +"<div><label>PVA target</label><input type='number' step='0.1' data-f='pva' value='"+(g.pva!=null?g.pva:"")+"' placeholder='12'></div>"
-    +"<div><label>Visits/day</label><input type='number' step='0.1' data-f='perDay' value='"+(g.perDay!=null?g.perDay:"")+"' placeholder='opt'></div>"
+    +"<div><label>Set one of these</label>"+modeSel+"</div>"
+    +"<div><label>Value</label><input type='number' step='0.1' data-f='value' value='"+curVal+"' placeholder='"+valPlace+"'></div>"
+    +"<div style='align-self:flex-end;color:#94a3b8;font-size:12px;padding-bottom:6px'>intakes &amp; days are fixed \u2014 the other two solve</div>"
     +"<button class='btn alt' data-act='update'>Update projection</button>"
     +"</div>"
-    +(c.hasGoal?("<div class='prog'><div style='width:"+(pct*100).toFixed(0)+"%;background:"+barCol+"'></div></div>"):"<div class='need'>No goal yet — add one to project and coach toward it.</div>")
-    +(needLine?("<div class='need'>"+needLine+"</div>"):"")
+    +(c.hasGoal&&c.broughtInGoal!=null?("<div class='prog'><div style='width:"+(pct*100).toFixed(0)+"%;background:"+barCol+"'></div></div>"):"")
+    +(c.hasGoal?out:"<div class='need'>No goal yet \u2014 set one of the five above (\u20ac target, PVA, or visits/day) to project and coach toward it.</div>")
     +"<div class='need'>"+pvaLine+"</div>"
     +"<div style='margin-top:10px'><button class='btn' data-act='preview'>Preview SMS</button> <button class='btn send' data-act='send'>Send check-in</button></div>"
     +"<textarea data-ta='1'></textarea><div class='res' data-res='1'></div></div>";
@@ -2294,9 +2341,9 @@ function cardEl(name){ return document.querySelector("[data-name='"+name+"']"); 
 function readGoal(el){ var o={}; el.querySelectorAll("[data-f]").forEach(function(i){ var k=i.getAttribute("data-f"); o[k]= (i.tagName==="SELECT")?i.value:(i.value.trim()===""?null:parseFloat(i.value)); }); return o; }
 function update(name){
   var el=cardEl(name), g=readGoal(el);
-  var body={ name:name, visits30:el.getAttribute("data-v"), pva:el.getAttribute("data-pva"), intakes:el.getAttribute("data-int"), days:el.getAttribute("data-days"), annual:g.annual, pva_target:g.pva, perDay:g.perDay, type:g.type };
+  var body={ name:name, visits30:el.getAttribute("data-v"), pva:el.getAttribute("data-pva"), intakes:el.getAttribute("data-int"), days:el.getAttribute("data-days"), mode:g.mode, value:g.value };
   fetch("/goals/recalc",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){
-    if(!j.ok) return; var c=DATA.chiros.find(function(x){return x.n===name;}); var keep=c.clinics, ph=c.phone; Object.assign(c,j); c.clinics=keep; c.phone=ph; c.goal={annual:g.annual,pva:g.pva,perDay:g.perDay,type:g.type,cadence:(c.goal&&c.goal.cadence)||2}; render(); });
+    if(!j.ok) return; var c=DATA.chiros.find(function(x){return x.n===name;}); var keep=c.clinics, ph=c.phone; Object.assign(c,j); c.clinics=keep; c.phone=ph; c.goal={setMode:g.mode,setValue:g.value,cadence:(c.goal&&c.goal.cadence)||2}; render(); });
 }
 function preview(name){ var el=cardEl(name), ta=el.querySelector("[data-ta]"), res=el.querySelector("[data-res]"); res.textContent="Drafting…";
   fetch("/goals/draft?name="+encodeURIComponent(name)).then(function(r){return r.json();}).then(function(j){ if(j.ok){ta.style.display="block";ta.value=j.message;res.textContent="";}else{res.innerHTML="<span style='color:#b45309'>"+(j.error||"could not draft")+"</span>";} }).catch(function(e){res.innerHTML="<span style='color:#dc2626'>"+e+"</span>";}); }
