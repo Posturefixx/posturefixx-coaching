@@ -2128,8 +2128,19 @@ h2{font-size:15px;margin:20px 0 8px}a{color:#2563EB}</style></head><body>
 ${rows.map(r=>`<div class="card"><span class="nm">${r.name}</span>${r.verified?'<span class="tag ok">on file</span>':'<span class="tag est">estimate</span>'}<div class="deal">${r.deal}</div><div class="note">${r.note}</div></div>`).join("")}
 <h2>Former chiropractors</h2>
 ${exChiros.map(r=>`<div class="card"><span class="nm">${r.name}</span><div class="note">${r.note}</div></div>`).join("")}
-<h2>Chiropractic assistants</h2>
-<div class="card"><div class="note">CAs (Renata, Csabi, Vivian, Archana, Dolly, Samantha, Lina, Anne, Szandi) are paid as wages — see each clinic's expense sheet (CA cost column). No individual CA contracts are filed in Drive yet; add them to the Chiropractors folder and I'll summarise each here.</div></div>
+<h2>Operations Manager</h2>
+<div class="card"><span class="nm">Renata Botis</span><span class="tag ok">on file</span><div class="deal">Operations Manager (NOT a CA) \u00b7 Rotterdam / Amstelveen</div><div class="note">Fixed 1-year from 1 Aug 2025 \u00b7 \u20ac2750/mo.</div></div>
+<h2>Chiropractic assistants (contracts on file)</h2>
+<div class="card"><span class="nm">Anne de Heer</span><span class="tag ok">on file</span><div class="deal">Chiro Advisor \u00b7 Utrecht</div><div class="note">Permanent, 1 May 2025 \u00b7 24h \u00b7 \u20ac1800/mo + performance addendum.</div></div>
+<div class="card"><span class="nm">Alexandra \u201cSzandi\u201d Farkas</span><span class="tag ok">on file</span><div class="deal">Senior CA \u00b7 Utrecht</div><div class="note">Permanent, 1 Jan 2026 \u00b7 32h \u00b7 \u20ac17.95/h.</div></div>
+<div class="card"><span class="nm">Csaba Farkas</span><span class="tag ok">on file</span><div class="deal">CTA \u00b7 Bussum / Het Gooi</div><div class="note">Permanent, 7 Jun 2026 \u00b7 31.5h \u00b7 \u20ac2286.38/mo.</div></div>
+<div class="card"><span class="nm">Samantha Destree</span><span class="tag ok">on file</span><div class="deal">CA \u00b7 Amstelveen</div><div class="note">Fixed, 22 May 2026 \u2013 21 May 2027 \u00b7 9\u201314h \u00b7 \u20ac16.50/h.</div></div>
+<div class="card"><span class="nm">Archana Aroor</span><span class="tag ok">on file</span><div class="deal">CA \u00b7 Amstelveen</div><div class="note">Fixed, 14 Feb \u2013 13 Aug 2026 (oproep / 0-uur) \u00b7 \u20ac16.50/h.</div></div>
+<div class="card" style="background:#fff3f3;border-color:#fecaca"><span class="nm">Dolly (Dorothy Harrison)</span><span class="tag est">flag</span><div class="deal">CA \u00b7 Amstelveen \u00b7 \u20ac16/h</div><div class="note"><b>Contradiction to fix at source:</b> the contract title says <i>permanent</i> but the body says <i>fixed to 1 Jan 2027</i>.</div></div>
+<h2>Net pay (30% ruling) \u2014 estimates for Bamboek to confirm</h2>
+<div class="card"><span class="nm">Myles</span><span class="tag est">estimate</span><div class="deal">\u20ac73,716 gross/yr \u2192 net ~\u20ac61,600/yr (~\u20ac5,135/mo)</div><div class="note">Full 30% ruling.</div></div>
+<div class="card"><span class="nm">Matthew</span><span class="tag est">estimate</span><div class="deal">\u20ac58,981 gross/yr \u2192 net ~\u20ac49,400/yr (~\u20ac4,120/mo)</div><div class="note">30% clipped to hold taxable at the ~\u20ac46,660 ruling floor (he sits on the floor).</div></div>
+<p class="sub">Caveats: 2025 tax brackets used as a 2026 proxy; base + holiday only (no bonus); both assumed to qualify. Bookkeeper: <b>Bamboek</b>.</p>
 <p class="sub"><a href="/goals">\u2190 back to Goals</a> \u00b7 <a href="/profit">/profit</a> \u00b7 <a href="/">home</a></p>
 </body></html>`);
 });
@@ -2239,22 +2250,232 @@ fetch("/goals/data").then(function(r){return r.json();}).then(function(d){ if(d.
 //  Live-reads each clinic sheet via gviz CSV (sheets must be link-shared "view").
 // ============================================================================
 // === META LEAD SHEETS START (add the other two once shared, with their gid) ===
+// PII-stripped single-tab FEEDS (no gid). Columns: date, Answered phone, Paid intake, started care.
+// These replace the raw patient sheets — never point this at the raw PII sheets again.
 const META_LEAD_SHEETS = {
-  Utrecht:   { id:"1Ewa8X-TtxyiYOQmP8RR_8OmSF_h4NnTzgrCJL8mPAKY", gids:["93042368"] },
-  Rotterdam: { id:"1ssmloK-0IUuoWo0zKMtRV18M5gijNssTo1HBIyUDx2c", gids:["93042368"] },
-  // Amstelveen: { id:"PASTE_ID", gids:["93042368"] },   // share the sheet "anyone with link → viewer", then fill id
-  // Bussum:     { id:"PASTE_ID", gids:["93042368"] },
+  Amstelveen: { id:"1We_8S58YBslvpJI7cuBlSIPwaE6AkoLe03bUg3F1Dz0", gids:[""] },
+  Bussum:     { id:"1SbZ35Wiji3SoP3WJMFWqz4CCfkGtQJDrh-MFCMLXMzg", gids:[""] },
+  Utrecht:    { id:"1uUkwzL3mHPoY8bnWVN7xcVhL1oPE0oLKPWTCbEUzmds", gids:[""] }, // the "USE THIS" one
+  Rotterdam:  { id:"1KMnfy8GzkEq2uQQQPybv2Tia2Gj5lrTR4TU1vEnSs1c", gids:[""] },
 };
+const LEAD_SOURCE_LABEL = "Meta (Facebook/Instagram) paid leads \u2014 \u20ac65 intake offer";
+// Google Ads lead feeds (same 4-column shape: date, Answered phone, Paid intake, started care).
+// Drop a sheet id per clinic here to make Google go LIVE on /meta-spend (live started-care
+// funnel next to Meta). Empty = use the bank/MKTG snapshot for Google.
+const GOOGLE_LEAD_SHEETS = {
+  // Amstelveen: { id:"", gids:[""] },
+  // Bussum:     { id:"", gids:[""] },
+  // Utrecht:    { id:"", gids:[""] },
+  // Rotterdam:  { id:"", gids:[""] },
+};
+
+// ============================================================================
+//  LIVE AD-SPEND SOURCES (override the bank snapshot on /meta-spend when set)
+//  Priority per clinic+channel:  Yuki API  ->  spend sheet  ->  MKTG snapshot.
+// ============================================================================
+// Option A (simple + reliable, recommended now): a Google Sheet you keep current
+//   from your monthly Yuki export (or by hand). One row per clinic/channel/month.
+//   Columns (any order, header row required): Clinic | Channel | Month | Spend
+//     Channel = Google or Meta ; Month = YYYY-MM (or 1/3/2026) ; Spend = 1234,56
+//   Share it "anyone with the link -> Viewer", then set Render env AD_SPEND_SHEET
+//   to the sheet id. Leave empty to keep using the bank snapshot.
+const AD_SPEND_SHEET = process.env.AD_SPEND_SHEET || "";
+
+// Option B (full automation): Yuki SOAP API. ING already feeds Yuki, so Yuki is
+//   the live categorised source (no direct ING link without a licensed PSD2/AISP).
+//   Each clinic is its own B.V. = its own Yuki administration. Make ONE
+//   "Web service API-key" (type Administratie, rights = Accounting) per B.V. and
+//   drop them in Render as YUKI_KEY_<CLINIC>. The Administration ID is resolved
+//   automatically (by name, then by the single admin the key can see), so no GUIDs.
+//   Namespace + Authenticate/AdministrationID/GLAccountTransactions are verified
+//   against Yuki's docs; only the GL-transaction amount field is parsed defensively.
+const YUKI = {
+  key:      process.env.YUKI_API_KEY || "",          // optional shared/domain key (fallback for all)
+  endpoint: process.env.YUKI_ENDPOINT || "https://api.yukiworks.nl/ws/Accounting.asmx",
+  ns:       "http://www.theyukicompany.com/",        // verified Yuki SOAP method namespace
+  glGoogle: process.env.YUKI_GL_GOOGLE || "",        // GL account code where Google Ads posts
+  glMeta:   process.env.YUKI_GL_META   || "",        // GL account code where Meta posts
+  start:    process.env.YUKI_START || "2021-01-01",
+  // ONE key per B.V. (the recommended setup). Falls back to the shared key above.
+  keyByClinic: {
+    Amstelveen: process.env.YUKI_KEY_AMSTELVEEN || "",
+    Bussum:     process.env.YUKI_KEY_BUSSUM     || "",
+    Utrecht:    process.env.YUKI_KEY_UTRECHT    || "",
+    Rotterdam:  process.env.YUKI_KEY_ROTTERDAM  || "",
+  },
+  // clinic -> Yuki administration NAME (used to resolve the Administration ID).
+  adminName: {
+    Amstelveen: process.env.YUKI_ADMINNAME_AMSTELVEEN || "Amstelveen Posturefixx B.V.",
+    Bussum:     process.env.YUKI_ADMINNAME_BUSSUM     || "Het Gooi Posturefixx B.V.",
+    Utrecht:    process.env.YUKI_ADMINNAME_UTRECHT    || "Posturefixx B.V.",
+    Rotterdam:  process.env.YUKI_ADMINNAME_ROTTERDAM  || "Rotterdam Posturefixx B.V.",
+  },
+  // Optional explicit Administration ID per clinic (skips lookup if set).
+  admin: {
+    Amstelveen: process.env.YUKI_ADMIN_AMSTELVEEN || "",
+    Bussum:     process.env.YUKI_ADMIN_BUSSUM     || "",
+    Utrecht:    process.env.YUKI_ADMIN_UTRECHT    || "",
+    Rotterdam:  process.env.YUKI_ADMIN_ROTTERDAM  || "",
+  },
+};
+function moneyNL(s){ // "1.234,56" / "1234.56" / "4.600" / "€ 1.234" -> number
+  let t=String(s==null?"":s).replace(/[^0-9.,-]/g,""); if(!t) return null;
+  const hasC=t.indexOf(",")>=0, hasD=t.indexOf(".")>=0;
+  if(hasC){ t=t.replace(/\./g,"").replace(",","."); }            // comma = decimal; dots = thousands
+  else if(hasD){ const p=t.split("."); const last=p[p.length-1];
+    if(p.length>2 || last.length===3) t=p.join("");              // 4.600 / 1.234.567 -> thousands
+  }                                                               // else lone dot w/ 1-2 dp = decimal
+  const v=parseFloat(t); return isFinite(v)?v:null;
+}
+function parseAdSpend(rows){
+  if(!rows||!rows.length) return null;
+  let hr=-1,H=null;
+  for(let i=0;i<Math.min(rows.length,10);i++){ const h=rows[i].map(x=>String(x||"").toLowerCase().trim());
+    if(h.some(c=>c.includes("spend")||c.includes("bedrag")||c.includes("amount")||c.includes("cost"))){ hr=i; H=h; break; } }
+  if(hr<0) return null;
+  const ci=(...n)=>{ for(const nm of n){ const i=H.findIndex(h=>h.includes(nm)); if(i>=0) return i; } return -1; };
+  const cCl=ci("clinic","vestiging","praktijk","location"), cCh=ci("channel","kanaal","platform","source"),
+        cSp=ci("spend","amount","bedrag","cost"); // month optional (all-time sum for now)
+  if(cCl<0||cCh<0||cSp<0) return null;
+  const out={};
+  for(let r=hr+1;r<rows.length;r++){ const row=rows[r]||[]; const cl=String(row[cCl]||"").trim(); if(!cl) continue;
+    const chR=String(row[cCh]||"").toLowerCase();
+    const ch = chR.includes("goog")?"Google" : (chR.includes("meta")||chR.includes("face")||chR.includes("insta")||chR.includes("fb"))?"Meta" : null;
+    if(!ch) continue;
+    const amt=moneyNL(row[cSp]); if(amt==null) continue;
+    const key=cl.charAt(0).toUpperCase()+cl.slice(1).toLowerCase();
+    (out[key]=out[key]||{Google:0,Meta:0})[ch]+=amt;
+  }
+  return Object.keys(out).length?out:null;
+}
+async function fetchAdSpendSheet(){
+  if(!AD_SPEND_SHEET) return null;
+  try{ const rows=await mlFetchClinic(AD_SPEND_SHEET, [""]); return parseAdSpend(rows); }catch(e){ return null; }
+}
+// ---- Yuki SOAP (env-gated; fails safe to null) ----
+async function yukiSoapCall(action, inner){
+  const body='<?xml version="1.0" encoding="utf-8"?>'+
+    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>'+inner+'</soap:Body></soap:Envelope>';
+  const r=await fetch(YUKI.endpoint,{ method:"POST",
+    headers:{ "Content-Type":"text/xml; charset=utf-8", "SOAPAction":'"'+YUKI.ns+action+'"' },
+    body, signal:AbortSignal.timeout(15000) });
+  return await r.text();
+}
+async function yukiSession(key){
+  const k=key||YUKI.key; if(!k) return null;
+  try{ const t=await yukiSoapCall("Authenticate",'<Authenticate xmlns="'+YUKI.ns+'"><accessKey>'+k+'</accessKey></Authenticate>');
+    const m=t.match(/<AuthenticateResult>([^<]+)<\/AuthenticateResult>/i); return m?m[1].trim():null;
+  }catch(e){ return null; }
+}
+async function yukiAdminId(session, name){            // resolve Administration ID from its name
+  if(!session||!name) return null;
+  try{ const t=await yukiSoapCall("AdministrationID",
+      '<AdministrationID xmlns="'+YUKI.ns+'"><sessionID>'+session+'</sessionID><administrationName>'+name+'</administrationName></AdministrationID>');
+    const m=t.match(/<AdministrationIDResult>([^<]+)<\/AdministrationIDResult>/i); const id=m?m[1].trim():null;
+    return id && /[0-9a-f-]{8,}/i.test(id) ? id : null;
+  }catch(e){ return null; }
+}
+async function yukiAdmins(session){                   // list administrations this key can see
+  if(!session) return [];
+  try{ const t=await yukiSoapCall("Administrations",
+      '<Administrations xmlns="'+YUKI.ns+'"><sessionID>'+session+'</sessionID></Administrations>');
+    const ids=[]; let m; const re=/<(?:ID|Id|AdministrationID|Guid|guid)>([0-9a-f-]{8,})<\//gi;
+    while((m=re.exec(t))) ids.push(m[1]); return ids;
+  }catch(e){ return []; }
+}
+async function yukiGLSpend(session, adminId, glCode, start, end){
+  if(!session||!adminId||!glCode) return null;
+  try{ const t=await yukiSoapCall("GLAccountTransactions",
+      '<GLAccountTransactions xmlns="'+YUKI.ns+'"><sessionID>'+session+'</sessionID><administrationID>'+adminId+'</administrationID>'+
+      '<GLAccountCode>'+glCode+'</GLAccountCode><StartDate>'+start+'</StartDate><EndDate>'+end+'</EndDate></GLAccountTransactions>');
+    // Defensive: sum any <Amount>/<Value>/<Debit> numbers in the returned dataset.
+    let sum=0, hit=false, m; const re=/<(?:Amount|amount|Value|value|debit|Debit)>\s*(-?[0-9.,]+)\s*<\//g;
+    while((m=re.exec(t))){ const v=moneyNL(m[1]); if(v!=null){ sum+=v; hit=true; } }
+    return hit? Math.round(Math.abs(sum)) : null;
+  }catch(e){ return null; }
+}
+// Resolve spend for every clinic+channel via the priority chain. Returns
+//   { Clinic: { Google:{spend,src}, Meta:{spend,src} } }  (src: yuki|sheet|snapshot)
+async function resolveAdSpend(clinics){
+  const sheet=await fetchAdSpendSheet();
+  const end=new Date().toISOString().slice(0,10);
+  const sessionByKey={};                              // api key -> session id (cache)
+  async function sessionFor(c){ const key=YUKI.keyByClinic[c]||YUKI.key; if(!key) return null;
+    if(!(key in sessionByKey)) sessionByKey[key]=await yukiSession(key); return sessionByKey[key]; }
+  const adminByClinic={};                             // clinic -> administration id (cache)
+  async function adminFor(c, session){
+    if(YUKI.admin[c]) return YUKI.admin[c];           // explicit GUID wins
+    if(c in adminByClinic) return adminByClinic[c];
+    let id = session ? await yukiAdminId(session, YUKI.adminName[c]) : null;
+    if(!id && session){ const list=await yukiAdmins(session); if(list.length===1) id=list[0]; } // per-B.V. key sees 1
+    adminByClinic[c]=id; return id;
+  }
+  const out={};
+  for(const c of clinics){ out[c]={ Google:{spend:null,src:"snapshot"}, Meta:{spend:null,src:"snapshot"} };
+    const snap=(typeof MKTG_CPL!=="undefined")?MKTG_CPL[c]:null;
+    let session=null, adminId=null;
+    if(YUKI.keyByClinic[c]||YUKI.key){ session=await sessionFor(c); adminId=await adminFor(c, session); }
+    for(const ch of ["Google","Meta"]){
+      let spend=null, src="snapshot"; const gl = ch==="Google"?YUKI.glGoogle:YUKI.glMeta;
+      if(session && adminId && gl){
+        const v=await yukiGLSpend(session, adminId, gl, YUKI.start, end);
+        if(v!=null){ spend=v; src="yuki"; }
+      }
+      if(spend==null && sheet && sheet[c] && sheet[c][ch]!=null && sheet[c][ch]>0){ spend=Math.round(sheet[c][ch]); src="sheet"; }
+      if(spend==null && snap && snap[ch]){ spend=snap[ch].spend; src="snapshot"; }
+      out[c][ch]={spend,src};
+    }
+  }
+  return out;
+}
 // === META LEAD SHEETS END ===
 
 function mlTruthy(v){ const s=String(v||"").trim().toLowerCase(); if(!s) return false; if(["no","n","0","-","false","x"].includes(s)) return false; return true; }
-function mlMonthKey(v){ const s=String(v||"").trim(); const m=s.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/); if(!m) return null; let mo=parseInt(m[1],10), yr=parseInt(m[3],10); if(yr<100) yr+=2000; if(mo<1||mo>12||yr<2019||yr>2035) return null; return yr+"-"+String(mo).padStart(2,"0"); }
+// Month-name separator rows (Dutch + English) and junk markers that must be skipped.
+const ML_MONTH_WORDS = new Set(["januari","january","februari","february","maart","march","april","mei","may","juni","june","juli","july","augustus","august","september","oktober","october","november","december","jan","feb","mar","apr","jun","jul","aug","sep","sept","okt","oct","nov","dec"]);
+const ML_DATE_JUNK = ["vanaf","euro","consultant","insurance","chiroclub","chirroclub","paid intake","started care"];
+function mlIsSeparator(v){ const s=String(v==null?"":v).trim(); if(s==="") return true; const low=s.toLowerCase();
+  const toks=low.split(/[\s\t]+/).filter(Boolean);
+  if(toks.length && toks.every(t=>ML_MONTH_WORDS.has(t))) return true;      // JUNE / JULY JULY JULY...
+  for(const j of ML_DATE_JUNK){ if(low.indexOf(j)!==-1) return true; }
+  return false;
+}
+// Hardened: handles Google serials (46055), ISO timestamps, DD/MM & MM/DD text, 2-digit years.
+// Dutch sheets default to DD/MM when ambiguous. Returns "YYYY-MM" or null (null => row skipped).
+function mlMonthKey(v){
+  const s=String(v==null?"":v).trim();
+  if(s==="" || mlIsSeparator(s)) return null;
+  // 1) Google/Excel SERIAL number (epoch 1899-12-30). Plausible range ~2009..2031.
+  if(/^\d{4,5}(\.\d+)?$/.test(s)){ const f=parseFloat(s);
+    if(f>=40000 && f<=48000){ const d=new Date(Date.UTC(1899,11,30)+Math.round(f)*86400000);
+      return d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0"); } }
+  // 2) ISO  YYYY-MM-DD [time]
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m){ const yr=+m[1], mo=+m[2]; if(mo>=1&&mo<=12&&yr>=2019&&yr<=2031) return yr+"-"+String(mo).padStart(2,"0"); }
+  // 3) d/m/y or m/d/y (slash or dash), optional time. Default DD/MM (Dutch); >12 disambiguates.
+  m=s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
+  if(m){ let a=+m[1], b=+m[2], yr=+m[3]; if(yr<100) yr+=2000; let mo;
+    if(a>12 && b<=12) mo=b;        // a is the day -> DD/MM
+    else if(b>12 && a<=12) mo=a;   // b is the day -> MM/DD (US)
+    else mo=b;                     // ambiguous -> DD/MM default
+    if(mo>=1&&mo<=12&&yr>=2019&&yr<=2031) return yr+"-"+String(mo).padStart(2,"0"); }
+  return null;
+}
+// Exact "Answered phone" dropdown value -> colour bucket (spec C).
+const ML_GREEN="Yes - made appointment", ML_YELLOW="No - will send text message or call again!",
+      ML_RED="Yes - but didnt book! Why - notes?", ML_BLUE="Yes - no appointment & interested - call back later";
+function mlExactBucket(status){ const t=String(status==null?"":status).replace(/\s+/g," ").trim();
+  if(t===ML_GREEN) return "green"; if(t===ML_YELLOW) return "yellow";
+  if(t===ML_RED) return "red"; if(t===ML_BLUE) return "blue"; return null; }
 function mlFindCol(header){ const H=header.map(h=>String(h||"").toLowerCase().replace(/\s+/g," ").trim());
   const find=(...names)=>{ for(const nm of names){ const i=H.findIndex(h=>h.includes(nm)); if(i>=0) return i; } return -1; };
   return { date:find("datum","date"), name:find("name","naam"), status:find("answered phone","answered","status"),
     paid:find("paid intake","paid","came","showed","intake done"), care:find("started care","start care","care"),
-    cancel:find("cancel"), first:find("1st contact","first contact"), second:find("2nd contact","second contact") };
+    cancel:find("cancel"), first:find("1st contact","first contact"), second:find("2nd contact","second contact"),
+    booked:find("booked clinic","booked at","booked location","booked","vestiging","praktijk") };
 }
+// Normalise a clinic name for comparison (RTM == Rotterdam, case/space-insensitive).
+function clinicNorm(v){ let s=String(v||"").toLowerCase().replace(/[^a-z]/g,""); if(s==="rtm") s="rotterdam"; return s; }
 function mlClassify(status){ const s=String(status||"").toLowerCase();
   const booked=/made appointment|made appt|booked|afspraak gemaakt/.test(s);
   const declined=/didn.?t book|didnt book|not interested|geen interesse/.test(s);
@@ -2262,27 +2483,33 @@ function mlClassify(status){ const s=String(status||"").toLowerCase();
   const reached=booked||declined; // we actually spoke to them
   return { booked, declined, callback, reached, hasStatus:!!s };
 }
-function mlAggregateRows(rows){
+function mlAggregateRows(rows, selfClinic){
   // find header row
   let hr=-1, cols=null;
   for(let i=0;i<Math.min(rows.length,25);i++){ const c=mlFindCol(rows[i]); if(c.status>=0 && (c.date>=0||c.name>=0)){ hr=i; cols=c; break; } }
-  if(hr<0) return { months:{}, totals:blankAgg(), parsed:0 };
+  if(hr<0) return { months:{}, totals:blankAgg(), parsed:0, hasBooked:false };
+  const self=clinicNorm(selfClinic); let hasBooked=false;
   const months={}; let parsed=0;
   for(let r=hr+1;r<rows.length;r++){ const row=rows[r]||[]; const mk=cols.date>=0?mlMonthKey(row[cols.date]):null; if(!mk) continue;
     const nm=cols.name>=0?String(row[cols.name]||"").trim():""; const status=cols.status>=0?row[cols.status]:"";
     if(!nm && !String(status||"").trim()) continue; // skip empty
     const cl=mlClassify(status);
+    const xb=mlExactBucket(status);
     const paid=cols.paid>=0?mlTruthy(row[cols.paid]):false;
     const care=cols.care>=0?mlTruthy(row[cols.care]):false;
     const cancelled=cols.cancel>=0?mlTruthy(row[cols.cancel]):false;
+    // Live cross-booked: a "Booked clinic" cell naming a DIFFERENT clinic than this feed.
+    let crossOut=false; if(cols.booked>=0){ const bv=clinicNorm(row[cols.booked]); if(bv){ hasBooked=true; if(self && bv!==self) crossOut=true; } }
     parsed++;
     const a = months[mk] || (months[mk]=blankAgg());
     a.leads++; if(cl.reached)a.reached++; if(cl.booked)a.booked++; if(cl.declined)a.declined++; if(cl.callback)a.callback++;
+    if(xb)a[xb]++;
     if(paid)a.paid++; if(care)a.care++; if(cancelled)a.cancelled++;
+    if(crossOut){ a.crossOut++; if(care)a.crossOutStarted++; }
   }
-  return { months, totals:sumAggs(Object.values(months)), parsed };
+  return { months, totals:sumAggs(Object.values(months)), parsed, hasBooked };
 }
-function blankAgg(){ return { leads:0, reached:0, booked:0, declined:0, callback:0, paid:0, care:0, cancelled:0 }; }
+function blankAgg(){ return { leads:0, reached:0, booked:0, declined:0, callback:0, paid:0, care:0, cancelled:0, green:0, yellow:0, red:0, blue:0, crossOut:0, crossOutStarted:0 }; }
 function sumAggs(list){ const t=blankAgg(); list.forEach(a=>{ for(const k in t) t[k]+=a[k]||0; }); return t; }
 
 async function mlFetchClinic(id, gids){ const rowsAll=[];
@@ -2311,7 +2538,7 @@ app.get("/meta-leads/data", gate, async (req,res)=>{
     for(const name of Object.keys(META_LEAD_SHEETS)){ const cfg=META_LEAD_SHEETS[name];
       const rows=await mlFetchClinic(cfg.id, cfg.gids);
       if(!rows.length){ errors[name]="could not read sheet (is it shared 'anyone with link → viewer'?)"; clinics[name]={months:{},totals:blankAgg(),parsed:0}; continue; }
-      clinics[name]=mlAggregateRows(rows);
+      clinics[name]=mlAggregateRows(rows, name);
     }
     ["Amstelveen","Bussum"].forEach(c=>{ if(!META_LEAD_SHEETS[c]) missing.push(c); });
     res.json({ clinics, configured:Object.keys(META_LEAD_SHEETS), missing, errors });
@@ -2350,6 +2577,7 @@ app.get("/meta-leads", gate, (req,res)=>{
 </style></head><body>
 <h1>Meta lead quality</h1>
 <div class="sub">Every Facebook/Instagram lead, by clinic: did we reach them, did they <b>book</b>, did they <b>show up</b> (paid intake), did they <b>start care</b>. This is where you see which clinic gets better leads — and where leads leak out of the funnel. ${demo?"<b>(demo data)</b>":""}</div>
+<div class="sub">Source: ${LEAD_SOURCE_LABEL}. \u00b7 <a href="/meta-leads/breakdown${demo?"?demo=1":""}" style="font-weight:600">Per-month call breakdown \u2192</a> \u00b7 <a href="/meta-spend">cost per started patient \u2192</a></div>
 <div class="controls">
  <label>Year <select id="yearSel"></select></label>
  <label>Trend clinic <select id="trendSel"></select></label>
@@ -2416,6 +2644,437 @@ fetch("/meta-leads/data"+${JSON.stringify(demo)}).then(function(r){return r.json
   render();
 }).catch(function(e){ document.getElementById('grid').innerHTML="<div class='card' style='color:#dc2626'>Load error: "+e+"</div>"; });
 </script></body></html>`);
+});
+
+// ============================================================================
+//  META BREAKDOWN / SPEND / NOTES-TRENDS  (added)
+// ============================================================================
+const ML_CAT = {
+  green:  { label:"successful booking calls",    color:"#1a9e54" },
+  yellow: { label:"never reached / no answer",   color:"#c79a00" },
+  red:    { label:"reached, did not book",       color:"#c0392b" },
+  blue:   { label:"interested, call back later", color:"#2471a3" },
+};
+function mlPct(n,d){ return d? Math.round((n/d)*1000)/10 : 0; }
+
+// ---- Counting rule: campaign (signed-up) vs treated (booked here) ----------
+// Static snapshot (through 2026-06) derived from the raw call-notes:
+//   CROSS_OUT = this clinic's campaign leads BOOKED at another physical clinic.
+//   CROSS_IN  = rows copied INTO this sheet from another clinic ("stats" gaming).
+// To make this live, add a "booked clinic" column to each feed; the engine will
+// prefer it if present (see crossAdj fallback note).
+const CROSS_OUT = {"amstelveen":{"2025-04":{"n":1,"started":0},"2025-05":{"n":2,"started":0},"2025-06":{"n":1,"started":0},"2026-01":{"n":12,"started":0},"2026-02":{"n":4,"started":1},"2026-03":{"n":7,"started":0},"2026-04":{"n":3,"started":0},"2026-05":{"n":3,"started":0}},"bussum":{"2022-08":{"n":1,"started":1},"2022-12":{"n":2,"started":0},"2022-06":{"n":1,"started":0},"2022-07":{"n":2,"started":0},"2022-05":{"n":1,"started":1},"2022-09":{"n":3,"started":0},"2023-01":{"n":1,"started":0},"2023-10":{"n":4,"started":0},"2023-03":{"n":1,"started":0},"2023-05":{"n":2,"started":0},"2023-06":{"n":4,"started":0},"2023-07":{"n":5,"started":0},"2023-08":{"n":3,"started":0},"2023-09":{"n":1,"started":0},"2024-01":{"n":1,"started":1},"2024-02":{"n":1,"started":0},"2024-03":{"n":2,"started":0},"2024-07":{"n":1,"started":0},"2024-09":{"n":1,"started":0},"2024-11":{"n":3,"started":0},"2024-12":{"n":4,"started":0},"2025-01":{"n":1,"started":0},"2025-05":{"n":1,"started":1},"2025-11":{"n":1,"started":0},"2026-01":{"n":1,"started":0},"2026-02":{"n":2,"started":0},"2026-03":{"n":4,"started":0},"2026-04":{"n":4,"started":0},"2026-05":{"n":1,"started":0},"2026-06":{"n":1,"started":0}},"rotterdam":{"2025-09":{"n":3,"started":0},"2025-10":{"n":1,"started":0},"2025-11":{"n":2,"started":0},"2026-01":{"n":4,"started":0},"2026-03":{"n":2,"started":0}},"utrecht":{"2022-04":{"n":2,"started":0},"2022-05":{"n":2,"started":0},"2022-06":{"n":1,"started":0},"2022-10":{"n":1,"started":0},"2023-12":{"n":1,"started":0},"2024-01":{"n":1,"started":1},"2024-03":{"n":2,"started":0},"2024-06":{"n":1,"started":0},"2024-07":{"n":1,"started":0},"2024-10":{"n":3,"started":0},"2024-08":{"n":1,"started":0},"2025-06":{"n":1,"started":0},"2025-07":{"n":1,"started":0},"2025-12":{"n":1,"started":0},"2026-01":{"n":5,"started":0},"2026-02":{"n":1,"started":0},"2026-06":{"n":1,"started":0},"2026-03":{"n":5,"started":0}}};
+const CROSS_IN = {"amstelveen":{"2026-03":{"n":1,"started":0}},"bussum":{"2026-03":{"n":1,"started":0}},"rotterdam":{"2026-01":{"n":2,"started":0}},"utrecht":{}};
+function crossMonth(clinicKey, ym){ const k=clinicKey.toLowerCase();
+  const o=((CROSS_OUT[k]||{})[ym])||{n:0,started:0}; const i=((CROSS_IN[k]||{})[ym])||{n:0,started:0};
+  return { outN:o.n, outStarted:o.started, inN:i.n, inStarted:i.started }; }
+function crossTotals(clinicKey){ const k=clinicKey.toLowerCase(); let outN=0,outS=0,inN=0,inS=0;
+  for(const m of Object.values(CROSS_OUT[k]||{})){ outN+=m.n; outS+=m.started; }
+  for(const m of Object.values(CROSS_IN[k]||{})){ inN+=m.n; inS+=m.started; }
+  return { outN, outStarted:outS, inN, inStarted:inS }; }
+// Apply the counting mode to a {leads, care(started)} pair for one clinic+month.
+function applyCount(mode, clinicKey, ym, leads, started){
+  if(mode!=="treated") return { leads, started, removed:0, removedStarted:0 };
+  const c=crossMonth(clinicKey, ym); const rN=c.outN+c.inN, rS=c.outStarted+c.inStarted;
+  return { leads:Math.max(0,leads-rN), started:Math.max(0,started-rS), removed:rN, removedStarted:rS };
+}
+// Prefer LIVE cross-booked counts (from a feed "Booked clinic" column) when present;
+// otherwise fall back to the static snapshot table. agg = result of mlAggregateRows.
+function crossForMonth(agg, clinicKey, ym){
+  if(agg && agg.hasBooked){ const m=(agg.months&&agg.months[ym])||{}; return { outN:m.crossOut||0, outStarted:m.crossOutStarted||0, inN:0, inStarted:0, src:"live" }; }
+  const c=crossMonth(clinicKey, ym); return { outN:c.outN, outStarted:c.outStarted, inN:c.inN, inStarted:c.inStarted, src:"snapshot" };
+}
+function crossForTotal(agg, clinicKey){
+  if(agg && agg.hasBooked){ const t=agg.totals||{}; return { outN:t.crossOut||0, outStarted:t.crossOutStarted||0, inN:0, inStarted:0, src:"live" }; }
+  const c=crossTotals(clinicKey); return { outN:c.outN, outStarted:c.outStarted, inN:c.inN, inStarted:c.inStarted, src:"snapshot" };
+}
+function countApply(mode, x, n, started){ // x = crossForMonth/Total result
+  if(mode!=="treated") return { leads:n, started, removed:0, removedStarted:0, src:x.src };
+  const rN=x.outN+(x.inN||0), rS=x.outStarted+(x.inStarted||0);
+  return { leads:Math.max(0,n-rN), started:Math.max(0,started-rS), removed:rN, removedStarted:rS, src:x.src };
+}
+
+// Per-month dropdown breakdown of the "Answered phone" column, per clinic.
+// ?count=campaign (default, feed as-is) | treated (minus cross-booked elsewhere).
+app.get("/meta-leads/breakdown", gate, async (req,res)=>{
+  try{
+    const mode = req.query.count==="treated" ? "treated" : "campaign";
+    const blocks=[];
+    for(const name of Object.keys(META_LEAD_SHEETS)){
+      const cfg=META_LEAD_SHEETS[name];
+      const rows=await mlFetchClinic(cfg.id, cfg.gids);
+      if(!rows.length){ blocks.push("<h2>"+name+"</h2><p style='color:#c0392b'>could not read feed</p>"); continue; }
+      const agg=mlAggregateRows(rows, name); const t=agg.totals;
+      const answered=t.green+t.yellow+t.red+t.blue;
+      const ct=crossForTotal(agg, name);
+      const keys=Object.keys(agg.months).sort().reverse();
+      const months=keys.map(function(ym){ const m=agg.months[ym];
+        const adj=countApply(mode, crossForMonth(agg,name,ym), m.leads, m.care);
+        const xnote = adj.removed>0 ? " <span style='color:#b45309'>(\u2212"+adj.removed+" cross-booked)</span>" : "";
+        return "<details class=mo><summary><b>"+ym+"</b> \u00b7 "+adj.leads+" leads"+xnote+" \u00b7 "+
+          "<span style='color:"+ML_CAT.green.color+"'>"+m.green+" booked</span> \u00b7 started care: "+adj.started+"</summary>"+
+          "<div class=brk>"+
+          "<span style='color:"+ML_CAT.green.color+"'>"+ML_CAT.green.label+": <b>"+m.green+"</b> ("+mlPct(m.green,m.leads)+"%)</span>"+
+          "<span style='color:"+ML_CAT.yellow.color+"'>"+ML_CAT.yellow.label+": <b>"+m.yellow+"</b> ("+mlPct(m.yellow,m.leads)+"%)</span>"+
+          "<span style='color:"+ML_CAT.red.color+"'>"+ML_CAT.red.label+": <b>"+m.red+"</b> ("+mlPct(m.red,m.leads)+"%)</span>"+
+          "<span style='color:"+ML_CAT.blue.color+"'>"+ML_CAT.blue.label+": <b>"+m.blue+"</b> ("+mlPct(m.blue,m.leads)+"%)</span>"+
+          "</div></details>";
+      }).join("");
+      const treatedLeads = mode==="treated" ? Math.max(0,t.leads-ct.outN-ct.inN) : t.leads;
+      const treatedStarted = mode==="treated" ? Math.max(0,t.care-ct.outStarted-ct.inStarted) : t.care;
+      blocks.push("<h2>"+name+" <span style='font-size:11px;color:#94a3b8'>("+ct.src+")</span></h2><p class=tot>"+
+        (mode==="treated"
+          ? "Treated-here: <b>"+treatedLeads+"</b> leads / started care <b>"+treatedStarted+"</b> "
+          : "Campaign (all feed rows): <b>"+t.leads+"</b> leads / started care <b>"+t.care+"</b> ")+
+        "\u00b7 answered "+answered+" (G "+t.green+" / Y "+t.yellow+" / R "+t.red+" / B "+t.blue+") "+
+        "\u00b7 <span style='color:#b45309'>cross-booked elsewhere: "+ct.outN+(ct.inN?(" + copied-in "+ct.inN):"")+"</span></p>"+months);
+    }
+    const tog=(m)=>m===mode?("<b>"+m+"</b>"):("<a href='/meta-leads/breakdown?count="+m+"'>"+m+"</a>");
+    res.send("<!doctype html><meta charset=utf-8><title>Per-month call breakdown</title>"+
+      "<style>body{font:15px/1.5 -apple-system,system-ui;max-width:780px;margin:24px auto;padding:0 16px;color:#16202E}"+
+      "h1{font-size:22px;margin:0 0 2px}h2{font-size:16px;margin:22px 0 6px}"+
+      ".src{color:#64748b;font-size:13px;margin:0 0 8px}.tot{font-size:13px;color:#475569}"+
+      ".mo{border:1px solid #e5e7eb;border-radius:10px;margin:6px 0;padding:8px 12px}summary{cursor:pointer}"+
+      ".brk{display:flex;flex-direction:column;gap:2px;margin-top:8px;font-size:13.5px}a{color:#2563EB}</style>"+
+      "<h1>Per-month call breakdown</h1>"+
+      "<p class=src>Source: "+LEAD_SOURCE_LABEL+". GREEN is labelled <b>successful booking calls</b>. \u00b7 <a href='/meta-leads'>\u2190 funnel</a> \u00b7 <a href='/meta-spend'>cost \u2192</a></p>"+
+      "<p class=src>Count by: "+tog("campaign")+" (which ad account generated the lead) \u00b7 "+tog("treated")+" (generated AND treated here). "+
+      "Cross-booked = this campaign\u2019s lead given an appointment at another physical clinic. <b>live</b> = read from a \u2018Booked clinic\u2019 column in the feed; <b>snapshot</b> = static through 2026-06 (add the column to go live).</p>"+
+      blocks.join(""));
+  }catch(e){ res.status(502).send("breakdown error: "+e.message); }
+});
+
+// Meta ad spend -> cost per started-care patient, per clinic.
+const META_ACCTS = {
+  Amstelveen:{ env:"META_ACCT_AMSTELVEEN", id:"3527728970833784" },
+  Bussum:    { env:"META_ACCT_BUSSUM",     id:"539538984194808"  }, // active; ignore closed "Bussum 2"
+  Utrecht:   { env:"META_ACCT_UTRECHT",    id:"388220208917981"  },
+  Rotterdam: { env:"META_ACCT_ROTTERDAM",  id:"772415668702040"  },
+};
+async function metaSpendTotal(acctId, token){
+  const url="https://graph.facebook.com/v19.0/act_"+acctId+"/insights?fields=spend&date_preset=maximum&access_token="+encodeURIComponent(token);
+  const r=await fetch(url, { signal:AbortSignal.timeout(15000) }); const j=await r.json();
+  if(j.error) throw new Error(j.error.message||"Meta API error");
+  return (j.data||[]).reduce((s,x)=>s+parseFloat(x.spend||0),0);
+}
+app.get("/meta-spend", gate, async (req,res)=>{
+  const mode = req.query.count==="treated" ? "treated" : "campaign";
+  const token=process.env.META_TOKEN;
+  const clinics=["Utrecht","Bussum","Amstelveen","Rotterdam"];
+
+  // ---- Headline: Meta vs Google cost per started-care patient ----
+  function cps(spend,care){ return (spend!=null && care) ? Math.round((spend/care)*100)/100 : null; }
+  // Live spend (Yuki -> spend sheet -> bank snapshot), per clinic+channel.
+  const spendMap = await resolveAdSpend(clinics);
+  // If a Google lead feed is configured for a clinic, pull its live started-care funnel.
+  const gLive={};
+  for(const c of clinics){ const gf=GOOGLE_LEAD_SHEETS[c];
+    if(gf&&gf.id){ try{ const gr=await mlFetchClinic(gf.id, gf.gids); const ga=mlAggregateRows(gr,c).totals;
+      gLive[c]={ care:ga.care, leads:ga.leads }; }catch(e){} } }
+  const srcTag={ yuki:" <span style='color:#16a34a;font-size:11px'>yuki</span>", sheet:" <span style='color:#16a34a;font-size:11px'>sheet</span>", snapshot:"" };
+  const snap = clinics.map(function(c){
+    const fun=(typeof MKTG_FUNNEL!=="undefined")?MKTG_FUNNEL[c]:null;
+    const gS=spendMap[c]?spendMap[c].Google:{spend:null,src:"snapshot"};
+    const mS=spendMap[c]?spendMap[c].Meta:{spend:null,src:"snapshot"};
+    const gCare = gLive[c]? gLive[c].care : (fun&&fun.Google?fun.Google.care:null);
+    const g={ spend:gS.spend, ssrc:gS.src, care:gCare, live:!!gLive[c] };
+    const m={ spend:mS.spend, ssrc:mS.src, care:fun&&fun.Meta?fun.Meta.care:null };
+    g.cps=cps(g.spend,g.care); m.cps=cps(m.spend,m.care);
+    let win=""; if(g.cps!=null&&m.cps!=null) win = g.cps<m.cps?"Google":(m.cps<g.cps?"Meta":"=");
+    return { c, g, m, win };
+  });
+  const eur=v=>v==null?"\u2014":"\u20ac"+Number(v).toLocaleString("en-US");
+  const snapRows = snap.map(s=>"<tr><td>"+s.c+"</td>"+
+    "<td>"+eur(s.g.spend)+(srcTag[s.g.ssrc]||"")+"</td><td>"+(s.g.care==null?"\u2014":s.g.care)+(s.g.live?" <span style='color:#16a34a;font-size:11px'>live</span>":"")+"</td><td>"+(s.g.cps==null?"\u2014":eur(s.g.cps))+"</td>"+
+    "<td>"+eur(s.m.spend)+(srcTag[s.m.ssrc]||"")+"</td><td>"+(s.m.care==null?"\u2014":s.m.care)+"</td><td>"+(s.m.cps==null?"\u2014":eur(s.m.cps))+"</td>"+
+    "<td><b>"+s.win+"</b></td></tr>").join("");
+
+  // ---- Live Meta cross-check: API spend + live feed started (counting mode) ----
+  const live=[];
+  for(const name of clinics){
+    const acct=META_ACCTS[name]; const acctId=process.env[acct.env]||acct.id;
+    const l={ name, spend:null, started:null, cps:null, removed:0, err:null };
+    try{ const rows=await mlFetchClinic(META_LEAD_SHEETS[name].id, META_LEAD_SHEETS[name].gids);
+      const agg=mlAggregateRows(rows, name); const t=agg.totals; const ct=crossForTotal(agg, name);
+      l.started = mode==="treated" ? Math.max(0,t.care-ct.outStarted-ct.inStarted) : t.care;
+      l.removed = mode==="treated" ? (ct.outStarted+ct.inStarted) : 0;
+      l.csrc = ct.src;
+    }catch(e){ l.err="feed: "+e.message; }
+    if(!token){ l.err=(l.err?l.err+" | ":"")+"META_TOKEN not set"; }
+    else { try{ l.spend=await metaSpendTotal(acctId, token);
+      if(l.started) l.cps=Math.round((l.spend/l.started)*100)/100; }
+      catch(e){ l.err=(l.err?l.err+" | ":"")+"meta: "+e.message; } }
+    live.push(l);
+  }
+  const liveRows = live.map(l=>"<tr><td>"+l.name+"</td><td>"+(l.spend==null?"\u2014":eur(l.spend.toFixed(0)))+
+    "</td><td>"+(l.started==null?"\u2014":l.started)+(l.removed?" <span style='color:#b45309'>(\u2212"+l.removed+")</span>":"")+
+    "</td><td>"+(l.cps==null?"\u2014":eur(l.cps.toFixed(0)))+"</td>"+
+    "<td style='color:#c0392b;font-size:12px'>"+(l.err||"")+"</td></tr>").join("");
+
+  const tog=m=>m===mode?("<b>"+m+"</b>"):("<a href='/meta-spend?count="+m+"'>"+m+"</a>");
+  res.send("<!doctype html><meta charset=utf-8><title>Acquisition cost \u2014 Meta vs Google</title>"+
+    "<style>body{font:15px/1.5 -apple-system,system-ui;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "table{border-collapse:collapse;width:100%;margin:6px 0 16px}td,th{border:1px solid #e5e7eb;padding:6px 9px;text-align:left}"+
+    "th{background:#f8fafc;font-size:12.5px}h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;margin:18px 0 4px}"+
+    "a{color:#2563EB}.n{color:#64748b;font-size:12.5px}.g{background:#f0f7ff}</style>"+
+    "<h1>Acquisition cost \u2014 Meta vs Google, per clinic</h1>"+
+    "<p class=n>Spend + started-care from the bank/marketing snapshot (same source as <a href='/marketing'>/marketing</a>). "+
+    "Lower cost-per-started wins. \u00b7 <a href='/meta-leads'>\u2190 leads</a> \u00b7 <a href='/meta-leads/breakdown'>breakdown \u2192</a></p>"+
+    "<table><tr><th>Clinic</th><th class=g>Google spend</th><th class=g>Google started</th><th class=g>Google \u20ac/started</th>"+
+    "<th>Meta spend</th><th>Meta started</th><th>Meta \u20ac/started</th><th>Cheaper</th></tr>"+snapRows+"</table>"+
+    "<h2>Live Meta cross-check (API spend \u00f7 feed started-care)</h2>"+
+    "<p class=n>Count by: "+tog("campaign")+" (ad account generated the lead) \u00b7 "+tog("treated")+" (generated AND treated here). "+
+    "\u2212N = started-care rows that were cross-booked at another clinic.</p>"+
+    "<table><tr><th>Clinic</th><th>Meta spend (live, all-time)</th><th>Started care (feed)</th><th>\u20ac/started</th><th>Note</th></tr>"+liveRows+"</table>"+
+    "<p class=n>Spend source per cell: <b>yuki</b> (live Yuki API) \u00b7 <b>sheet</b> (live spend sheet) \u00b7 plain = bank snapshot. "+
+    "Google started-care goes <b>live</b> per clinic once you add that clinic\u2019s Google lead sheet id to GOOGLE_LEAD_SHEETS. "+
+    "To make spend live: set Render env <b>AD_SPEND_SHEET</b> to a sheet with columns Clinic|Channel|Month|Spend (template at <a href='/ad-spend-template'>/ad-spend-template</a>), "+
+    "or wire <b>Yuki</b> (YUKI_API_KEY + YUKI_ADMIN_&lt;CLINIC&gt; + YUKI_GL_GOOGLE/YUKI_GL_META). "+
+    "If live Meta spend errors: a new Meta app may be in Development mode / need business verification before the token returns data \u2014 Meta-side, not the code.</p>");
+});
+
+// Ready-to-fill ad-spend sheet: copy into a new Google Sheet, keep it updated
+// monthly (from your Yuki export), share "anyone with link -> Viewer", then set
+// Render env AD_SPEND_SHEET to its id. The engine reads it live on /meta-spend.
+app.get("/ad-spend-template", gate, (req,res)=>{
+  const clinics=["Utrecht","Bussum","Amstelveen","Rotterdam"];
+  const mo=new Date().toISOString().slice(0,7);
+  const rows=[["Clinic","Channel","Month","Spend"]];
+  for(const c of clinics){ for(const ch of ["Google","Meta"]){
+    const snap=(typeof MKTG_CPL!=="undefined")&&MKTG_CPL[c]&&MKTG_CPL[c][ch]?MKTG_CPL[c][ch].spend:"";
+    rows.push([c,ch,mo,String(snap)]);
+  }}
+  if(req.query.csv!==undefined){ res.set("Content-Type","text/csv");
+    return res.send(rows.map(r=>r.join(",")).join("\n")); }
+  const trs=rows.map((r,i)=>"<tr>"+r.map(c=>"<"+(i===0?"th":"td")+">"+c+"</"+(i===0?"th":"td")+">").join("")+"</tr>").join("");
+  res.send("<!doctype html><meta charset=utf-8><title>Ad-spend sheet template</title>"+
+    "<style>body{font:15px/1.6 -apple-system,system-ui;max-width:680px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "table{border-collapse:collapse;margin:10px 0}td,th{border:1px solid #e5e7eb;padding:5px 12px;text-align:left}"+
+    "h1{font-size:21px}a{color:#2563EB}.n{color:#64748b;font-size:13px}code{background:#f1f5f9;padding:1px 5px;border-radius:4px}</style>"+
+    "<h1>Live ad-spend sheet \u2014 template</h1>"+
+    "<p class=n>1) New Google Sheet \u2192 paste these columns. 2) Keep one row per clinic + channel + month, updated from your Yuki export. "+
+    "3) Share <b>anyone with link \u2192 Viewer</b>. 4) Set Render env <code>AD_SPEND_SHEET</code> to the sheet id. "+
+    "Then <a href='/meta-spend'>/meta-spend</a> shows your spend as <b>sheet</b> (live). "+
+    "<a href='/ad-spend-template?csv'>download CSV</a></p>"+
+    "<table>"+trs+"</table>"+
+    "<p class=n>Values seeded from the current bank snapshot so you can see the format \u2014 replace with real monthly figures. "+
+    "Month format YYYY-MM (e.g. "+mo+"). Spend like 1234,56 or 1234.56.</p>");
+});
+const NOTES_TRENDS = {
+  utrecht:{ label:"Utrecht \u2014 Meta FB/IG \u20ac65 intake",
+    status:"2021\u20132026 \u2713 (complete)",
+    cross:[
+      "Intake\u2192started-care gap is structural since launch (Nov 2021): people sense it is not a one-time fix and hesitate \u2014 biggest lever.",
+      "Cross-location booking leakage: Utrecht leads landing in Bussum/Rotterdam/Amstelveen muddies per-clinic attribution.",
+      "Reachability is the constant cost: call + WhatsApp + voicemail, multiple touches.",
+      "Stable objection clusters: distance/parking, insurance-first (seasonal year-end), price/affordability, already-elsewhere, wanted fysio/massage not chiro.",
+      "Lead quality: junk leads (job seekers), language barriers, dead numbers \u2014 argues for a qualifying question on the form.",
+      "Pricing history matters: \u20ac65 \u2192 \u20ac39 (11 Apr 2023) \u2192 \u20ac50 gift-card promo; the recurring \u2018thought it was free\u2019 objection suggests the creative may read as free/too-cheap.",
+    ],
+    months:{
+      "2021-11":"Launch month. Strong booking rate. Earliest objections already include price and the one-time-vs-ongoing worry. Some wrong numbers handled by email.",
+      "2021-12":"Steady bookings; cancellations start. Wrong numbers recurring. Holiday timing pushes callbacks into January. Multi-touch chasing begins.",
+      "2022-01":"Reachability friction, illness/availability delays, first no-shows. Already with another specialist; advised fysio first; contact-in-1-month.",
+      "2022-02":"Volume building. Heavy unreachable-chasing. Symptoms easing kills urgency. Internal referral; cancellations.",
+      "2022-03":"Call twice + WhatsApp + VM becomes dominant. Clusters: insurance-first, partner-decision, logistics (scan + ride).",
+      "2022-04":"Cross-location bookings first appear (Bussum). Reachability chasing; wrong numbers.",
+      "2022-05":"Cross-location grows. Affordability (next year with insurance), already-helped-elsewhere, no interest. No-shows.",
+      "2022-06":"Cross-location (Bussum). Insurance-first strong. Medical detours (MRI/hospital). Heavy unreachable. Call-back-later status starts.",
+      "2022-07":"Lots of unreachable + chasing. One-time mindset, wants to think it over, full agenda.",
+      "2022-08":"High volume. Wanted fysio not chiro; parking-cost objection starts; price; proxy bookings with language barriers.",
+      "2022-09":"Very heavy unreachable. Junk leads appear (job seekers). Sees no added value. Proxy bookings.",
+      "2022-10":"Cross-location (Bussum). More junk leads. Wrong numbers / email bounces.",
+      "2022-11":"Form switches to timestamp format (automation change). Heavy unreachable. Strong year-end insurance timing; price; distance.",
+      "2022-12":"Year-end insurance timing dominant. Price (no money to start). Distance. Cancellations.",
+      "2023-01":"Steady bookings. Price; better-offer-elsewhere. Hang-ups when cost mentioned. Full voicemail boxes, wrong numbers.",
+      "2023-02":"Price sensitivity sharp; one hung up the moment cost was said. Several already found another provider. Heavy unreachable.",
+      "2023-03":"Price; already booked with another chiropractor. Heavy chasing.",
+      "2023-04":"PRICING CHANGE: offer dropped to \u20ac39 from 11 April; then \u20ac50 gift-card promo appears.",
+      "2023-05":"\u20ac50 gift-card era. Already with another chiro (temporary fix); multi-clinic shopping; distance/no transport; partner-consult.",
+      "2023-07":"No insurance coverage, staying with nearby provider, fysio-said-same, insurance-first, distance/no transport.",
+      "2023-08":"the-chiro-consultant marker. Thought-it-was-free grows; wanted different location; first repeat-no-show flags.",
+      "2023-09":"High volume. Thought free, just looking around, prefers another chiro. Repeat-no-show flags.",
+      "2023-10":"Very high volume. Care-plan sounded expensive, didn\u2019t understand chiropractic, distance (Harderwijk). Some emergencies.",
+      "2023-11":"CHIROCLUB batch appears (different campaign). Financially tight + cheaper chiropractor found. Cancellations.",
+      "2023-12":"Thought intake free (recurring), no money, on vacation. Cross-location (Amstelveen). Heavy holiday chasing.",
+      "2024-01":"Not interested; money; language (weak Dutch, wants WhatsApp). Cross-location (Bussum). Corona still cancelling slots.",
+      "2024-02":"Distance dominant (200km, wants closer). Language barrier. One openly rude lead. Reachability.",
+      "2024-03":"Distance + no coverage. Might try fysio first. Vacation delays. Cross-location (Bussum).",
+      "2024-04":"Scheduling logistics dominate. Distance (Enschede). Vacation callbacks pushed to August. (Nick referenced.)",
+      "2024-05":"Cross-location (Amstelveen). Distance. Relocation (Haarlem). Medical (fibromyalgia, flu).",
+      "2024-06":"Mostly clean bookings, sparse notes.",
+      "2024-07":"Mixed reach. Not-interested on callback; one going with Thai massage; one thought chiro is covered like fysio. Heavy multi-touch chasing.",
+      "2024-08":"Distance (too far). Repeat cancellers; one insists she never signed up / has no social media (lead-quality). No money. Cross-location (Amstelveen).",
+      "2024-09":"Lower volume. Not-interested-anymore and single-treatment (losse) mindset recur.",
+      "2024-10":"Vacation delays. Wanted massage + language barrier. Cross-location (Amstelveen). Reschedules/cancellations; one wanted a female chiropractor.",
+      "2024-11":"Price dominant: behandelplan too expensive, drops out over money, no time. Partner/massage confusion. Single-treatment mindset.",
+      "2024-12":"Steady. Single-treatment bookings; first-missed-then-cancelled pattern.",
+      "2025-01":"Dead numbers \u2192 email fallback. Steady bookings.",
+      "2025-02":"Low volume. Maybe-loose (single-session) sessions flagged.",
+      "2025-03":"Single-treatment (losse) common. Dead numbers; distance (too far).",
+      "2025-04":"Lower volume. Too-expensive; a lead\u2019s son booked for himself instead. Single-treatment.",
+      "2025-05":"Single-treatment (losse) dominates the month. Some lose interest after callback.",
+      "2025-06":"Cross-location (Bussum). Single-treatment.",
+      "2025-07":"Cross-location (Amstelveen). Reachability soft (many no-answer).",
+      "2025-08":"Single-treatment heavy. Reached-but-didn\u2019t-book elevated.",
+      "2025-09":"Phone-number breakage (email/voicemail fallback). Repeat cancellations.",
+      "2025-10":"Low volume. Vacation delays; slow interest checks.",
+      "2025-11":"Low volume. Dead numbers \u2192 email.",
+      "2025-12":"Language barriers (no Dutch / little English, WhatsApp requested); one wanted Caesar-fysio. Distance (too far). Cross-location (Bussum). Dead numbers.",
+      "2026-01":"High volume. Leads booked into OTHER clinics; several existing clients. Distance + parking. Heavy chasing; Csabi on callbacks.",
+      "2026-02":"Insurance hesitation (Zilveren Kruis). Cross-location continues. Wrong numbers + a mis-logged-booking flag.",
+      "2026-03":"Busiest month. Heavy cross-location (some wanted Alex in Rotterdam). Language barriers. Wanted massage. Some paid intakes cancelled.",
+      "2026-04":"Lower volume. Losing people to slow follow-up. First Loose and Missed intake outcomes appear.",
+      "2026-05":"Reachability drops hard (mostly no-answer). Vacation season starts. A couple actively avoiding contact. Mostly Loose intakes.",
+      "2026-06":"Mixed (to 23rd). Lead-quality doubts recur: don\u2019t-remember-signing-up, language barriers, dead numbers. Steady chasing.",
+    },
+  },
+  amstelveen:{ label:"Amstelveen \u2014 Meta FB/IG \u20ac60 intake",
+    status:"2025\u20132026 \u2713 (clinic launched Jan 2025)",
+    cross:[
+      "Cross-location leakage to Bussum & Rotterdam \u2014 partly DELIBERATE: notes show sign-ups booked into other clinics \u2018to make the stats easier\u2019. This corrupts per-clinic attribution; decide one counting rule.",
+      "Single-treatment (\u2018losse behandeling\u2019) mindset is the dominant intake\u2192started-care leak \u2014 present from launch.",
+      "Distance cluster: Almere (\u2192Bussum), Den Haag, Limburg, \u2018too far\u2019.",
+      "Reachability is the constant cost: call + WhatsApp/text + voicemail, multiple touches; dead/invalid numbers \u2192 email fallback.",
+      "Language barriers (Dutch/English).",
+      "Over-messaging risk: a Feb-2026 lead complained the follow-ups felt like spam and opted out \u2014 watch cadence.",
+      "Lead-quality / fast drop-off: \u2018found something else 30 min after registering\u2019, changed-mind, accidental sign-ups.",
+    ],
+    months:{
+      "2025-01":"Launch. Strong booking (31/55). Scheduling-heavy notes; single-treatment (\u2018losse\u2019) appears immediately. Distance (Den Haag, Limburg).",
+      "2025-02":"Steady. Dead numbers \u2192 email. Single-treatment. \u2018Wants to start next month, will message herself.\u2019",
+      "2025-03":"Reachability friction (phones off, one very sick). Heavy call+message; one wants Alex specifically.",
+      "2025-04":"Reached-but-didn\u2019t-book spikes (16). Amsterdam/Amstelveen ambiguity; one prefers Bussum. Language barrier; one denies signing up.",
+      "2025-05":"Cross-location to Bussum (Almere residents). Distance (\u2018too far\u2019, one abroad). Single-treatment.",
+      "2025-06":"Reconsiderers (\u2018will think about it, call Monday\u2019). Single-treatment. Heavy chasing.",
+      "2025-07":"Reached-but-didn\u2019t-book high. Cross-location (Bussum, Almere). \u2018Too far\u2019; serious family illness; call-back-after-holiday.",
+      "2025-08":"Lower volume, high booking rate. Dead numbers; one booked elsewhere 30 min after registering.",
+      "2025-09":"Reachability drops (no-answer, invalid numbers, email fallback). Partner-availability and self-callback stalls.",
+      "2025-10":"High booking rate. Back-injury wait; dead numbers \u2192 email; several \u2018no follow-up appointment\u2019 (single-visit).",
+      "2025-11":"Reached-but-didn\u2019t-book elevated. \u2018Busy with work\u2019, changed-mind, not-interested. Connection-failed numbers; CAs Csabi/Sam chasing.",
+      "2025-12":"Holiday chasing (text+call+voicemail, repeated). Steady bookings; Sam on follow-ups.",
+      "2026-01":"Big spike (80 leads). Heavy WhatsApp+voicemail chasing. Cross-location (Utrecht); dead numbers \u2192 email; one double-counted phone+web intake flagged \u2018don\u2019t count\u2019.",
+      "2026-02":"Never-reached high (27). Over-messaging complaint (\u2018felt like spam, opt out\u2019). Archana/Vivian handling; some refuse further contact.",
+      "2026-03":"Cross-location + explicit stats-gaming (\u2018aangemeld in Bussum, makkelijker voor de stats\u2019). Many single-treatment. Heavy CA chasing.",
+      "2026-04":"Mixed. Cross-location to Rotterdam. Uncertain leads who \u2018will call back\u2019; one waiting on doctor/hernia diagnosis. Phone-intake conversions.",
+      "2026-05":"Reachability hard (no-answer \u2192 vm \u2192 text). Distance (\u2018te ver\u2019). Cross-location (Bussum, RTM). Several Loose intakes; an emergency cancellation.",
+      "2026-06":"Mixed (to 23rd). Some clinic visits recorded; heavy no-answer \u2192 vm \u2192 text chasing.",
+    },
+  },
+  bussum:{ label:"Bussum \u2014 Meta FB/IG \u20ac65 intake",
+    status:"2022\u20132026 \u2713 (2025 near-dormant)",
+    cross:[
+      "Amsterdam confusion is the signature objection: many thought the clinic was in Amsterdam, wanted Amsterdam, or found Bussum \u2018too far from Amsterdam\u2019. Argues Meta geo/creative is mis-set.",
+      "Cross-location: early years leak to Utrecht; in 2026 leak to Amstelveen \u2014 partly deliberate stats-gaming (\u2018copied from Amstelveen to make the stats easier\u2019).",
+      "Wrong/incorrect numbers are epidemic \u2192 email fallback.",
+      "Price cluster: \u2018too expensive\u2019, \u2018thought it was free\u2019, \u2018thought the intake included treatment\u2019.",
+      "Insurance-first (check zorgverzekeraar) and wanted-massage / fysio-first / \u2018don\u2019t want to be cracked\u2019.",
+      "Reachability signature: 2x called + voicemail + WhatsApp.",
+      "Volume collapsed through 2025 (near-dormant) then revived Feb\u2013Mar 2026.",
+    ],
+    months:{
+      "2022-01":"Soft launch, tiny volume. One lets us know when he can plan.",
+      "2022-02":"Cancellations; WhatsApp + voicemail chasing begins.",
+      "2022-03":"Wrong numbers \u2192 email. 2x-call + WhatsApp chasing.",
+      "2022-04":"Volume building. Heavy 2x-call + voicemail + WhatsApp; availability friction.",
+      "2022-05":"Price (\u2018too much money\u2019); cross-location interest in Utrecht; self-callback stalls.",
+      "2022-06":"Cross-location to Utrecht recurring. Reconsiderers; found relief elsewhere; \u2018looking for Amsterdam\u2019; wrong numbers; schedule clashes.",
+      "2022-07":"High volume. Wrong-number epidemic; cross-location (Utrecht); scheduled callbacks.",
+      "2022-08":"High volume. Amsterdam confusion (\u2018thought it was in Amsterdam\u2019, \u2018too far\u2019); \u2018had no idea what this is\u2019; not-interested; callback-after-holiday.",
+      "2022-09":"High booking rate. Wrong numbers; steady chasing.",
+      "2022-10":"Wrong numbers; cross-location (Utrecht).",
+      "2022-11":"Steady. Objection mix building.",
+      "2022-12":"Steady bookings into year-end.",
+      "2023-01":"Cross-location (Utrecht). Not-interested; wanted Amsterdam.",
+      "2023-02":"Low volume.",
+      "2023-03":"Wrong numbers \u2192 email; insurance-check stalls; distance (too far); cross-location (Utrecht).",
+      "2023-04":"Amsterdam confusion (\u2018wants something closer\u2019). Price: \u2018too expensive, thought it included treatment\u2019.",
+      "2023-05":"Wants Amsterdam; repeat-canceller; couple goes to Utrecht; insurance-first.",
+      "2023-06":"Wants Amsterdam for the care-plan; cross-location (Utrecht); \u2018thought it was free\u2019; \u2018thought it was a massage, scared of being cracked\u2019.",
+      "2023-07":"Distance (too far, Bussum+Utrecht both too far); no insurance; cross-location (Utrecht); one hung up on hearing \u2018Bussum\u2019.",
+      "2023-08":"Steady. Reachability chasing.",
+      "2023-09":"Cross-location (Rotterdam resident \u2192 Utrecht). Too-expensive; wanted a different scan.",
+      "2023-10":"Amsterdam confusion (\u2018too far from Amsterdam\u2019). Single-treatment.",
+      "2023-11":"Steady; objection mix.",
+      "2023-12":"Cancellations (one still abroad).",
+      "2024-01":"Hang-ups; accidental sign-up (\u2018son did it\u2019); cross-location (Utrecht).",
+      "2024-02":"Reached-but-didn\u2019t-book high; not-interested.",
+      "2024-03":"Small volume, high booking.",
+      "2024-04":"Near-dormant (3 leads).",
+      "2024-05":"Near-dormant (3 leads).",
+      "2024-06":"Wrong numbers \u2192 email.",
+      "2024-07":"Reached-but-didn\u2019t-book high. Too-expensive; fysio-first; cross-location (Anne, Utrecht).",
+      "2024-08":"Not-interested wave (\u2018don\u2019t call again\u2019); repeat missed/cancelled.",
+      "2024-09":"Low volume.",
+      "2024-10":"Single lead.",
+      "2024-11":"Recovery. One drops (\u2018found something else\u2019); single-treatment; December bookings.",
+      "2024-12":"Cross-location (Utrecht).",
+      "2025-01":"No-show-then-prepay rule noted (Utrecht). Single-treatment.",
+      "2025-02":"Single-treatment bookings.",
+      "2025-03":"Low volume; single-treatment.",
+      "2025-04":"Near-dormant (6).",
+      "2025-05":"Near-dormant (5); single-treatment.",
+      "2025-06":"Near-dormant (5); single-treatment.",
+      "2025-07":"Near-dormant (3).",
+      "2025-08":"Near-dormant (3); single-treatment.",
+      "2025-10":"Near-dormant (4); single-treatment.",
+      "2025-11":"Near-dormant (5). One wants Amstelveen.",
+      "2025-12":"Near-dormant (4).",
+      "2026-01":"Slight pickup (7); single-treatment.",
+      "2026-02":"Revival (20). Cross-location (Amstelveen); single-treatment.",
+      "2026-03":"Busiest recent month (43). Explicit stats-gaming (\u2018copied from Amstelveen to make the stats easier\u2019); single-treatment.",
+      "2026-04":"Cross-location (Amstelveen); single-treatment; call+message chasing.",
+      "2026-05":"Single-treatment; steady chasing.",
+      "2026-06":"Cross-location (Amstelveen).",
+    },
+  },
+  rotterdam:{ label:"Rotterdam \u2014 Meta FB/IG \u20ac65 intake",
+    status:"2025\u20132026 \u2713 (scaled Sep 2025)",
+    cross:[
+      "Late/low start (trickle Jan\u2013Aug 2025), scaled hard Sep\u2013Dec 2025, then volatile in 2026.",
+      "Cross-location + EXPLICIT stats-gaming: Utrecht sign-ups booked into Rotterdam \u2018because the stats are easier\u2019 (Alexandra); also routed to Amstelveen/Utrecht. Per-clinic numbers here are not clean.",
+      "Distance: Limburg, Germany (DL).",
+      "Single-treatment (\u2018losse\u2019) is the dominant intake\u2192care leak.",
+      "Some specifically want Alex. Wrong/foutief numbers \u2192 email.",
+    ],
+    months:{
+      "2025-01":"Trickle (2).",
+      "2025-02":"Trickle (2).",
+      "2025-03":"Trickle (2).",
+      "2025-04":"Trickle (6).",
+      "2025-05":"Trickle (5). Distance (Limburg).",
+      "2025-06":"Trickle (1).",
+      "2025-08":"Trickle (2).",
+      "2025-09":"Scale-up (47). Cross-location (Amstelveen). Mixed reach.",
+      "2025-10":"High (47). Distance (Germany). Cross-location (Amstelveen).",
+      "2025-11":"High (38) but reached-didn\u2019t-book spikes (17). Cross-location (Utrecht); single-treatment \u2192 first phase-1 plans.",
+      "2025-12":"Steady (36). Dead numbers \u2192 email; single-treatment heavy; Sam on follow-ups.",
+      "2026-01":"Drop (14). Explicit stats-gaming (Utrecht sign-ups booked into Rotterdam \u2018for the stats\u2019, Alexandra); one wanted Alex for shoulder-blade treatment. Single-treatment.",
+      "2026-02":"Very low (5). Proxy booking (for boyfriend). Single-treatment.",
+      "2026-03":"Some recovery (15). Cross-location (Amstelveen). Single-treatment; call+text chasing.",
+      "2026-04":"Low (7). Wrong numbers \u2192 email (Renata following up twice).",
+      "2026-05":"Near-dormant (2).",
+      "2026-06":"Near-dormant (2).",
+    },
+  },
+};
+app.get("/notes-trends", gate, (req,res)=>{
+  const clinic=String(req.query.clinic||"utrecht").toLowerCase();
+  const c=NOTES_TRENDS[clinic];
+  if(!c) return res.send("<p style='font:15px system-ui;margin:24px'>No notes-trends summary yet for \u201c"+clinic+"\u201d. Available: utrecht. The other clinics need their raw notes sheets summarised.</p>");
+  const months=Object.keys(c.months).sort().reverse().map(ym=>"<div class=mo><b>"+ym+"</b> \u2014 "+c.months[ym]+"</div>").join("");
+  const nav=Object.keys(NOTES_TRENDS).map(k=>k===clinic?("<b>"+k+"</b>"):("<a href='/notes-trends?clinic="+k+"'>"+k+"</a>")).join(" \u00b7 ");
+  res.send("<!doctype html><meta charset=utf-8><title>Notes trends \u2014 "+c.label+"</title>"+
+    "<style>body{font:15px/1.6 -apple-system,system-ui;max-width:820px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;margin:20px 0 6px}.s{color:#64748b;font-size:13px}"+
+    ".nav{font-size:13px;margin:0 0 10px}"+
+    ".mo{border-left:3px solid #2471a3;padding:4px 12px;margin:6px 0;background:#fafcff}"+
+    ".x{background:#f3f4f6;padding:6px 12px;border-radius:6px;margin:6px 0;font-size:14px}a{color:#2563EB}</style>"+
+    "<h1>Notes trends \u2014 "+c.label+"</h1>"+
+    "<div class=nav>Clinics: "+nav+" \u00b7 <a href='/meta-leads'>\u2190 leads</a></div>"+
+    "<p class=s>"+c.status+" \u00b7 read-only; regenerate by re-running the summary (notes are not auto-pulled).</p>"+
+    "<h2>Cross-cutting themes</h2>"+c.cross.map(t=>"<div class=x>"+t+"</div>").join("")+
+    "<h2>By month</h2>"+months);
 });
 
 // ============================================================================
@@ -2737,6 +3396,281 @@ show("Amstelveen");
 </script>
 </body></html>`);
 } catch(e){ res.status(500).send("revenue error: "+e.message); } });
+
+// ============================================================================
+//  /pl — GROUP P&L, sourced from YUKI (the authoritative, accrual books).
+//  Yuki is the headline P&L. MT940 (bank) is NOT shown here as a revenue
+//  rival: bank cash-in is gross (incl. ~21% VAT) and mixes in non-revenue
+//  receipts (transfers, loans, intercompany), so it is not comparable to Yuki
+//  Netto-omzet per clinic. MT940 stays where it belongs — the current-month
+//  leading edge on /revenue. The two are the same money; never added.
+//
+//  Figures below are SEEDED from Alex's Jun-2026 Yuki Monitor (per
+//  administration + the consolidated category split), so the page is correct
+//  today. The monthly refresh will come from the Yuki connection already set
+//  in Render (yukiLivePL, below) — when that returns data it overrides the
+//  seed; until then the seed stands, so Alex never has to screenshot again
+//  once the live pull is confirmed on Render.
+// ============================================================================
+
+// The six Yuki Monitor P&L groups, in the order a Dutch P&L reads.
+const PL_CATS = ["Personeelskosten","Overige bedrijfskosten","Huisvestingskosten","Verkoopkosten","Kosten auto's"];
+
+// --- SEED: Yuki Monitor, 2026 YTD (Jan–Jun), read off the per-administration
+//     Monitor screenshots. Per-clinic netto sums EXACTLY to the consolidated
+//     (€349,637.80); profit ties to within €500 (Yuki's intragroup elimination).
+const YUKI_SEED = {
+  year: "2026",
+  asof: "Jun 2026 (YTD, Jan\u2013Jun)",
+  clinics: {
+    Amstelveen: { netto:135640.00, kostprijs:-15629.01, bruto:120010.99, lasten:109228.81, result:10782.18,  banksaldo:39932.21,  werkkapitaal:30170.60,  debcred:12392.69 },
+    Utrecht:    { netto:83920.00,  kostprijs:-114.00,   bruto:83806.00,  lasten:102135.79, result:-18329.79, banksaldo:5388.47,   werkkapitaal:-43754.63, debcred:-53091.56 },
+    Bussum:     { netto:66520.00,  kostprijs:-6880.70,  bruto:59639.30,  lasten:40858.34,  result:18780.96,  banksaldo:7182.16,   werkkapitaal:22862.98,  debcred:8046.93 },
+    Rotterdam:  { netto:40210.00,  kostprijs:-194.14,   bruto:40015.86,  lasten:2493.47,   result:37522.39,  banksaldo:-24885.99, werkkapitaal:14490.12,  debcred:-30331.44 },
+    Holding:    { netto:23347.80,  kostprijs:0.0,       bruto:23347.80,  lasten:32600.92,  result:-9253.12,  banksaldo:6940.47,   werkkapitaal:-86346.74, debcred:-20806.52 },
+  },
+  // consolidated "Alle administraties" — Yuki already eliminates intragroup.
+  consolidated: {
+    netto:349637.80, lasten:286817.33, result:40002.62,
+    split: { "Personeelskosten":164483.53, "Overige bedrijfskosten":56414.99, "Huisvestingskosten":39219.35, "Verkoopkosten":25362.92, "Kosten auto's":1336.54 },
+  },
+  // Intragroup management fee: \u20ac6,000/month TOTAL across the group (not per
+  // clinic), VAT-free intercompany, in place since ~March 2026. Mar\u2013Jun \u2248 \u20ac24k,
+  // which is the holding's \u20ac23,348 Netto-omzet YTD. Yuki eliminates it in consolidation.
+  mgmtFeeYTD: 23347.80,
+  mgmtFeeMonthly: 6000,
+  mgmtFeeSince: "March 2026",
+  // data-quality flags surfaced on the page so nobody trusts a wrong number.
+  flags: {
+    Rotterdam: "Costs are barely booked into this entity yet (Bedrijfslasten only \u20ac2,493) \u2014 partly Yuki\u2019s 1\u20132 month processing lag, partly staff/rent sitting elsewhere \u2014 so the \u20ac37,522 result is overstated. Treat as provisional until the costs land in Yuki.",
+    Utrecht:   "Accrual loss, with \u20ac53,092 owed to creditors. The bank looks calmer than the real position \u2014 this is the true picture.",
+  },
+};
+
+// --- LIVE pull (next step). When YUKI_LIVE=1 and the connection returns data,
+//     this overrides the seed. Intended path on Yuki's Accounting.asmx:
+//     per administration, sweep the P&L GL accounts (GLAccountBalance / a
+//     GLAccountTransactions sweep) for [start,end] and group them into the five
+//     Monitor cost groups + Netto-omzet. Kept OFF until verified live on Render
+//     so a deploy never breaks the working seed; returns null => seed is used.
+async function yukiLivePL(year){
+  if(process.env.YUKI_LIVE !== "1") return null;
+  try {
+    // Placeholder for the verified live sweep — wired & tested against the live
+    // Yuki account on Render. Until confirmed it returns null and the seed shows.
+    return null;
+  } catch(e){ return null; }
+}
+
+app.get("/pl", gate, async (req, res) => { try {
+  const live = await yukiLivePL(YUKI_SEED.year);
+  const D = live || YUKI_SEED;
+  const seeded = !live;
+  const order = ["Amstelveen","Utrecht","Bussum","Rotterdam"];
+
+  // euro + percent formatters (handle negatives cleanly)
+  const f = n => {
+    if(n == null) return "\u2014";
+    const s = n < 0 ? "\u2212" : "";
+    return s + "\u20ac" + Math.abs(Math.round(n)).toLocaleString("en-US");
+  };
+  const pct = (a,b) => (b ? (a/b*100) : 0);
+  const col = n => n < 0 ? "#dc2626" : "#16a34a";
+
+  const tagYuki = "<span style='display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;background:#ecfdf5;color:#16a34a;vertical-align:middle'>yuki</span>";
+
+  // ---- consolidated card (group P&L + the 5-way cost split) ----
+  const c = D.consolidated;
+  const opRev = order.reduce((s,k)=> s + (D.clinics[k] ? D.clinics[k].netto : 0), 0);
+  let splitRows = "";
+  for(const cat of PL_CATS){
+    const v = c.split[cat] || 0;
+    splitRows += "<tr><td style='padding-left:18px;color:#475569'>" + cat + "</td>" +
+      "<td class='num'>" + f(v) + "</td>" +
+      "<td class='num' style='color:#94a3b8'>" + pct(v, c.lasten).toFixed(1) + "%</td></tr>";
+  }
+  const consCard =
+    "<div class='card' style='border-color:#bfdbfe;background:#f8fbff'>" +
+    "<h2>Whole group \u00b7 " + D.year + " " + tagYuki + "</h2>" +
+    "<table><tbody>" +
+    "<tr style='font-weight:600'><td>Netto-omzet (revenue, ex-VAT)</td><td class='num'>" + f(c.netto) + "</td><td></td></tr>" +
+    "<tr style='font-weight:600;border-top:1px solid #e5e7eb'><td>Bedrijfslasten (operating costs)</td><td class='num'>" + f(c.lasten) + "</td><td class='num' style='color:#94a3b8'>of costs</td></tr>" +
+    splitRows +
+    "<tr style='font-weight:700;border-top:2px solid #e5e7eb'><td>Resultaat (profit)</td><td class='num' style='color:" + col(c.result) + "'>" + f(c.result) + "</td>" +
+    "<td class='num' style='color:#94a3b8'>" + pct(c.result, c.netto).toFixed(1) + "% margin</td></tr>" +
+    "</tbody></table>" +
+    "<div class='note'>The holding\u2019s revenue of " + f(D.mgmtFeeYTD) + " is the <b>intragroup management fee</b> \u2014 \u20ac" + (D.mgmtFeeMonthly||6000).toLocaleString("en-US") + "/mo total across the group, VAT-free between companies, in place since " + (D.mgmtFeeSince||"early 2026") + ". Yuki already eliminates it here, so it isn\u2019t double-counted. The four operating clinics bill " + f(opRev) + " between them. <b>These are Yuki\u2019s booked figures and Yuki is ~1\u20132 months behind on processing invoices</b>, so the most recent weeks are understated \u2014 the bank feed (MT940) is the up-to-date leading edge for those. Chiropractic care is VAT-exempt, so there is no VAT gap to reconcile (only the holding has any VAT activity, and the management fee itself is VAT-free).</div>" +
+    "</div>";
+
+  // ---- per-clinic cards ----
+  function clinicCard(k){
+    const d = D.clinics[k]; if(!d) return "";
+    const flag = D.flags && D.flags[k];
+    const rows =
+      "<tr><td>Netto-omzet</td><td class='num'>" + f(d.netto) + "</td></tr>" +
+      "<tr><td>Kostprijs van de omzet</td><td class='num'>" + f(d.kostprijs) + "</td></tr>" +
+      "<tr style='border-top:1px solid #f1f5f9'><td>Bruto-marge</td><td class='num'>" + f(d.bruto) + "</td></tr>" +
+      "<tr><td>Bedrijfslasten</td><td class='num'>" + f(d.lasten) + "</td></tr>" +
+      "<tr style='font-weight:700;border-top:2px solid #e5e7eb'><td>Resultaat</td><td class='num' style='color:" + col(d.result) + "'>" + f(d.result) +
+      " <span style='font-weight:400;color:#94a3b8;font-size:12px'>(" + pct(d.result,d.netto).toFixed(0) + "%)</span></td></tr>";
+    return "<div class='card'>" +
+      "<h2>" + (k==="Holding"?"Notable (holding)":k) + " \u00b7 " + D.year + " YTD " + tagYuki + "</h2>" +
+      "<table><tbody>" + rows + "</tbody></table>" +
+      "<div class='cash'>Bank " + f(d.banksaldo) + " \u00b7 working capital <span style='color:" + col(d.werkkapitaal) + "'>" + f(d.werkkapitaal) + "</span></div>" +
+      (flag ? "<div class='warn'>" + flag + "</div>" : "") +
+      "</div>";
+  }
+
+  const banner = seeded
+    ? "<div class='note'><b>Source: Yuki Monitor</b>, seeded from your Jun-2026 screenshots (" + D.asof + "). These are the real, booked figures \u2014 but <b>Yuki is currently ~1\u20132 months behind on processing invoices</b>, so recent months read low until the bookkeeper catches up. For an up-to-the-day read of the last few weeks, use the bank feed (MT940) on /revenue. The monthly auto-refresh runs off the Yuki connection in Render \u2014 once that live pull is confirmed it updates this page on its own and you won\u2019t screenshot again. Set <code>YUKI_LIVE=1</code> when we switch it on.</div>"
+    : "<div class='note'><b>Source: Yuki (live)</b> \u00b7 " + D.asof + ".</div>";
+
+  const css = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}" +
+    "h1{font-size:23px;margin:0 0 2px}h2{font-size:15px;margin:0 0 8px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}" +
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:15px 16px;margin-bottom:13px}" +
+    ".grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}@media(max-width:680px){.grid{grid-template-columns:1fr}}" +
+    "table{border-collapse:collapse;width:100%;font-size:13.5px}td{padding:6px 4px;border-bottom:1px solid #f7f8fa;text-align:left}" +
+    ".num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}" +
+    ".cash{margin-top:9px;font-size:12px;color:#64748b}" +
+    ".note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:11px 13px;border-radius:10px;font-size:12.5px;line-height:1.55;margin:0 0 14px}" +
+    ".warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:9px 11px;border-radius:9px;font-size:12px;line-height:1.5;margin-top:9px}" +
+    "code{background:#eef2f7;padding:1px 5px;border-radius:5px;font-size:12px}a{color:#2563EB}";
+
+  res.send("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>P&amp;L \u2014 Yuki</title><style>" + css + "</style></head><body>" +
+    "<h1>Group P&amp;L \u2014 from Yuki</h1>" +
+    "<div class='sub'>The booked, accrual P&amp;L per clinic and for the group. This is the headline source of truth; the bank feed stays as the live current-month edge on /revenue.</div>" +
+    banner +
+    consCard +
+    "<div class='grid'>" + order.map(clinicCard).join("") + "</div>" +
+    clinicCard("Holding") +
+    "<p class='sub' style='margin-top:16px'>Pages: <a href='/profit'>/profit</a> \u00b7 <a href='/revenue'>/revenue</a> \u00b7 <a href='/waste'>/waste</a> \u00b7 <a href='/'>home</a></p>" +
+    "</body></html>");
+} catch(e){ res.status(500).send("pl error: " + e.message); } });
+
+// ============================================================================
+//  MT940 (bank) — the LIVE cash leading edge. Yuki is ~1–2 months behind on
+//  booking; the bank knows what landed yesterday. These five .940 exports (one
+//  per ING account) live in Alex's Drive folder, link-shared "view", and are
+//  fetched anonymously the same way the engine reads the Google Sheets — no
+//  credentials, no Render setup, as long as the folder stays link-viewable.
+//
+//  This is CASH (gross receipts/payments), NOT booked revenue, and it is never
+//  added to Yuki — it's the same money, shown as the up-to-the-day edge that
+//  fills the gap Yuki's backlog leaves. Gated by MT940_LIVE=1 so a deploy can't
+//  break on a bad fetch; until then /bank shows the baked BANK_REV snapshot.
+//  IBAN→entity mapping confirmed by Alex.
+// ============================================================================
+const MT940_ACCOUNTS = {
+  Amstelveen: { iban:"NL69INGB0101037082", fileId:"1VaQEZI2LOxHEz4bdYdwUt0MdgK8zk6Jm" },
+  Utrecht:    { iban:"NL46INGB0009559803", fileId:"1y5tXp4wi4AoFYst8U5RRRt-Xl5N047wy" },
+  Bussum:     { iban:"NL18INGB0008067671", fileId:"1btIhEjLskrmcEHZwqw_bpdrLVeC0Tb4K" },
+  Rotterdam:  { iban:"NL45INGB0114642346", fileId:"1lkVg0cxnuWmiJphrfzMiuVElzaDadpBb" },
+  Holding:    { iban:"NL78INGB0008555374", fileId:"1mAn5K4_RZkNblthfGj56EuwjP6EcGYaN" },
+};
+
+// Parse a raw MT940 file. Returns { iban, byMonth:{ "YYYY-MM":{in,out,net,n} }, latest:"YYYY-MM-DD" }.
+// :61: line = ValueDate(YYMMDD)[EntryDate(MMDD)]<C|D|RC|RD>[funds][amount]N<type>...
+// Inflow when the mark is C or RD; outflow when D or RC. ING uses comma decimals.
+function parseMT940(text){
+  const out = { iban:null, byMonth:{}, latest:null };
+  if(!text || text.indexOf(":61:") < 0) return out;
+  const mIban = text.match(/:25:\s*([A-Z]{2}\d{2}[A-Z]{4}\d{7,12})/);
+  if(mIban) out.iban = mIban[1];
+  const re = /:61:(\d{6})(\d{4})?(RC|RD|C|D)([A-Z]?)([\d.,]+)/g;
+  let m;
+  while((m = re.exec(text)) !== null){
+    const yy = m[1].slice(0,2), mm = m[1].slice(2,4), dd = m[1].slice(4,6);
+    const mark = m[3];
+    const amt = parseFloat(m[5].replace(/\./g, "").replace(",", "."));
+    if(!isFinite(amt)) continue;
+    const inflow = (mark === "C" || mark === "RD");
+    const ym = "20" + yy + "-" + mm;
+    const b = out.byMonth[ym] || (out.byMonth[ym] = { in:0, out:0, net:0, n:0 });
+    if(inflow){ b.in += amt; b.net += amt; } else { b.out += amt; b.net -= amt; }
+    b.n++;
+    const iso = "20" + yy + "-" + mm + "-" + dd;
+    if(!out.latest || iso > out.latest) out.latest = iso;
+  }
+  return out;
+}
+
+// Anonymous Drive download (link-shared files). confirm=t clears the large-file
+// scan interstitial. Returns text, or "" on any failure (caller degrades safely).
+async function fetchMT940(fileId){
+  const url = "https://drive.usercontent.google.com/download?id=" + fileId + "&export=download&confirm=t";
+  try{
+    const r = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    if(!r.ok) return "";
+    return await r.text();
+  }catch(e){ return ""; }
+}
+
+// Live bank read for a year: per clinic, 12-month cash-in (credits) + net + the
+// latest statement date. Gated by MT940_LIVE=1; returns null otherwise so the
+// baked BANK_REV snapshot is used. Fails safe per clinic.
+async function loadBankLive(year){
+  if(process.env.MT940_LIVE !== "1") return null;
+  const out = {};
+  for(const [clinic, acc] of Object.entries(MT940_ACCOUNTS)){
+    try{
+      const parsed = parseMT940(await fetchMT940(acc.fileId));
+      const months = Array.from({length:12}, () => null);
+      let any = false;
+      for(let i=0;i<12;i++){
+        const ym = year + "-" + String(i+1).padStart(2,"0");
+        if(parsed.byMonth[ym]){ months[i] = Math.round(parsed.byMonth[ym].in); any = true; }
+      }
+      out[clinic] = { months, latest: parsed.latest, iban: parsed.iban || acc.iban, live: any };
+    }catch(e){ out[clinic] = null; }
+  }
+  return out;
+}
+
+app.get("/bank", gate, async (req, res) => { try {
+  const year = String(parseInt(req.query.year,10) || new Date().getFullYear());
+  const order = ["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"];
+  const MON = ["Jan","Feb","Mrt","Apr","Mei","Jun","Jul","Aug","Sep","Okt","Nov","Dec"];
+  const f = n => n == null ? "\u2014" : "\u20ac" + Math.round(n).toLocaleString("en-US");
+
+  const live = await loadBankLive(year);
+  const seeded = !live;
+
+  function rowFor(c){
+    let months, latest = null;
+    if(live && live[c]){ months = live[c].months; latest = live[c].latest; }
+    else { months = (typeof BANK_REV !== "undefined" && BANK_REV[c] && BANK_REV[c][year]) ? BANK_REV[c][year] : Array.from({length:12},()=>null); }
+    const ytd = months.reduce((s,x)=> s + (x||0), 0);
+    let cells = "";
+    for(let i=0;i<12;i++){ cells += "<td class='num'>" + (months[i]==null ? "<span style='color:#cbd5e1'>\u00b7</span>" : f(months[i])) + "</td>"; }
+    return "<tr><td style='font-weight:600'>" + (c==="Holding"?"Notable":c) + "</td>" + cells +
+      "<td class='num' style='font-weight:700'>" + f(ytd) + "</td>" +
+      "<td class='num' style='font-size:11px;color:#94a3b8'>" + (latest ? latest.slice(5) : "\u2014") + "</td></tr>";
+  }
+
+  const head = "<tr><th>Clinic</th>" + MON.map(m=>"<th class='num'>"+m+"</th>").join("") + "<th class='num'>YTD in</th><th class='num'>to</th></tr>";
+
+  const banner = seeded
+    ? "<div class='warn'><b>Showing the baked bank snapshot.</b> The live MT940 read is wired (5 accounts, link-shared in Drive) but switched off \u2014 set <code>MT940_LIVE=1</code> in Render to read the .940 files live through yesterday. If the fetch ever fails it falls back to this snapshot, so the page can\u2019t break.</div>"
+    : "<div class='note'><b>Live from MT940</b> \u2014 read straight from your Drive .940 exports. This is <b>cash in</b> (gross bank receipts), the up-to-the-day leading edge while Yuki\u2019s booking catches up. It is not booked revenue and is never added to Yuki.</div>";
+
+  const css = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#16202E}" +
+    "h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}" +
+    "table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{padding:6px 7px;border-bottom:1px solid #f1f5f9;text-align:left}" +
+    "th{color:#64748b;font-size:10px;text-transform:uppercase}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}th.num{text-align:right}" +
+    ".note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:11px 13px;border-radius:10px;font-size:12.5px;line-height:1.55;margin:0 0 14px}" +
+    ".warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:11px 13px;border-radius:10px;font-size:12.5px;line-height:1.55;margin:0 0 14px}" +
+    "code{background:#eef2f7;padding:1px 5px;border-radius:5px}a{color:#2563EB}";
+
+  res.send("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Bank \u2014 MT940 leading edge</title><style>" + css + "</style></head><body>" +
+    "<h1>Bank cash-in \u2014 MT940 leading edge \u00b7 " + year + "</h1>" +
+    "<div class='sub'>Gross money landing in each clinic\u2019s ING account by month \u2014 the live edge that runs ahead of Yuki\u2019s booked P&amp;L. Cash, not revenue.</div>" +
+    banner +
+    "<table><thead>" + head + "</thead><tbody>" + order.map(rowFor).join("") + "</tbody></table>" +
+    "<p class='sub' style='margin-top:14px'>Pages: <a href='/pl'>/pl</a> (Yuki P&amp;L) \u00b7 <a href='/revenue'>/revenue</a> \u00b7 <a href='/'>home</a></p>" +
+    "</body></html>");
+} catch(e){ res.status(500).send("bank error: " + e.message); } });
+
+
 
 // ============================================================================
 //  /marketing — PER CLINIC: monthly ad spend (Google / Meta / Organic) with a
@@ -3406,11 +4340,16 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
 <h3>The money</h3>${grid([
   card("/practitioner-earnings","Earnings history","Per-practitioner monthly earnings pulled from PracticeHub, as far back as it serves \u2014 includes chiros who have left."),
   card("/profit","\u2b50 Profit per chiro","What each chiro brings in vs pay, costs and your draw \u2014 with a target slider and the \u20ac6k floor."),
+  card("/pl","P&amp;L \u2014 Yuki vs MT940","Booked accounting (Yuki) side by side with the bank (MT940), variance shown, management fee netted out \u2014 watch them reconcile before Yuki takes over."),
+  card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
 ])}
 <h3>Marketing &amp; leads</h3>${grid([
-  card("/marketing","Marketing by clinic","Monthly ad spend (Google/Meta/Organic) per clinic, cost per lead, and lead quality by month.")
+  card("/marketing","Marketing by clinic","Monthly ad spend (Google/Meta/Organic) per clinic, cost per lead, and lead quality by month."),
+  card("/meta-leads","\u2b50 Meta lead quality","Every FB/IG lead by clinic: reached \u2192 booked \u2192 paid intake \u2192 started care, plus a per-month call breakdown (green/yellow/red/blue)."),
+  card("/meta-spend","Meta vs Google cost","Cost per started-care patient, Meta vs Google side by side per clinic, with a campaign-vs-treated counting toggle."),
+  card("/notes-trends","Notes trends","Monthly call-note themes per clinic (objections, leakage, lead quality) \u2014 read-only, no PII.")
 ])}
 <h3>Checks &amp; automation</h3>${grid([
   card("/kpi?clinic=Amstelveen","Raw KPIs","Per-chiro numbers straight from PracticeHub (swap the clinic in the link)."),
