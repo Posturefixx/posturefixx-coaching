@@ -3828,6 +3828,13 @@ app.get("/bank", gate, async (req, res) => { try {
     ? "<div class='warn'><b>Showing the baked bank snapshot.</b> The live MT940 read is wired (5 accounts, link-shared in Drive) but switched off \u2014 set <code>MT940_LIVE=1</code> in Render to read the .940 files live through yesterday. If the fetch ever fails it falls back to this snapshot, so the page can\u2019t break.</div>"
     : "<div class='note'><b>Live from MT940</b> \u2014 read straight from your Drive .940 exports. This is <b>cash in</b> (gross bank receipts), the up-to-the-day leading edge while Yuki\u2019s booking catches up. It is not booked revenue and is never added to Yuki.</div>";
 
+  // Year buttons: current year back to 2019 (each account's opening era).
+  const yNow = new Date().getFullYear();
+  const yearList = []; for(let y=yNow; y>=2019; y--) yearList.push(String(y));
+  const yearBtns = "<div style='margin:0 0 14px;display:flex;flex-wrap:wrap;gap:6px'>" +
+    yearList.map(y => "<a href='/bank?year=" + y + "' style='padding:5px 11px;border-radius:8px;text-decoration:none;font-size:13px;" +
+      (y===year ? "background:#16202E;color:#fff" : "background:#f1f5f9;color:#16202E") + "'>" + y + "</a>").join("") + "</div>";
+
   const css = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#16202E}" +
     "h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}" +
     "table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{padding:6px 7px;border-bottom:1px solid #f1f5f9;text-align:left}" +
@@ -3840,6 +3847,7 @@ app.get("/bank", gate, async (req, res) => { try {
     "<h1>Bank cash-in \u2014 MT940 leading edge \u00b7 " + year + "</h1>" +
     "<div class='sub'>Gross money landing in each clinic\u2019s ING account by month \u2014 the live edge that runs ahead of Yuki\u2019s booked P&amp;L. Cash, not revenue.</div>" +
     banner +
+    yearBtns +
     "<table><thead>" + head + "</thead><tbody>" + order.map(rowFor).join("") + "</tbody></table>" +
     "<p class='sub' style='margin-top:14px'>Pages: <a href='/pl'>/pl</a> (Yuki P&amp;L) \u00b7 <a href='/revenue'>/revenue</a> \u00b7 <a href='/'>home</a></p>" +
     "</body></html>");
