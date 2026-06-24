@@ -346,6 +346,44 @@ const SAMPLE = [
 const app = express();
 app.use(express.json());
 
+// --- Global mobile responsiveness, in one place for EVERY page (and any future
+//     one). Post-processes full HTML responses: guarantees a viewport tag,
+//     collapses multi-column grids to a single column, and lets wide tables
+//     scroll sideways instead of blowing out the layout. Everything is scoped to
+//     <=640px, so the desktop view is byte-for-byte unchanged. Plain-text and
+//     JSON responses pass straight through untouched.
+const MOBILE_CSS = "<style id='mobilefix'>" +
+  "html{-webkit-text-size-adjust:100%}img,svg,canvas,iframe{max-width:100%}" +
+  "@media(max-width:640px){" +
+    "*{box-sizing:border-box}" +
+    "body{margin:12px auto!important;padding:0 12px!important;width:auto!important}" +
+    "h1{font-size:20px!important;line-height:1.25}h2{font-size:15px!important}" +
+    ".grid{grid-template-columns:1fr!important}" +
+    "[style*='grid-template-columns']{grid-template-columns:1fr!important}" +
+    "[style*='display:flex'],[style*='display: flex']{flex-wrap:wrap}" +
+    "table{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}" +
+  "}</style>";
+function injectMobile(html){
+  if(typeof html !== "string") return html;
+  if(!(/<!doctype/i.test(html) || /<html/i.test(html))) return html;   // full HTML pages only
+  let out = html;
+  if(!/name=['"]viewport['"]/i.test(out)){
+    const vp = "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+    if(/<head[^>]*>/i.test(out))            out = out.replace(/<head[^>]*>/i, m => m + vp);
+    else if(/<meta charset[^>]*>/i.test(out)) out = out.replace(/<meta charset[^>]*>/i, m => m + vp);
+    else                                    out = out.replace(/<!doctype[^>]*>/i, m => m + vp);
+  }
+  if(/<\/head>/i.test(out)) return out.replace(/<\/head>/i, MOBILE_CSS + "</head>");
+  if(/<\/body>/i.test(out)) return out.replace(/<\/body>/i, MOBILE_CSS + "</body>");
+  if(/<\/html>/i.test(out)) return out.replace(/<\/html>/i, MOBILE_CSS + "</html>");
+  return out + MOBILE_CSS;
+}
+app.use((req, res, next) => {
+  const orig = res.send.bind(res);
+  res.send = (body) => orig(injectMobile(body));
+  next();
+});
+
 // little reminder banner shown until you set DASHBOARD_PASSWORD
 const lockNote = () => process.env.DASHBOARD_PASSWORD ? "" :
   `<div style="background:#fff3cd;border:1px solid #ffe69c;padding:10px 14px;border-radius:8px;margin-bottom:16px">
@@ -2819,7 +2857,7 @@ app.get("/meta-spend", gate, async (req,res)=>{
     "a{color:#2563EB}.n{color:#64748b;font-size:12.5px}.g{background:#f0f7ff}</style>"+
     "<h1>Acquisition cost \u2014 Meta vs Google, per clinic</h1>"+
     "<p class=n>Spend + started-care from the bank/marketing snapshot (same source as <a href='/marketing'>/marketing</a>). "+
-    "Lower cost-per-started wins. \u00b7 <a href='/meta-leads'>\u2190 leads</a> \u00b7 <a href='/meta-leads/breakdown'>breakdown \u2192</a></p>"+
+    "Lower cost-per-started wins. \u00b7 <a href='/meta-leads'>\u2190 leads</a> \u00b7 <a href='/meta-leads/breakdown'>breakdown \u2192</a> \u00b7 <a href='/meta-spend/timeline'>by month \u2192</a></p>"+
     "<table><tr><th>Clinic</th><th class=g>Google spend</th><th class=g>Google started</th><th class=g>Google \u20ac/started</th>"+
     "<th>Meta spend</th><th>Meta started</th><th>Meta \u20ac/started</th><th>Cheaper</th></tr>"+snapRows+"</table>"+
     "<h2>Live Meta cross-check (API spend \u00f7 feed started-care)</h2>"+
@@ -2832,6 +2870,143 @@ app.get("/meta-spend", gate, async (req,res)=>{
     "or wire <b>Yuki</b> (YUKI_API_KEY + YUKI_ADMIN_&lt;CLINIC&gt; + YUKI_GL_GOOGLE/YUKI_GL_META). "+
     "If live Meta spend errors: a new Meta app may be in Development mode / need business verification before the token returns data \u2014 Meta-side, not the code.</p>");
 });
+
+// ============================================================================
+//  /meta-spend/timeline — Acquisition cost broken down by YEAR > MONTH > CLINIC.
+//  The summary /meta-spend is lifetime totals; this splits it monthly so you can
+//  see cost-per-started-care move over time per clinic and channel. Sources:
+//  started-care from the live feeds (already bucketed by month), Google spend
+//  from the ad-spend sheet's Month column, Meta spend from the API by month.
+//  All live bits fail safe; a year with no data just shows empty.
+// ============================================================================
+
+// Normalise many month formats to "YYYY-MM": 2026-01, 01-2026, 2026/3,
+// "jan 2026", "januari 2026", "Mrt 2026", 202601.
+function normYM(s){
+  s = String(s == null ? "" : s).trim(); if(!s) return null;
+  let m = s.match(/(\d{4})[-\/.](\d{1,2})\b/); if(m) return m[1] + "-" + String(+m[2]).padStart(2,"0");
+  m = s.match(/\b(\d{1,2})[-\/.](\d{4})\b/);   if(m) return m[2] + "-" + String(+m[1]).padStart(2,"0");
+  const MN = { jan:1, feb:2, mar:3, mrt:3, maa:3, apr:4, may:5, mei:5, jun:6, jul:7, aug:8, sep:9, okt:10, oct:10, nov:11, dec:12 };
+  m = s.toLowerCase().match(/([a-z]{3,})\D+(\d{4})/); if(m && MN[m[1].slice(0,3)]) return m[2] + "-" + String(MN[m[1].slice(0,3)]).padStart(2,"0");
+  m = s.match(/\b(\d{4})(\d{2})\b/); if(m && +m[2]>=1 && +m[2]<=12) return m[1] + "-" + m[2];
+  return null;
+}
+
+// Ad-spend sheet kept BY MONTH: { Clinic: { "YYYY-MM": {Google,Meta} } }.
+// Returns { _noMonth:true } if the sheet has no month column (so the caller can
+// tell the user to add one), or null if the sheet can't be read at all.
+function parseAdSpendByMonth(rows){
+  if(!rows || !rows.length) return null;
+  let hr = -1, H = null;
+  for(let i=0;i<Math.min(rows.length,10);i++){ const h = rows[i].map(x=>String(x||"").toLowerCase().trim());
+    if(h.some(c=>c.includes("spend")||c.includes("bedrag")||c.includes("amount")||c.includes("cost"))){ hr=i; H=h; break; } }
+  if(hr < 0) return null;
+  const ci=(...n)=>{ for(const nm of n){ const i=H.findIndex(h=>h.includes(nm)); if(i>=0) return i; } return -1; };
+  const cCl=ci("clinic","vestiging","praktijk","location"),
+        cCh=ci("channel","kanaal","platform","source"),
+        cSp=ci("spend","amount","bedrag","cost"),
+        cMo=ci("month","maand","period","periode","datum","date");
+  if(cCl<0 || cCh<0 || cSp<0) return null;
+  if(cMo<0) return { _noMonth:true };
+  const out = {};
+  for(let r=hr+1;r<rows.length;r++){ const row = rows[r] || []; const cl = String(row[cCl]||"").trim(); if(!cl) continue;
+    const chR = String(row[cCh]||"").toLowerCase();
+    const ch = chR.includes("goog") ? "Google" : (chR.includes("meta")||chR.includes("face")||chR.includes("insta")||chR.includes("fb")) ? "Meta" : null;
+    if(!ch) continue;
+    const amt = moneyNL(row[cSp]); if(amt == null) continue;
+    const ym = normYM(row[cMo]); if(!ym) continue;
+    const key = cl.charAt(0).toUpperCase() + cl.slice(1).toLowerCase();
+    const cm = (out[key] = out[key] || {});
+    (cm[ym] = cm[ym] || { Google:0, Meta:0 })[ch] += amt;
+  }
+  return Object.keys(out).length ? out : {};
+}
+
+// Live Meta spend by month for one ad account + year -> { "YYYY-MM": spend }.
+async function metaSpendMonthly(acctId, token, year){
+  const tr = encodeURIComponent(JSON.stringify({ since: year+"-01-01", until: year+"-12-31" }));
+  const url = "https://graph.facebook.com/v19.0/act_"+acctId+"/insights?fields=spend&time_range="+tr+"&time_increment=monthly&access_token="+encodeURIComponent(token);
+  const r = await fetch(url, { signal: AbortSignal.timeout(20000) }); const j = await r.json();
+  if(j.error) throw new Error(j.error.message||"Meta API error");
+  const out = {};
+  for(const x of (j.data||[])){ const ym = String(x.date_start||"").slice(0,7); if(ym) out[ym] = (out[ym]||0) + parseFloat(x.spend||0); }
+  return out;
+}
+
+// started-care by month for a clinic from a configured feed -> { "YYYY-MM": care }
+async function startedByMonth(cfg, clinic){
+  const out = {};
+  if(!cfg || !cfg.id) return out;
+  try{ const rows = await mlFetchClinic(cfg.id, cfg.gids); const a = mlAggregateRows(rows, clinic);
+    for(const ym in (a.months||{})){ out[ym] = a.months[ym].care; } }catch(e){}
+  return out;
+}
+
+app.get("/meta-spend/timeline", gate, async (req, res) => { try {
+  const year = String(parseInt(req.query.year,10) || new Date().getFullYear());
+  const clinics = ["Utrecht","Bussum","Amstelveen","Rotterdam"];
+  const token = process.env.META_TOKEN;
+  const MON = ["Jan","Feb","Mrt","Apr","Mei","Jun","Jul","Aug","Sep","Okt","Nov","Dec"];
+  const eur = v => v == null ? "\u2014" : "\u20ac" + Number(v).toLocaleString("en-US");
+
+  // Google spend by month (sheet, all clinics in one read)
+  let sheetM = null;
+  if(AD_SPEND_SHEET){ try{ sheetM = parseAdSpendByMonth(await mlFetchClinic(AD_SPEND_SHEET, [""])); }catch(e){} }
+  const noMonthCol = !!(sheetM && sheetM._noMonth);
+
+  const blocks = [];
+  for(const c of clinics){
+    const gStarted = await startedByMonth(GOOGLE_LEAD_SHEETS[c], c);
+    const mStarted = await startedByMonth(META_LEAD_SHEETS[c], c);
+    let metaSp = {};
+    if(token){ try{ const a = META_ACCTS[c]; metaSp = await metaSpendMonthly(process.env[a.env]||a.id, token, year); }catch(e){} }
+    const gSp = (sheetM && !sheetM._noMonth && sheetM[c]) ? sheetM[c] : {};
+
+    let rows = "", any = false, tG = 0, tM = 0, tGc = 0, tMc = 0;
+    for(let mo=1;mo<=12;mo++){
+      const ym = year + "-" + String(mo).padStart(2,"0");
+      const gs = gSp[ym] ? gSp[ym].Google : null;
+      const ms = (metaSp[ym] != null) ? Math.round(metaSp[ym]) : (gSp[ym] ? gSp[ym].Meta : null);
+      const gc = gStarted[ym] != null ? gStarted[ym] : null;
+      const mc = mStarted[ym] != null ? mStarted[ym] : null;
+      if(gs == null && ms == null && !gc && !mc) continue;
+      any = true;
+      if(gs != null) tG += gs; if(ms != null) tM += ms; if(gc) tGc += gc; if(mc) tMc += mc;
+      const gcps = (gs != null && gc) ? Math.round(gs/gc) : null;
+      const mcps = (ms != null && mc) ? Math.round(ms/mc) : null;
+      rows += "<tr><td>" + MON[mo-1] + "</td>" +
+        "<td class='g'>" + eur(gs) + "</td><td class='g'>" + (gc==null?"\u2014":gc) + "</td><td class='g'>" + (gcps==null?"\u2014":eur(gcps)) + "</td>" +
+        "<td>" + eur(ms) + "</td><td>" + (mc==null?"\u2014":mc) + "</td><td>" + (mcps==null?"\u2014":eur(mcps)) + "</td></tr>";
+    }
+    const tGcps = tGc ? Math.round(tG/tGc) : null, tMcps = tMc ? Math.round(tM/tMc) : null;
+    const total = "<tr style='font-weight:700;border-top:2px solid #e5e7eb'><td>" + year + "</td>" +
+      "<td class='g'>" + eur(tG||null) + "</td><td class='g'>" + (tGc||"\u2014") + "</td><td class='g'>" + (tGcps==null?"\u2014":eur(tGcps)) + "</td>" +
+      "<td>" + eur(tM||null) + "</td><td>" + (tMc||"\u2014") + "</td><td>" + (tMcps==null?"\u2014":eur(tMcps)) + "</td></tr>";
+    blocks.push("<h2>" + c + "</h2>" + (any
+      ? "<table><tr><th>Month</th><th class='g'>Google spend</th><th class='g'>started</th><th class='g'>\u20ac/started</th><th>Meta spend</th><th>started</th><th>\u20ac/started</th></tr>" + rows + total + "</table>"
+      : "<p class='n'>No spend or started-care data for " + c + " in " + year + ".</p>"));
+  }
+
+  const years = ["2026","2025"].map(y => "<a href='/meta-spend/timeline?year=" + y + "' style='padding:5px 11px;margin-right:6px;border-radius:8px;text-decoration:none;" + (y===year?"background:#16202E;color:#fff":"background:#f1f5f9;color:#16202E") + "'>" + y + "</a>").join("");
+
+  const notes = [];
+  if(noMonthCol) notes.push("Your ad-spend sheet has no <b>Month</b> column, so Google spend can\u2019t be split by month yet \u2014 add a Month column (format 2026-01) and the Google columns fill in.");
+  if(!AD_SPEND_SHEET) notes.push("No ad-spend sheet wired (AD_SPEND_SHEET), so Google spend is blank here \u2014 set it in Render to split Google by month.");
+  if(!token) notes.push("META_TOKEN not set, so Meta spend is blank \u2014 the API returns monthly spend once the token is live.");
+
+  res.send("<!doctype html><meta charset=utf-8><title>Acquisition cost \u2014 timeline</title>" +
+    "<style>body{font:15px/1.5 -apple-system,system-ui;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}" +
+    "table{border-collapse:collapse;width:100%;margin:6px 0 18px;font-size:13.5px}td,th{border:1px solid #e5e7eb;padding:5px 8px;text-align:left}" +
+    "th{background:#f8fafc;font-size:11.5px}.num,td:nth-child(n+2){text-align:right}.g{background:#f0f7ff}" +
+    "h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;margin:18px 0 4px}a{color:#2563EB}.n{color:#64748b;font-size:12.5px}" +
+    "td:first-child,th:first-child{text-align:left}</style>" +
+    "<h1>Acquisition cost \u2014 by month, per clinic</h1>" +
+    "<p class='n'>Cost per started-care patient, split by month. \u00b7 <a href='/meta-spend'>\u2190 summary</a> \u00b7 <a href='/meta-leads'>leads</a></p>" +
+    "<div style='margin:0 0 12px'>" + years + "</div>" +
+    (notes.length ? "<p class='n' style='background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:10px 12px;border-radius:9px'>" + notes.join("<br>") + "</p>" : "") +
+    blocks.join(""));
+} catch(e){ res.status(502).send("timeline error: " + e.message); } });
+
 
 // Ready-to-fill ad-spend sheet: copy into a new Google Sheet, keep it updated
 // monthly (from your Yuki export), share "anyone with link -> Viewer", then set
