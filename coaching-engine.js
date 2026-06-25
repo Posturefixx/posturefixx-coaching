@@ -294,16 +294,39 @@ async function sendSms(clinic, phone, name, text, scheduledTimestamp) {
 }
 
 // ── Pull each chiro's REAL current numbers from PracticeHub (across their clinics) ─
+// visits + PVA-now stay the chiro's OWN last-30-day figures (the live pace).
+// intakes is deliberately different: the AVERAGE MONTHLY new-patient flow at the
+// chiro's FIXED clinic(s) over the last INTAKE_AVG_DAYS (default 180). It's the
+// clinic-level intake total, summed across their clinics, divided by the months in
+// the window. That steadier number is what the projection multiplies by PVA × €59.
+const INTAKE_AVG_DAYS = Number(process.env.INTAKE_AVG_DAYS) || 180;
+
+// Sum the clinic-level intake totals across a chiro's fixed clinics, then turn the
+// window total into a per-month average. e.g. Bussum 100 + Amstelveen 110 = 210
+// over 180 days → 210 ÷ 6 = 35 intakes/month.
+function chiroAvgIntakes(clinicWindowTotals, clinics, avgDays){
+  const months = (avgDays || 180) / 30;
+  let total = 0;
+  for (const c of clinics) total += (clinicWindowTotals[c] || 0);
+  return Math.round(total / months);
+}
+
 async function chiroBaselines(days = 30) {
   const clinics = [...new Set(CHIROS.flatMap(c => c.clinics))];
-  const byClinic = {};
-  for (const c of clinics) byClinic[c] = await computeKpis(c, days); // sequential = rate-limit safe
+  const byClinic = {}, intakeTotals = {};
+  for (const c of clinics) {                                   // sequential = rate-limit safe
+    byClinic[c] = await computeKpis(c, days);                  // last 30d: visits/pace + own intakes
+    const k = (INTAKE_AVG_DAYS === days) ? byClinic[c]
+            : await computeKpis(c, INTAKE_AVG_DAYS);           // last 180d for the intake average
+    intakeTotals[c] = k.rows.reduce((s, r) => s + (r.intakes || 0), 0); // clinic-level intake total over the window
+  }
   return CHIROS.map(ch => {
-    let visits = 0, intakes = 0;
+    let visits = 0, intakesOwn = 0;
     for (const c of ch.clinics)
       for (const r of byClinic[c].rows)
-        if (r.name.toLowerCase().includes(ch.n.toLowerCase())) { visits += r.visits; intakes += r.intakes; }
-    return { ...ch, visits, intakes, pva: intakes ? +(visits / intakes).toFixed(1) : 0 };
+        if (r.name.toLowerCase().includes(ch.n.toLowerCase())) { visits += r.visits; intakesOwn += r.intakes; }
+    const intakes = chiroAvgIntakes(intakeTotals, ch.clinics, INTAKE_AVG_DAYS); // avg monthly intakes at their fixed clinic(s)
+    return { ...ch, visits, intakes, intakesOwn, pva: intakesOwn ? +(visits / intakesOwn).toFixed(1) : 0 };
   });
 }
 
@@ -2378,7 +2401,7 @@ function card(c){
     bruttoBig=eur(c.bruttoAnnualNow)+"/yr";
     bruttoDet=bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"");
   }
-  var pvaLine="Live now: PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b> \u00b7 intakes <b>"+(c.intakes||0)+"</b> (30d, PracticeHub)";
+  var pvaLine="Live now: PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b> \u00b7 intakes <b>"+(c.intakes||0)+"</b>/mo <span style='color:#94a3b8'>(6-mo avg, PracticeHub)</span>";
   return "<div class='card' data-name='"+c.n+"' data-v='"+c.visits30+"' data-pva='"+(c.pvaNow==null?'':c.pvaNow)+"' data-int='"+(c.intakes||0)+"' data-days='"+c.days+"'>"
     +"<div class='gname'>"+c.n+" <span class='gclin'>"+(c.clinics||[]).join(" + ")+"</span>"+tagFor(c)+(c.payVerified?"":" <span class='tag est'>pay = estimate</span>")+(c.phone?"":" <span class='gclin' style='color:#dc2626'>(no phone)</span>")+"</div>"
     +"<div class='twocol'>"
