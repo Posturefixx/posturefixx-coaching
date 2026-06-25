@@ -2894,51 +2894,158 @@ function countApply(mode, x, n, started){ // x = crossForMonth/Total result
 
 // Per-month dropdown breakdown of the "Answered phone" column, per clinic.
 // ?count=campaign (default, feed as-is) | treated (minus cross-booked elsewhere).
+// ---------- Historical monthly marketing rollups (2024-2026) ----------
+// One workbook per YEAR; one tab per clinic named "{year} {Clinic}" (e.g. "2024 Utrecht").
+// Meta & Google columns are kept SEPARATE. These pre-date the per-lead call feed, so
+// months sourced here are MONTHLY TOTALS only (no green/yellow/red/blue split). Gated
+// behind META_HISTORY_LIVE=1; workbooks must be link-shared "anyone with link - viewer".
+const META_HISTORY = {
+  "2024": "1APX9DFtsV4qOWbg2qZPSZlp_1-S-qm5ZEQsBXTv1rnc",
+  "2025": "1O_d9_TAt93Iq6dT5adae11zAE8RKYbakrT9-VNqESYs",
+  "2026": "1WCfLRCNMw9lgxP-Qe165Eo5sn7QF43PR9zPBRbaoj2g"
+};
+const META_HISTORY_LIVE = process.env.META_HISTORY_LIVE === "1";
+const HIST_MON = {january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12,
+  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+function histInt(v){ const n=parseInt(String(v==null?"":v).replace(/[^0-9-]/g,""),10); return (isFinite(n)&&n>0)?n:0; }
+function histCols(header){
+  const H=header.map(h=>String(h||"").toLowerCase().replace(/\s+/g," ").trim());
+  const end=H.length; let metaIdx=H.findIndex(h=>h==="meta"); if(metaIdx<0) metaIdx=end;
+  const findIn=(name,from,to)=>{ for(let i=from;i<to;i++){ if(H[i]&&H[i].indexOf(name)!==-1) return i; } return -1; };
+  return { g_book:findIn("booking",1,metaIdx), g_intake:findIn("intake",1,metaIdx), g_started:findIn("started care",1,metaIdx),
+    m_leads:findIn("leads",metaIdx,end), m_intake:findIn("intake",metaIdx,end), m_started:findIn("started care",metaIdx,end) };
+}
+function parseHistTab(rows, year){
+  let hr=-1, cols=null;
+  for(let i=0;i<Math.min(rows.length,8);i++){ const H=(rows[i]||[]).map(x=>String(x||"").toLowerCase());
+    if(H.some(h=>h.indexOf("month")!==-1) && H.some(h=>h==="meta"||h.indexOf("leads")!==-1)){ hr=i; cols=histCols(rows[i]); break; } }
+  if(hr<0) return {};
+  const out={};
+  for(let r=hr+1;r<rows.length;r++){ const row=rows[r]||[]; const mn=String(row[0]||"").toLowerCase().replace(/[^a-z]/g,"");
+    const mo=HIST_MON[mn]; if(!mo) continue;                         // skip totals/averages/blank rows
+    out[year+"-"+String(mo).padStart(2,"0")]={
+      metaLeads:   cols.m_leads >=0?histInt(row[cols.m_leads]):0,
+      metaIntakes: cols.m_intake>=0?histInt(row[cols.m_intake]):0,
+      metaStarted: cols.m_started>=0?histInt(row[cols.m_started]):0,
+      gBook:   cols.g_book   >=0?histInt(row[cols.g_book]):0,
+      gIntake: cols.g_intake >=0?histInt(row[cols.g_intake]):0,
+      gStarted:cols.g_started>=0?histInt(row[cols.g_started]):0 };
+  }
+  return out;
+}
+async function histForClinic(clinic){
+  const all={};
+  for(const yr of Object.keys(META_HISTORY)){
+    for(const tab of [yr+" "+clinic, clinic]){
+      try{ const rows=parseCSV(await fetchSheetCSV(META_HISTORY[yr], tab)); const parsed=parseHistTab(rows, yr);
+        if(Object.keys(parsed).length){ Object.assign(all, parsed); break; } }catch(e){}
+    }
+  }
+  return all;
+}
+
 app.get("/meta-leads/breakdown", gate, async (req,res)=>{
   try{
     const mode = req.query.count==="treated" ? "treated" : "campaign";
-    const blocks=[];
+    const demo = (req.query.demo==="1"||req.query.demo==="true"); const dq = demo ? "&demo=1" : ""; const dq1 = demo ? "?demo=1" : "";
+    const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const monName=ym=>MON[(+ym.slice(5,7))-1]+" "+ym.slice(0,4);
+    const curYear=String(new Date().getFullYear());
+    const catLine=(cat,n,leads)=>"<div class=cat><span class=dot style='background:"+cat.color+"'></span>"+cat.label+": <b>"+n+"</b> <span class=mut>("+mlPct(n,leads)+"%)</span></div>";
+    const sections=[]; let defClinic=null, defLeads=-1;
     for(const name of Object.keys(META_LEAD_SHEETS)){
       const cfg=META_LEAD_SHEETS[name];
-      const rows=await mlFetchClinic(cfg.id, cfg.gids);
-      if(!rows.length){ blocks.push("<h2>"+name+"</h2><p style='color:#c0392b'>could not read feed</p>"); continue; }
-      const agg=mlAggregateRows(rows, name); const t=agg.totals;
+      let rows; try{ rows=await mlFetchClinic(cfg.id, cfg.gids); }catch(e){ rows=[]; }
+      if(!rows.length){ sections.push("<section class='clinic' data-clinic='"+name+"' style='display:none'><div class='chead'>"+name+" <span class='src'>(feed unavailable)</span></div><p class='tot'>Could not read this clinic\u2019s feed.</p></section>"); continue; }
+      const agg=mlAggregateRows(rows,name);
+      if(META_HISTORY_LIVE){ try{ const hist=await histForClinic(name);
+        for(const ym of Object.keys(hist)){ const h=hist[ym]; const cur=agg.months[ym];
+          if(!cur || (cur.leads||0)===0){ const a=blankAgg(); a.leads=h.metaLeads; a.care=h.metaStarted; a.paid=h.metaIntakes;
+            a.hist=true; a.gBook=h.gBook; a.gIntake=h.gIntake; a.gStarted=h.gStarted; agg.months[ym]=a; } }
+      }catch(e){} }
+      const t=agg.totals;
       const answered=t.green+t.yellow+t.red+t.blue;
-      const ct=crossForTotal(agg, name);
+      const ct=crossForTotal(agg,name);
       const keys=Object.keys(agg.months).sort().reverse();
-      const months=keys.map(function(ym){ const m=agg.months[ym];
-        const adj=countApply(mode, crossForMonth(agg,name,ym), m.leads, m.care);
-        const xnote = adj.removed>0 ? " <span style='color:#b45309'>(\u2212"+adj.removed+" cross-booked)</span>" : "";
-        return "<details class=mo><summary><b>"+ym+"</b> \u00b7 "+adj.leads+" leads"+xnote+" \u00b7 "+
-          "<span style='color:"+ML_CAT.green.color+"'>"+m.green+" booked</span> \u00b7 started care: "+adj.started+"</summary>"+
-          "<div class=brk>"+
-          "<span style='color:"+ML_CAT.green.color+"'>"+ML_CAT.green.label+": <b>"+m.green+"</b> ("+mlPct(m.green,m.leads)+"%)</span>"+
-          "<span style='color:"+ML_CAT.yellow.color+"'>"+ML_CAT.yellow.label+": <b>"+m.yellow+"</b> ("+mlPct(m.yellow,m.leads)+"%)</span>"+
-          "<span style='color:"+ML_CAT.red.color+"'>"+ML_CAT.red.label+": <b>"+m.red+"</b> ("+mlPct(m.red,m.leads)+"%)</span>"+
-          "<span style='color:"+ML_CAT.blue.color+"'>"+ML_CAT.blue.label+": <b>"+m.blue+"</b> ("+mlPct(m.blue,m.leads)+"%)</span>"+
-          "</div></details>";
+      const byYear={}; keys.forEach(ym=>{ (byYear[ym.slice(0,4)]=byYear[ym.slice(0,4)]||[]).push(ym); });
+      const years=Object.keys(byYear).sort().reverse();
+      const yearBlocks=years.map(function(yr){
+        let yl=0,yb=0,ys=0,yHist=false;
+        const moRows=byYear[yr].map(function(ym){ const m=agg.months[ym];
+          if(m.hist){ yHist=true; yl+=(m.leads||0); ys+=(m.care||0);
+            return "<details class=mo><summary><b class=mn>"+monName(ym)+"</b>"+
+              "<span class=pill>Meta "+(m.leads||0)+" leads</span>"+
+              "<span class='pill bk'>"+(m.care||0)+" started</span>"+
+              "<span class=pill>Google "+(m.gBook||0)+" booked</span>"+
+              "<span class='pill hist'>monthly totals</span></summary><div class=brk>"+
+              "<div class=cat><span class=dot style='background:"+ML_CAT.green.color+"'></span>Meta: <b>"+(m.leads||0)+"</b> leads · "+(m.paid||0)+" intakes · "+(m.care||0)+" started care</div>"+
+              "<div class=cat><span class=dot style='background:#f59e0b'></span>Google: <b>"+(m.gBook||0)+"</b> booked · "+(m.gIntake||0)+" intakes · "+(m.gStarted||0)+" started care</div>"+
+              "<div class=mut style='margin-top:5px'>No per-call breakdown — monthly totals from the marketing sheet.</div></div></details>"; }
+          const adj=countApply(mode, crossForMonth(agg,name,ym), m.leads, m.care);
+          yl+=adj.leads; yb+=m.green; ys+=adj.started;
+          const xnote = adj.removed>0 ? " <span class=xb>(\u2212"+adj.removed+" cross-booked)</span>" : "";
+          const bookPct=mlPct(m.green,m.leads);
+          const seg=(c,n)=> n>0 ? "<i style='width:"+mlPct(n,m.leads)+"%;background:"+c+"'></i>" : "";
+          const bar="<div class=bar>"+seg(ML_CAT.green.color,m.green)+seg(ML_CAT.blue.color,m.blue)+seg(ML_CAT.red.color,m.red)+seg(ML_CAT.yellow.color,m.yellow)+"</div>";
+          return "<details class=mo><summary>"+
+            "<b class=mn>"+monName(ym)+"</b>"+
+            "<span class=pill>"+adj.leads+" leads</span>"+
+            "<span class='pill bk'>"+m.green+" booked"+(adj.leads?" \u00b7 "+bookPct+"%":"")+"</span>"+
+            "<span class=pill>started "+adj.started+"</span>"+xnote+
+            "</summary><div class=brk>"+
+            catLine(ML_CAT.green,m.green,m.leads)+catLine(ML_CAT.yellow,m.yellow,m.leads)+
+            catLine(ML_CAT.red,m.red,m.leads)+catLine(ML_CAT.blue,m.blue,m.leads)+bar+
+            "</div></details>";
+        }).join("");
+        var ysum=(yHist&&yb===0)?(yl+" leads \u00b7 "+ys+" started care \u00b7 monthly totals"):(yl+" leads \u00b7 "+yb+" booked \u00b7 "+ys+" started care");
+        return "<details class=yr"+(yr===curYear?" open":"")+"><summary><span class=yn>"+yr+"</span>"+
+          "<span class=ysum>"+ysum+"</span></summary>"+
+          "<div class=yrbody>"+moRows+"</div></details>";
       }).join("");
-      const treatedLeads = mode==="treated" ? Math.max(0,t.leads-ct.outN-ct.inN) : t.leads;
-      const treatedStarted = mode==="treated" ? Math.max(0,t.care-ct.outStarted-ct.inStarted) : t.care;
-      blocks.push("<h2>"+name+" <span style='font-size:11px;color:#94a3b8'>("+ct.src+")</span></h2><p class=tot>"+
-        (mode==="treated"
-          ? "Treated-here: <b>"+treatedLeads+"</b> leads / started care <b>"+treatedStarted+"</b> "
-          : "Campaign (all feed rows): <b>"+t.leads+"</b> leads / started care <b>"+t.care+"</b> ")+
-        "\u00b7 answered "+answered+" (G "+t.green+" / Y "+t.yellow+" / R "+t.red+" / B "+t.blue+") "+
-        "\u00b7 <span style='color:#b45309'>cross-booked elsewhere: "+ct.outN+(ct.inN?(" + copied-in "+ct.inN):"")+"</span></p>"+months);
+      const totLine=(mode==="treated"
+          ? "Treated here: <b>"+Math.max(0,t.leads-ct.outN-ct.inN)+"</b> leads \u00b7 started care <b>"+Math.max(0,t.care-ct.outStarted-ct.inStarted)+"</b>"
+          : "Campaign: <b>"+t.leads+"</b> leads \u00b7 started care <b>"+t.care+"</b>")
+        +" \u00b7 answered "+answered+" (G "+t.green+"/Y "+t.yellow+"/R "+t.red+"/B "+t.blue+")"
+        +" \u00b7 <span class=xb>cross-booked elsewhere "+ct.outN+(ct.inN?(" + copied-in "+ct.inN):"")+"</span>";
+      sections.push("<section class='clinic' data-clinic='"+name+"' style='display:none'>"+
+        "<div class='chead'>"+name+" <span class='src'>("+ct.src+")</span><span class='tot'>"+totLine+"</span></div>"+
+        (yearBlocks||"<p class='tot'>No campaign-attributed months for this clinic \u2014 its paid leads were booked at other clinics (see cross-booked above).</p>")+
+        "</section>");
+      if(t.leads>defLeads){ defLeads=t.leads; defClinic=name; }
     }
-    const tog=(m)=>m===mode?("<b>"+m+"</b>"):("<a href='/meta-leads/breakdown?count="+m+"'>"+m+"</a>");
-    res.send("<!doctype html><meta charset=utf-8><title>Per-month call breakdown</title>"+
-      "<style>body{font:15px/1.5 -apple-system,system-ui;max-width:780px;margin:24px auto;padding:0 16px;color:#16202E}"+
-      "h1{font-size:22px;margin:0 0 2px}h2{font-size:16px;margin:22px 0 6px}"+
-      ".src{color:#64748b;font-size:13px;margin:0 0 8px}.tot{font-size:13px;color:#475569}"+
-      ".mo{border:1px solid #e5e7eb;border-radius:10px;margin:6px 0;padding:8px 12px}summary{cursor:pointer}"+
-      ".brk{display:flex;flex-direction:column;gap:2px;margin-top:8px;font-size:13.5px}a{color:#2563EB}</style>"+
+    const tabBtns=Object.keys(META_LEAD_SHEETS).map(n=>"<button class='tab' data-go='"+n+"'>"+n+"</button>").join("");
+    const tog=(m)=> m===mode ? "<b>"+m+"</b>" : "<a href='/meta-leads/breakdown?count="+m+dq+"'>"+m+"</a>";
+    const CSS="body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:860px;margin:22px auto;padding:0 16px;color:#16202E;background:#F7F9FC}"+
+      "h1{font-size:22px;margin:0 0 2px}.src{color:#64748b;font-size:13px}.mut{color:#94a3b8}.xb{color:#b45309}a{color:#2563EB}"+
+      ".toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:13px;color:#64748b;margin:8px 0 4px}.toolbar a{margin-left:2px}"+
+      ".howto{margin:6px 0 4px;font-size:13px}.howto>summary{cursor:pointer;color:#2563EB}.howbody{color:#475569;margin:6px 0 0;padding:8px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:10px}"+
+      ".tabs{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;gap:6px;background:#F7F9FC;padding:10px 0 8px;margin:8px 0 4px;border-bottom:1px solid #e5e7eb}"+
+      ".tab{padding:6px 13px;border:1px solid #e5e7eb;background:#fff;border-radius:999px;font-size:13px;cursor:pointer;color:#475569}.tab.on{background:#2563EB;border-color:#2563EB;color:#fff;font-weight:600}"+
+      ".chead{font-size:19px;font-weight:700;margin:14px 0 8px}.chead .src{font-size:11px;font-weight:400;color:#94a3b8}.chead .tot{display:block;font-size:12.5px;font-weight:400;color:#64748b;margin-top:3px}"+
+      ".yr{border:1px solid #e5e7eb;border-radius:12px;margin:8px 0;background:#fff;overflow:hidden}"+
+      ".yr>summary{cursor:pointer;list-style:none;padding:11px 14px;background:#f8fafc;display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}.yr>summary::-webkit-details-marker{display:none}"+
+      ".yr[open]>summary{border-bottom:1px solid #eef2f7}.yn{font-weight:700;font-size:15px}.ysum{font-size:12.5px;color:#64748b}.yrbody{padding:6px 10px 10px}"+
+      ".mo{border:1px solid #eef2f7;border-radius:9px;margin:6px 0;background:#fff;padding:9px 12px}"+
+      ".mo>summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:7px}.mo>summary::-webkit-details-marker{display:none}.mn{min-width:74px}"+
+      ".pill{font-size:11.5px;padding:1px 8px;border-radius:999px;background:#eef2f7;color:#475569}.pill.bk{background:#e6f4ec;color:#1a7a44}.pill.hist{background:#fef3c7;color:#92400e}"+
+      ".brk{display:flex;flex-direction:column;gap:3px;margin-top:9px;font-size:13.5px}.cat{display:flex;align-items:center;gap:7px}.dot{width:9px;height:9px;border-radius:50%;display:inline-block}"+
+      ".bar{display:flex;height:7px;border-radius:5px;overflow:hidden;background:#eef2f7;margin-top:7px}.bar>i{display:block;height:100%}"+
+      "html.dark body{background:#0f172a}html.dark .tabs{background:#0f172a;border-color:#334155}html.dark .tab{background:#1e293b;border-color:#334155;color:#cbd5e1}html.dark .tab.on{background:#2563EB;border-color:#2563EB;color:#fff}"+
+      "html.dark .yr,html.dark .mo,html.dark .howbody{background:#1e293b;border-color:#334155}html.dark .yr>summary{background:#243044}html.dark .yr[open]>summary{border-color:#334155}html.dark .mo{border-color:#334155}html.dark .pill{background:#243044;color:#cbd5e1}html.dark .pill.bk{background:#16341f;color:#86efac}html.dark .pill.hist{background:#3a2f12;color:#fbbf24}html.dark .bar{background:#243044}";
+    const howto="<details class=howto><summary>How to read this</summary><div class=howbody>"+
+      "GREEN = <b>successful booking calls</b>. Source: "+LEAD_SOURCE_LABEL+". "+
+      "<b>Campaign</b> counts every lead the clinic\u2019s ad account generated; <b>treated</b> counts only those generated AND treated at that same clinic. "+
+      "<b>Cross-booked</b> = this campaign\u2019s lead was given an appointment at a different physical clinic. "+
+      "<b>live</b> = read from a \u2018Booked clinic\u2019 column in the feed; <b>snapshot</b> = static through 2026-06 (add that column to go live)."+
+      "</div></details>";
+    const script="<script>(function(){function pick(c){var ss=document.querySelectorAll('section.clinic');for(var i=0;i<ss.length;i++){ss[i].style.display=ss[i].getAttribute('data-clinic')===c?'':'none';}var bs=document.querySelectorAll('.tab');for(var j=0;j<bs.length;j++){bs[j].className=bs[j].getAttribute('data-go')===c?'tab on':'tab';}}var tb=document.querySelectorAll('.tab');for(var k=0;k<tb.length;k++){(function(b){b.addEventListener('click',function(){pick(b.getAttribute('data-go'));});})(tb[k]);}pick("+JSON.stringify(defClinic||"")+");})();</script>";
+    res.send("<!doctype html><meta charset=utf-8><title>Per-month call breakdown</title><style>"+CSS+"</style>"+
       "<h1>Per-month call breakdown</h1>"+
-      "<p class=src>Source: "+LEAD_SOURCE_LABEL+". GREEN is labelled <b>successful booking calls</b>. \u00b7 <a href='/meta-leads'>\u2190 funnel</a> \u00b7 <a href='/meta-spend'>cost \u2192</a></p>"+
-      "<p class=src>Count by: "+tog("campaign")+" (which ad account generated the lead) \u00b7 "+tog("treated")+" (generated AND treated here). "+
-      "Cross-booked = this campaign\u2019s lead given an appointment at another physical clinic. <b>live</b> = read from a \u2018Booked clinic\u2019 column in the feed; <b>snapshot</b> = static through 2026-06 (add the column to go live).</p>"+
-      blocks.join(""));
+      "<div class=toolbar><span>Count by:</span> "+tog("campaign")+" <span class=mut>\u00b7</span> "+tog("treated")+
+        " <a href='/meta-leads"+dq1+"'>\u2190 funnel</a> <a href='/meta-spend"+dq1+"'>cost \u2192</a></div>"+
+      howto+
+      "<div class=tabs>"+tabBtns+"</div>"+
+      sections.join("")+script);
   }catch(e){ res.status(502).send("breakdown error: "+e.message); }
 });
 
