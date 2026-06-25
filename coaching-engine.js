@@ -386,20 +386,65 @@ const MOBILE_CSS = "<style id='mobilefix'>" +
     "[style*='display:flex'],[style*='display: flex']{flex-wrap:wrap}" +
     "table{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}" +
   "}</style>";
+// --- Global theme: dark mode (system default + a remembered toggle) and the
+//     hover "lift" on home tiles, injected into EVERY page in one place. The
+//     init script runs before paint (no flash); the dark overrides remap the
+//     light palette via class/tag rules plus inline-style value matching so the
+//     40 hand-styled pages go dark without rewriting each one. ---
+const THEME_INIT = `<script>(function(){try{var t=localStorage.getItem('pfx-theme');if(!t)t=(window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';if(t==='dark')document.documentElement.classList.add('dark');}catch(e){}})();</script>`;
+const THEME_CSS = `<style id="themefix">
+a.tile{transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
+a.tile:hover{transform:translateY(-3px);box-shadow:0 10px 26px rgba(2,6,23,.16),0 0 0 1px var(--accent,#2563EB)!important;border-color:var(--accent,#2563EB)!important}
+#pfx-theme-btn{position:fixed;top:10px;right:12px;z-index:99999;width:38px;height:38px;border-radius:50%;border:1px solid #e5e7eb;background:#fff;color:#16202E;font-size:17px;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(2,6,23,.12)}
+html.dark{color-scheme:dark;background:#0f172a}
+html.dark body{background:#0f172a!important;color:#e2e8f0!important}
+html.dark h1,html.dark h2,html.dark h3,html.dark h4,html.dark b,html.dark strong,html.dark summary{color:#f1f5f9!important}
+html.dark a{color:#60a5fa!important}
+html.dark hr{border-color:#334155!important}
+html.dark th{background:#1e293b!important;color:#cbd5e1!important;border-color:#334155!important}
+html.dark td{border-color:#334155!important}
+html.dark input,html.dark select,html.dark textarea{background:#1e293b!important;color:#e2e8f0!important;border-color:#334155!important}
+html.dark code{background:#273449!important;color:#e2e8f0!important}
+html.dark .card,html.dark .box,html.dark .tile,html.dark .mo,html.dark section{background:#1e293b!important;border-color:#334155!important;color:#e2e8f0!important}
+html.dark #pfx-theme-btn{background:#1e293b;border-color:#334155;color:#fbbf24}
+html.dark [style*="background:#fff"],html.dark [style*="background:#ffffff"],html.dark [style*="background:#F7F9FC"],html.dark [style*="background:#f7f9fc"],html.dark [style*="background:#f8fafc"],html.dark [style*="background:#fafafa"],html.dark [style*="background:#f4f4f4"]{background-color:#1e293b!important}
+html.dark [style*="background:#eff6ff"],html.dark [style*="background:#f0f7ff"]{background-color:#16263f!important}
+html.dark [style*="background:#fffbeb"],html.dark [style*="background:#fff3cd"],html.dark [style*="background:#fef3c7"]{background-color:#3a2f12!important}
+html.dark [style*="background:#dcfce7"]{background-color:#0f2e1d!important}
+html.dark [style*="background:#eef2f7"],html.dark [style*="background:#f1f5f9"]{background-color:#273449!important}
+html.dark [style*="color:#16202E"],html.dark [style*="color:#16202e"]{color:#e2e8f0!important}
+html.dark [style*="color:#64748b"],html.dark [style*="color:#475569"]{color:#94a3b8!important}
+html.dark [style*="color:#1e3a8a"]{color:#93c5fd!important}
+html.dark [style*="color:#92400e"],html.dark [style*="color:#b45309"]{color:#fbbf24!important}
+html.dark [style*="color:#166534"],html.dark [style*="color:#16a34a"]{color:#86efac!important}
+html.dark [style*="#e5e7eb"],html.dark [style*="#bfdbfe"],html.dark [style*="#fde68a"]{border-color:#334155!important}
+</style>`;
+const THEME_BTN = `<button id="pfx-theme-btn" aria-label="Toggle dark mode" onclick="(function(){var d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('pfx-theme',d?'dark':'light')}catch(e){}var b=document.getElementById('pfx-theme-btn');b.textContent=d?'\u2600':'\u263d'})()">\u263d</button><script>try{var b=document.getElementById('pfx-theme-btn');b.textContent=document.documentElement.classList.contains('dark')?'\u2600':'\u263d'}catch(e){}</script>`;
+
 function injectMobile(html){
   if(typeof html !== "string") return html;
   if(!(/<!doctype/i.test(html) || /<html/i.test(html))) return html;   // full HTML pages only
   let out = html;
   if(!/name=['"]viewport['"]/i.test(out)){
     const vp = "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-    if(/<head[^>]*>/i.test(out))            out = out.replace(/<head[^>]*>/i, m => m + vp);
+    if(/<head[^>]*>/i.test(out))              out = out.replace(/<head[^>]*>/i, m => m + vp);
     else if(/<meta charset[^>]*>/i.test(out)) out = out.replace(/<meta charset[^>]*>/i, m => m + vp);
-    else                                    out = out.replace(/<!doctype[^>]*>/i, m => m + vp);
+    else                                      out = out.replace(/<!doctype[^>]*>/i, m => m + vp);
   }
-  if(/<\/head>/i.test(out)) return out.replace(/<\/head>/i, MOBILE_CSS + "</head>");
-  if(/<\/body>/i.test(out)) return out.replace(/<\/body>/i, MOBILE_CSS + "</body>");
-  if(/<\/html>/i.test(out)) return out.replace(/<\/html>/i, MOBILE_CSS + "</html>");
-  return out + MOBILE_CSS;
+  // theme init as early as possible (before paint)
+  if(/<head[^>]*>/i.test(out)) out = out.replace(/<head[^>]*>/i, m => m + THEME_INIT);
+  else                         out = out.replace(/<!doctype[^>]*>/i, m => m + THEME_INIT);
+  // styles (theme + mobile) at end of head, else end of body/html, else append
+  const styles = THEME_CSS + MOBILE_CSS;
+  if(/<\/head>/i.test(out))      out = out.replace(/<\/head>/i, styles + "</head>");
+  else if(/<\/body>/i.test(out)) out = out.replace(/<\/body>/i, styles + "</body>");
+  else if(/<\/html>/i.test(out)) out = out.replace(/<\/html>/i, styles + "</html>");
+  else                           out = out + styles;
+  // floating toggle button
+  if(/<\/body>/i.test(out))      out = out.replace(/<\/body>/i, THEME_BTN + "</body>");
+  else if(/<\/html>/i.test(out)) out = out.replace(/<\/html>/i, THEME_BTN + "</html>");
+  else                           out = out + THEME_BTN;
+  return out;
 }
 app.use((req, res, next) => {
   const orig = res.send.bind(res);
@@ -2303,22 +2348,42 @@ function card(c){
   var out="";
   if(c.solErr){ out="<div class='need' style='color:#b45309'>Set a number to project \u2014 "+c.solErr+".</div>"; }
   else if(c.hasGoal && c.broughtInGoal!=null){
-    var nettoStr=c.nettoGoal!=null?(" \u00b7 netto <b>"+eur(c.nettoGoal)+"</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")):"";
     var pvaStr=c.pvaGoal!=null?("PVA <b>"+c.pvaGoal.toFixed(1)+"</b>"):"PVA <span style='color:#94a3b8'>(needs live intakes)</span>";
-    out="<div class='need'>To hit this: brought in <b>"+eur(c.broughtInGoal)+"</b> \u00b7 brutto <b>"+eur(c.bruttoGoal)+"</b>"+nettoStr+" <span style='color:#94a3b8'>est.</span></div>"
-      +"<div class='need'>"+pvaStr+" \u00b7 <b>~"+(c.perDayNeeded!=null?Math.round(c.perDayNeeded):"\u2014")+"/day</b> (\u2248"+Math.round(c.weekNeeded)+"/wk) \u2014 on <b>"+(c.intakes||0)+"</b> intakes/mo \u00d7 PVA, at <b>"+c.days+"</b> days/wk</div>";
+    out="<div class='need'>To hit it: "+pvaStr+" \u00b7 <b>~"+(c.perDayNeeded!=null?Math.round(c.perDayNeeded):"\u2014")+"/day</b> (\u2248"+Math.round(c.weekNeeded)+"/wk) \u2014 on <b>"+(c.intakes||0)+"</b> intakes/mo \u00d7 PVA, at <b>"+c.days+"</b> days/wk</div>";
     var gap=c.gapWeek, cmp;
     if(gap>0.5) cmp="<b style='color:#b45309'>~"+Math.round(gap)+"/wk short</b>";
     else if(c.pct!=null && c.pct>=1.10) cmp="<b style='color:#16a34a'>ahead</b> (~"+Math.round(c.pct*100)+"% of target)"+(c.pct>=1.30?" <span style='color:#b45309'>\u00b7 target is below their pace, raise it</span>":"");
     else cmp="<b style='color:#16a34a'>on track</b>";
     out+="<div class='need'>Current pace ~"+Math.round(c.weekNow)+"/wk \u2014 "+cmp+"</div>";
   }
+  var hasT=(c.hasGoal && c.broughtInGoal!=null);
+  var clinicLbl, clinicBig, clinicDet;
+  if(hasT){
+    clinicLbl="Brings into clinic <span style='color:#16a34a'>(target)</span>";
+    clinicBig=eur(c.broughtInGoal)+"/yr";
+    clinicDet="before pay-out \u00b7 ~"+Math.round(c.weekNeeded)+"/wk \u00b7 <span style='color:#94a3b8'>now \u2248"+eur(c.annualRun)+"/yr</span>";
+  } else {
+    clinicLbl="Brings into clinic (pace)";
+    clinicBig=eur(c.annualRun)+"/yr";
+    clinicDet="~"+Math.round(c.weekNow)+" visits/wk \u00b7 "+eur(c.monthRev)+"/mo";
+  }
+  var bruttoLbl, bruttoBig, bruttoDet;
+  if(isOwner){ bruttoLbl="Brutto / netto pay"; bruttoBig="\u2014"; bruttoDet="via holding"; }
+  else if(hasT){
+    bruttoLbl="Brutto / netto pay <span style='color:#16a34a'>(target)</span>";
+    bruttoBig=eur(c.bruttoGoal)+"/yr";
+    bruttoDet=(c.nettoGoal!=null?"netto \u2248<b>"+eur(c.nettoGoal)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" est.":"")+" \u00b7 <span style='color:#94a3b8'>now \u2248"+eur(c.bruttoAnnualNow)+"/yr</span>";
+  } else {
+    bruttoLbl="Brutto / netto pay (pace)";
+    bruttoBig=eur(c.bruttoAnnualNow)+"/yr";
+    bruttoDet=bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"");
+  }
   var pvaLine="Live now: PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b> \u00b7 intakes <b>"+(c.intakes||0)+"</b> (30d, PracticeHub)";
   return "<div class='card' data-name='"+c.n+"' data-v='"+c.visits30+"' data-pva='"+(c.pvaNow==null?'':c.pvaNow)+"' data-int='"+(c.intakes||0)+"' data-days='"+c.days+"'>"
     +"<div class='gname'>"+c.n+" <span class='gclin'>"+(c.clinics||[]).join(" + ")+"</span>"+tagFor(c)+(c.payVerified?"":" <span class='tag est'>pay = estimate</span>")+(c.phone?"":" <span class='gclin' style='color:#dc2626'>(no phone)</span>")+"</div>"
     +"<div class='twocol'>"
-    +"<div class='box clinicbox'><div class='lbl'>Brings into clinic (pace)</div><div class='big'>"+eur(c.annualRun)+"/yr</div><div class='det'>~"+Math.round(c.weekNow)+" visits/wk \u00b7 "+eur(c.monthRev)+"/mo</div></div>"
-    +"<div class='box bruttobox'><div class='lbl'>Brutto / netto pay (pace)</div><div class='big'>"+(isOwner?"\u2014":eur(c.bruttoAnnualNow)+"/yr")+"</div><div class='det'>"+bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"")+"</div></div>"
+    +"<div class='box clinicbox'><div class='lbl'>"+clinicLbl+"</div><div class='big'>"+clinicBig+"</div><div class='det'>"+clinicDet+"</div></div>"
+    +"<div class='box bruttobox'><div class='lbl'>"+bruttoLbl+"</div><div class='big'>"+bruttoBig+"</div><div class='det'>"+bruttoDet+"</div></div>"
     +"</div>"
     +"<div class='row'>"
     +"<div><label>Set one of these</label>"+modeSel+"</div>"
@@ -4580,14 +4645,14 @@ ${note}
 //  / — control center: one launchpad linking every tool, grouped by job.
 // ============================================================================
 app.get("/", gate, (_req,res)=>{
-  const card=(href,title,desc)=>`<a href="${href}" style="display:block;border:1px solid #e5e7eb;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#fff"><b style="font-size:15px">${title}</b><div style="color:#64748b;font-size:12.5px;margin-top:4px;line-height:1.45">${desc}</div></a>`;
-  const grid=(cards)=>`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px">${cards.join("")}</div>`;
+  const card=(href,title,desc)=>`<a href="${href}" class="tile" style="display:block;border:1px solid #e5e7eb;border-left:3px solid var(--accent,#2563EB);border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#fff"><b style="font-size:15px">${title}</b><div style="color:#64748b;font-size:12.5px;margin-top:4px;line-height:1.45">${desc}</div></a>`;
+  const grid=(cards,accent)=>`<div style="--accent:${accent||"#2563EB"};display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px">${cards.join("")}</div>`;
   res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Posturefixx \u2014 control center</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:980px;margin:28px auto;padding:0 16px;color:#16202E;background:#F7F9FC}
 h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22px}h3{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin:18px 0 2px}</style></head><body>
 <h1>Posturefixx \u2014 control center</h1>
 <p class="sub">Coach the team, pull the numbers automatically, watch the behaviours move the money.</p>
-<h3>Start here</h3><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px"><a href="/scorecard" style="display:block;border:1px solid #2563EB;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#eff6ff"><b style="font-size:15px">\u2b50 Per-clinic scorecard</b><div style="color:#1e3a8a;font-size:12.5px;margin-top:4px;line-height:1.45">Revenue, PVA, CA script adherence and lead conversion side by side \u2014 does following the systems show up as growth?</div></a></div><h3>Coach the team</h3>${grid([
+<h3>Start here</h3><div style="--accent:#2563EB;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px"><a href="/scorecard" class="tile" style="display:block;border:1px solid #2563EB;border-left:3px solid #2563EB;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#eff6ff"><b style="font-size:15px">\u2b50 Per-clinic scorecard</b><div style="color:#1e3a8a;font-size:12.5px;margin-top:4px;line-height:1.45">Revenue, PVA, CA script adherence and lead conversion side by side \u2014 does following the systems show up as growth?</div></a></div><h3 style="color:#6366f1">\ud83e\udde0 Coach the team</h3>${grid([
   card("/plan","Plan &amp; goals","Revenue-target slider, per-chiro visit/PVA goals from live PracticeHub, P&amp;L + spend-by-category per clinic."),
   card("/goals","\u2b50 Goals &amp; check-ins","Set each chiro a yearly \u20ac / visits-day / PVA target; project it live from PracticeHub and auto-send a biweekly goal SMS."),
   card("/contracts","Contracts &amp; pay","Plain-language summary of each chiro's deal (base, holiday, threshold, commission) \u2014 what feeds the Brutto pay calc."),
@@ -4597,27 +4662,27 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/coach","Coach the chiros","Drafts a warm SMS to each chiropractor toward your target. You review before it sends."),
   card("/pva","PVA / retention","Retention per chiropractor, month by month, with good/improve highlights for each."),
   card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts.")
-])}
-<h3>The money</h3>${grid([
+], "#6366f1")}
+<h3 style="color:#10b981">\ud83d\udcb6 The money</h3>${grid([
   card("/practitioner-earnings","Earnings history","Per-practitioner monthly earnings pulled from PracticeHub, as far back as it serves \u2014 includes chiros who have left."),
   card("/profit","\u2b50 Profit per chiro","What each chiro brings in vs pay, costs and your draw \u2014 with a target slider and the \u20ac6k floor."),
   card("/pl","P&amp;L \u2014 Yuki vs MT940","Booked accounting (Yuki) side by side with the bank (MT940), variance shown, management fee netted out \u2014 watch them reconcile before Yuki takes over."),
   card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
-])}
-<h3>Marketing &amp; leads</h3>${grid([
+], "#10b981")}
+<h3 style="color:#f59e0b">\ud83d\udce3 Marketing &amp; leads</h3>${grid([
   card("/marketing","Marketing by clinic","Monthly ad spend (Google/Meta/Organic) per clinic, cost per lead, and lead quality by month."),
   card("/meta-leads","\u2b50 Meta lead quality","Every FB/IG lead by clinic: reached \u2192 booked \u2192 paid intake \u2192 started care, plus a per-month call breakdown (green/yellow/red/blue)."),
   card("/meta-spend","Meta vs Google cost","Cost per started-care patient, Meta vs Google side by side per clinic, with a campaign-vs-treated counting toggle."),
   card("/notes-trends","Notes trends","Monthly call-note themes per clinic (objections, leakage, lead quality) \u2014 read-only, no PII.")
-])}
-<h3>Checks &amp; automation</h3>${grid([
+], "#f59e0b")}
+<h3 style="color:#64748b">\ud83d\udee0 Checks &amp; automation</h3>${grid([
   card("/kpi?clinic=Amstelveen","Raw KPIs","Per-chiro numbers straight from PracticeHub (swap the clinic in the link)."),
   card("/phub-test?clinic=Rotterdam","Connection test","Confirm a clinic's PracticeHub link is live."),
   card("/sms-test?to=Alex","SMS test","Send one test text to verify delivery."),
   card("#","Auto-coach (needs setup)","Add a CRON_SECRET in Render, then have a scheduler call /coach/cron?key=YOUR_SECRET on Mon &amp; Thu. The placeholder returns \u2018forbidden\u2019 by design \u2014 that\u2019s the lock working.")
-])}
+], "#64748b")}
 <p class="sub" style="margin-top:18px">Tip: bookmark this page \u2014 it links to everything. First open each session asks for the login (manager password for Renata, owner password for you).</p>
 </body></html>`);
 });
