@@ -295,37 +295,31 @@ async function sendSms(clinic, phone, name, text, scheduledTimestamp) {
 
 // ── Pull each chiro's REAL current numbers from PracticeHub (across their clinics) ─
 // visits + PVA-now stay the chiro's OWN last-30-day figures (the live pace).
-// intakes is deliberately different: the AVERAGE MONTHLY new-patient flow at the
-// chiro's FIXED clinic(s) over the last INTAKE_AVG_DAYS (default 180). It's the
-// clinic-level intake total, summed across their clinics, divided by the months in
-// the window. That steadier number is what the projection multiplies by PVA × €59.
+// intakes is the chiro's OWN new-patient count (they are the treating practitioner)
+// over the last INTAKE_AVG_DAYS (default 180), summed across their fixed clinics and
+// divided by the months in the window → an average monthly intake flow. Only real
+// in-person intakes count; telephone intakes (Telefonische/Telephone …) are excluded
+// by isIntake's !isPhone guard. e.g. Lara: 94 (Amstelveen) + her Bussum intakes,
+// over 180 days, ÷ 6. That steadier number is what the projection multiplies by
+// PVA × €59.
 const INTAKE_AVG_DAYS = Number(process.env.INTAKE_AVG_DAYS) || 180;
-
-// Sum the clinic-level intake totals across a chiro's fixed clinics, then turn the
-// window total into a per-month average. e.g. Bussum 100 + Amstelveen 110 = 210
-// over 180 days → 210 ÷ 6 = 35 intakes/month.
-function chiroAvgIntakes(clinicWindowTotals, clinics, avgDays){
-  const months = (avgDays || 180) / 30;
-  let total = 0;
-  for (const c of clinics) total += (clinicWindowTotals[c] || 0);
-  return Math.round(total / months);
-}
 
 async function chiroBaselines(days = 30) {
   const clinics = [...new Set(CHIROS.flatMap(c => c.clinics))];
-  const byClinic = {}, intakeTotals = {};
-  for (const c of clinics) {                                   // sequential = rate-limit safe
-    byClinic[c] = await computeKpis(c, days);                  // last 30d: visits/pace + own intakes
-    const k = (INTAKE_AVG_DAYS === days) ? byClinic[c]
-            : await computeKpis(c, INTAKE_AVG_DAYS);           // last 180d for the intake average
-    intakeTotals[c] = k.rows.reduce((s, r) => s + (r.intakes || 0), 0); // clinic-level intake total over the window
+  const k30 = {}, kWin = {};
+  for (const c of clinics) {                                                   // sequential = rate-limit safe
+    k30[c] = await computeKpis(c, days);                                       // last 30d: pace + own intakes
+    kWin[c] = (INTAKE_AVG_DAYS === days) ? k30[c] : await computeKpis(c, INTAKE_AVG_DAYS); // last 180d: intake average
   }
+  const months = INTAKE_AVG_DAYS / 30;
   return CHIROS.map(ch => {
-    let visits = 0, intakesOwn = 0;
-    for (const c of ch.clinics)
-      for (const r of byClinic[c].rows)
-        if (r.name.toLowerCase().includes(ch.n.toLowerCase())) { visits += r.visits; intakesOwn += r.intakes; }
-    const intakes = chiroAvgIntakes(intakeTotals, ch.clinics, INTAKE_AVG_DAYS); // avg monthly intakes at their fixed clinic(s)
+    const mine = r => r.name.toLowerCase().includes(ch.n.toLowerCase());
+    let visits = 0, intakesOwn = 0, intakeWindow = 0;
+    for (const c of ch.clinics) {
+      for (const r of k30[c].rows)  if (mine(r)) { visits += r.visits; intakesOwn += r.intakes; } // pace + 30d PVA
+      for (const r of kWin[c].rows) if (mine(r)) intakeWindow += r.intakes;    // this chiro's own intakes over the window
+    }
+    const intakes = Math.round(intakeWindow / months);                         // avg monthly intakes (in-person only; phone excluded)
     return { ...ch, visits, intakes, intakesOwn, pva: intakesOwn ? +(visits / intakesOwn).toFixed(1) : 0 };
   });
 }
