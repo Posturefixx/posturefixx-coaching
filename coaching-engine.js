@@ -649,6 +649,258 @@ const DATA_ASOF = "Jun 2026";
 const MONTHLY_2026 = [71488, 65154, 80199, 75479, 78357];
 const PACE = MONTHLY_2026.reduce((a,b)=>a+b,0)/MONTHLY_2026.length;
 
+// ---------- CA doorplannen targets — scales with the revenue slider ----------
+// Revenue target -> monthly visits -> /PVA -> intakes the CAs must BOOK -> *conversion
+// -> care starts. Volume targets scale with the slider; the 5 quality KPIs are the
+// doorplannen standards (current vs target). Live where available; show% + rebook%
+// are manual ("logged") until a source is wired. Env overrides:
+// CA_TGT_BOOKED / CA_TGT_SHOW / CA_TGT_CONV / CA_TGT_FILL / CA_TGT_REBOOK (targets),
+// CA_SHOW_PCT / CA_REBOOK_PCT (current manual values).
+app.get("/ca-targets", gate, async (req,res)=>{
+  const envN=(k,d)=>{ const n=parseFloat(process.env[k]); return isFinite(n)?n:d; };
+  const PRICE=59;
+  const T={ booked:envN("CA_TGT_BOOKED",45), show:envN("CA_TGT_SHOW",85), conv:envN("CA_TGT_CONV",50), fill:envN("CA_TGT_FILL",80), rebook:envN("CA_TGT_REBOOK",90) };
+  const SHOW_DEF=envN("CA_SHOW_PCT",85), REBOOK_DEF=envN("CA_REBOOK_PCT",88);
+  let clinics=[], demo=false;
+  try{
+    const lead={};
+    for(const name of Object.keys(META_LEAD_SHEETS)){
+      try{ const cfg=META_LEAD_SHEETS[name]; const rows=await mlFetchClinic(cfg.id,cfg.gids); const t=mlAggregateRows(rows,name).totals;
+        const ans=t.green+t.yellow+t.red+t.blue; lead[name]= ans? Math.round(t.green/ans*100): null; }catch(e){}
+    }
+    const ca={};
+    try{ const {intakes}=await loadAllIntakes(); const st=computeCAStats(intakes);
+      for(const nm in st){ const s=st[nm]; for(const cl in s.byClinic){ const b=s.byClinic[cl];
+        ca[cl]=ca[cl]||{intakes:0,door:0,pkg:0}; ca[cl].intakes+=b.intakes; ca[cl].door+=b.doorplannen; ca[cl].pkg+=b.packages; } } }catch(e){}
+    const pvaBy={};
+    try{ const bl=await chiroBaselines(30); for(const b of bl){ for(const cl of b.clinics){ pvaBy[cl]=pvaBy[cl]||{pva:[],intk:0}; if(b.pva) pvaBy[cl].pva.push(b.pva); pvaBy[cl].intk+=(b.intakes||0); } } }catch(e){}
+    clinics=Object.keys(META_LEAD_SHEETS).map(function(cl){
+      const cs=ca[cl]||{}; const pv=pvaBy[cl]||{};
+      const intk = (cs.intakes && cs.intakes>0)? cs.intakes : (pv.intk||20);
+      const pva = (pv.pva&&pv.pva.length)? (pv.pva.reduce((a,b)=>a+b,0)/pv.pva.length) : 10;
+      return { clinic:cl,
+        bookedRate: lead[cl]!=null? lead[cl] : 38,
+        doorplannenPct: cs.intakes? Math.round(cs.door/cs.intakes*100) : 70,
+        conversionPct: cs.intakes? Math.round(cs.pkg/cs.intakes*100) : 40,
+        showRate: SHOW_DEF, rebookPct: REBOOK_DEF,
+        intakesPerMo: Math.round(intk), pva: Math.round(pva*10)/10 || 10 };
+    });
+    if(!clinics.length) throw new Error("no clinics");
+  }catch(e){
+    demo=true;
+    clinics=[
+      {clinic:"Amstelveen",bookedRate:42,doorplannenPct:92,conversionPct:46,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:48,pva:10.6},
+      {clinic:"Bussum",bookedRate:36,doorplannenPct:80,conversionPct:38,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:20,pva:10},
+      {clinic:"Utrecht",bookedRate:33,doorplannenPct:78,conversionPct:33,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:33,pva:9.8},
+      {clinic:"Rotterdam",bookedRate:40,doorplannenPct:75,conversionPct:35,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:44,pva:10}
+    ];
+  }
+  const DATA={ clinics, price:PRICE, targets:T, demo };
+  const CSS=`body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:900px;margin:22px auto;padding:0 16px;color:#16202E;background:#F7F9FC}
+h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px}a{color:#2563EB}
+.panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}
+.slider-row{display:flex;justify-content:space-between;align-items:baseline}.tgt{font-size:30px;font-weight:700}
+input[type=range]{width:100%;accent-color:#2563EB;height:6px}.ticks{display:flex;justify-content:space-between;color:#94a3b8;font-size:11px}
+.grp{font-size:13px;color:#475569;margin-top:10px}
+.cc{border:1px solid #e5e7eb;border-radius:12px;padding:13px;margin:10px 0;background:#fff}
+.ch{font-weight:700;font-size:16px;margin-bottom:6px}
+.vol{font-size:14px;margin-bottom:10px}.vol b{font-size:18px}.now{color:#94a3b8;font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.kpi{border:1px solid #eef2f7;border-radius:9px;padding:8px;background:#f8fafc}
+.kl{font-size:11.5px;color:#64748b}.kv{font-size:18px;font-weight:700}.kt{font-size:11px;color:#94a3b8}
+.man{font-size:10px;color:#b45309;background:#fffbeb;border-radius:4px;padding:0 4px;margin-left:4px}
+.gap{font-size:12.5px;margin-top:8px}
+html.dark body{background:#0f172a}html.dark .panel,html.dark .cc{background:#1e293b;border-color:#334155}html.dark .kpi{background:#243044;border-color:#334155}html.dark .man{background:#3a2f12}`;
+  const CLIENT=`(function(){
+  var T=DATA.targets, price=DATA.price, cls=DATA.clinics;
+  var totIntk=cls.reduce(function(s,c){return s+(c.intakesPerMo||0)},0)||1;
+  function fmtM(v){return '€'+(v/1e6).toFixed(2)+'M';}
+  function chip(label,cur,tgt,man){var ok=cur>=tgt;var col=ok?'#16a34a':(cur>=tgt*0.85?'#b45309':'#c0392b');
+    return '<div class=kpi><div class=kl>'+label+(man?'<span class=man>logged</span>':'')+'</div><div class=kv style="color:'+col+'">'+cur+'%</div><div class=kt>target '+tgt+'%</div></div>';}
+  function render(target){
+    document.getElementById('tgt').textContent=fmtM(target);
+    var totBooked=0,totStarted=0,html='';
+    for(var i=0;i<cls.length;i++){ var c=cls[i];
+      var share=(c.intakesPerMo||0)/totIntk; var rev=target*share;
+      var visitsNeeded=(rev/12)/price; var intakesNeeded=c.pva?visitsNeeded/c.pva:0;
+      var bookedNeeded=intakesNeeded/((c.showRate||85)/100);
+      var startedNeeded=intakesNeeded*((c.conversionPct||0)/100);
+      totBooked+=bookedNeeded; totStarted+=startedNeeded;
+      var gap=bookedNeeded-(c.intakesPerMo||0);
+      var gapNote = gap>0.5
+        ? '<div class=gap style="color:#b45309">+'+Math.round(gap)+' more intakes/mo than today — lift booked-rate & intake→care to get there without extra ad spend.</div>'
+        : '<div class=gap style="color:#16a34a">Reachable on current intake volume — protect it with show-rate & rebooking.</div>';
+      html+='<div class=cc><div class=ch>'+c.clinic+'</div>'+
+        '<div class=vol>Book <b>'+Math.round(bookedNeeded)+'</b> intakes/mo <span class=now>(now ~'+(c.intakesPerMo||0)+')</span> → ~'+Math.round(startedNeeded)+' start care/mo</div>'+
+        '<div class=kpis>'+
+          chip('Booked-rate',c.bookedRate,T.booked,false)+
+          chip('Show / no-show',c.showRate,T.show,true)+
+          chip('Intake→care',c.conversionPct,T.conv,false)+
+          chip('Doorplannen / fill',c.doorplannenPct,T.fill,false)+
+          chip('Rebook / recall',c.rebookPct,T.rebook,true)+
+        '</div>'+gapNote+'</div>';
+    }
+    document.getElementById('cards').innerHTML=html;
+    document.getElementById('grp').innerHTML='Across the group: book <b>~'+Math.round(totBooked)+'</b> intakes/mo → ~'+Math.round(totStarted)+' new care starts/mo to land '+fmtM(target)+'.';
+  }
+  var sl=document.getElementById('slider');
+  sl.addEventListener('input',function(){render(+sl.value);});
+  render(+sl.value);
+})();`;
+  res.send(
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>CA doorplannen targets</title><style>"+CSS+"</style></head><body>"+
+    "<h1>CA doorplannen targets</h1>"+
+    "<p class=sub>"+(demo?"Demo numbers (live feed unavailable) \u00b7 ":"")+"Move the target \u2014 the intakes &amp; care-starts each clinic\u2019s CA must book scale with it; the five bars are the doorplannen standards. <a href='/plan'>chiro plan \u2192</a> \u00b7 <a href='/ca'>CA dashboard \u2192</a></p>"+
+    "<div class=panel><div class=slider-row><div>Yearly revenue target (group)</div><div class=tgt id=tgt>\u20ac1.10M</div></div>"+
+    "<input type=range id=slider min=700000 max=1500000 step=25000 value=1100000>"+
+    "<div class=ticks><span>\u20ac0.70M</span><span>\u20ac1.10M</span><span>\u20ac1.50M</span></div>"+
+    "<div class=grp id=grp></div></div>"+
+    "<div id=cards></div>"+
+    "<script>var DATA="+JSON.stringify(DATA)+";</script>"+
+    "<script>"+CLIENT+"</script></body></html>"
+  );
+});
+
+// ===================== COMBINED WEEKLY KPI — road to €1,000,000 =====================
+// All four clinics combined. A "paid visit" = processed appointment whose type is an
+// intake OR a consultatie (incl. Platina), excluding telephone intake / evaluatie /
+// gemiste afspraak / ROF 1+2 / report of findings. Intakes = processed intake types,
+// telephone excluded. Weekly PVA = visits / intakes. Each week runs Mon 00:00 -> Sat
+// 18:00 Amsterdam (Sundays and Sat-evening excluded). Reference pace = Jan 1 2026 ->
+// today; the €1M-required weekly pace is the target each week is scored red/green on.
+const KPI_PRICE = (function(){ const n=parseFloat(process.env.KPI_VISIT_PRICE); return isFinite(n)&&n>0?n:59; })();
+const KPI_CLINICS = ["Amstelveen","Bussum","Utrecht","Rotterdam"];
+const kpiIsPhone  = n => /telefon|telephone/i.test(n);
+const kpiIsVisit  = n => /intake|consultatie/i.test(n) && !kpiIsPhone(n);   // intake OR consultatie
+const kpiIsIntake = n => /intake/i.test(n) && !kpiIsPhone(n);
+function kpiRange(startDate, endDate){ const f=d=>d.toISOString().slice(0,19).replace("T"," "); return "between:"+f(startDate)+","+f(endDate); }
+function kpiParse(s){ const m=String(s||"").match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/); if(!m) return null;
+  return { h:+m[4], dt:new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5])) }; }       // wall-clock as UTC for stable day math
+function kpiMonday(dt){ const dow=dt.getUTCDay(); const off=(dow+6)%7; const mon=new Date(dt.getTime()-off*864e5);
+  return mon.toISOString().slice(0,10); }
+function kpiInWindow(p){ const dow=p.dt.getUTCDay(); if(dow===0) return false; if(dow===6 && p.h>=18) return false; return true; }
+
+async function computeWeeklyCombined(){
+  const start = new Date(Date.UTC(2026,0,1,0,0,0));
+  const now = new Date();
+  const weeks = {};   // mondayKey -> {visits,intakes}
+  const perClinic = {};
+  let live = false;
+  for (const clinic of KPI_CLINICS){
+    try{
+      const types = await phubAll(clinic, "/appointment_types", {}).catch(()=>[]);
+      const visitIds=new Set(), intakeIds=new Set();
+      for (const t of types){ const nm=t.name||""; if(kpiIsVisit(nm)) visitIds.add(t.id); if(kpiIsIntake(nm)) intakeIds.add(t.id); }
+      const appts = await phubAll(clinic, "/appointments", { start: kpiRange(start, now) });
+      const byId = new Map();
+      for (const a of appts){ const prev=byId.get(a.id); const cancelled=a.status==="cancelled"||a.cancelDate;
+        if(!prev || (prev.cancelled && !cancelled)) byId.set(a.id,{...a,cancelled}); }
+      let cv=0;
+      for (const a of byId.values()){
+        if (a.cancelled || a.status!=="processed") continue;
+        const isV=visitIds.has(a.appointment_type_id), isI=intakeIds.has(a.appointment_type_id);
+        if(!isV && !isI) continue;
+        const p=kpiParse(a.start); if(!p || !kpiInWindow(p)) continue;
+        const wk=kpiMonday(p.dt);
+        (weeks[wk] ||= {visits:0,intakes:0});
+        if(isV){ weeks[wk].visits++; cv++; }
+        if(isI) weeks[wk].intakes++;
+      }
+      perClinic[clinic]=cv; live=true;
+    }catch(e){ perClinic[clinic]=null; }
+  }
+  // assemble ordered weeks
+  const keys=Object.keys(weeks).sort();
+  const curMon=kpiMonday(new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate())));
+  const targetWkVisits=(1e6/KPI_PRICE)/52;
+  let totV=0,totI=0,doneV=0,doneWeeks=0;
+  const rows=keys.map(k=>{
+    const w=weeks[k]; const partial=(k===curMon);
+    const pva=w.intakes? +(w.visits/w.intakes).toFixed(1):0;
+    if(!partial){ totV+=w.visits; totI+=w.intakes; doneV+=w.visits; doneWeeks++; }
+    const green=w.visits>=Math.round(targetWkVisits);
+    return { week:k, visits:w.visits, intakes:w.intakes, pva, target:Math.round(targetWkVisits), green, partial };
+  });
+  const refPva = totI? +(totV/totI).toFixed(1) : 0;
+  const refWkVisits = doneWeeks? Math.round(totV/doneWeeks) : 0;
+  const refWkIntakes = doneWeeks? Math.round(totI/doneWeeks) : 0;
+  const targetWkIntakes = refPva? Math.round(targetWkVisits/refPva) : 0;
+  const cumEur = Math.round(doneV*KPI_PRICE);
+  const remainWeeks = Math.max(0, 52-doneWeeks);
+  const projEur = Math.round((doneV + remainWeeks*refWkVisits)*KPI_PRICE);
+  return {
+    rows, perClinic, live,
+    price: KPI_PRICE,
+    ref: { wkVisits:refWkVisits, wkIntakes:refWkIntakes, pva:refPva, weeksDone:doneWeeks },
+    target: { wkVisits:Math.round(targetWkVisits), wkIntakes:targetWkIntakes },
+    progress: { cumEur, pct: Math.min(100, Math.round(cumEur/1e6*100)), projEur, remainWeeks }
+  };
+}
+
+function kpiSummaryText(d){
+  const last=[...d.rows].filter(r=>!r.partial).pop();
+  if(!last) return "Posturefixx weekly KPI: no completed week yet.";
+  const diff=last.visits-last.target; const st=diff>=0?("AHEAD by "+diff):("BEHIND by "+(-diff));
+  return "Posturefixx wk "+last.week+": "+last.visits+" paid visits vs "+last.target+" target ("+st+"). Intakes "+last.intakes+", PVA "+last.pva+". YTD \u20ac"+d.progress.cumEur.toLocaleString("en-US")+" / \u20ac1M ("+d.progress.pct+"%). Projected year-end \u20ac"+d.progress.projEur.toLocaleString("en-US")+".";
+}
+
+function kpiCronOK(req){ const k=process.env.CRON_KEY; return !k || req.query.key===k; }
+
+app.get("/kpi-goal", gate, async (req,res)=>{
+  let d, err=null;
+  try{ d=await computeWeeklyCombined(); }catch(e){ err=e.message; }
+  if(err || !d){ res.status(200).send("<!doctype html><meta charset=utf-8><body style='font-family:sans-serif;max-width:640px;margin:40px auto'><h2>Weekly KPI \u2014 road to \u20ac1M</h2><p>Could not read PracticeHub yet: "+(err||"unknown")+"</p></body>"); return; }
+  const WK=d.rows.map(r=>({w:r.week.slice(5),v:r.visits,i:r.intakes,p:r.pva,t:r.target,g:r.green,partial:r.partial}));
+  const clinicNote=Object.keys(d.perClinic).map(c=>c+": "+(d.perClinic[c]==null?"\u2014":d.perClinic[c])).join(" \u00b7 ");
+  const CSS="body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:920px;margin:22px auto;padding:0 16px;color:#16202E;background:#F7F9FC}"+
+    "h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px}"+
+    ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}"+
+    ".card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px}.cl{font-size:12px;color:#64748b}.cv{font-size:22px;font-weight:700}.cs{font-size:11.5px;color:#94a3b8}"+
+    ".bar{height:14px;border-radius:8px;background:#eef2f7;overflow:hidden;margin:6px 0}.bar>i{display:block;height:100%;background:#2563EB}"+
+    ".panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:6px 8px;border-bottom:1px solid #eef2f7;text-align:right}th:first-child,td:first-child{text-align:left}"+
+    ".g{color:#16a34a;font-weight:700}.r{color:#c0392b;font-weight:700}"+
+    "html.dark body{background:#0f172a}html.dark .card,html.dark .panel{background:#1e293b;border-color:#334155}html.dark .bar{background:#243044}html.dark td,html.dark th{border-color:#334155}";
+  res.send(
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Weekly KPI \u2014 road to \u20ac1M</title>"+
+    "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script><style>"+CSS+"</style></head><body>"+
+    "<h1>Weekly KPI \u2014 road to \u20ac1,000,000</h1>"+
+    "<p class=sub>All four clinics combined \u00b7 paid visits (intake + consultatie, processed; telephone/evaluatie/gemist/ROF excluded) \u00b7 week = Mon\u2192Sat 18:00. <a href='/'>\u2190 home</a></p>"+
+    "<div class=cards>"+
+      "<div class=card><div class=cl>Reference weekly PVA</div><div class=cv>"+d.ref.pva+"</div><div class=cs>Jan 1\u2192now, "+d.ref.weeksDone+" wks</div></div>"+
+      "<div class=card><div class=cl>Reference weekly intakes</div><div class=cv>"+d.ref.wkIntakes+"</div><div class=cs>avg/wk so far</div></div>"+
+      "<div class=card><div class=cl>Reference weekly visits</div><div class=cv>"+d.ref.wkVisits+"</div><div class=cs>avg/wk so far</div></div>"+
+      "<div class=card style='border-color:#2563EB'><div class=cl>Needed/wk for \u20ac1M</div><div class=cv>"+d.target.wkVisits+"</div><div class=cs>visits \u00b7 ~"+d.target.wkIntakes+" intakes</div></div>"+
+    "</div>"+
+    "<div class=panel><div style='display:flex;justify-content:space-between'><b>Progress to \u20ac1,000,000</b><span>\u20ac"+d.progress.cumEur.toLocaleString('en-US')+" ("+d.progress.pct+"%)</span></div>"+
+      "<div class=bar><i style='width:"+d.progress.pct+"%'></i></div>"+
+      "<div class=sub>Projected year-end at current pace: <b>\u20ac"+d.progress.projEur.toLocaleString('en-US')+"</b> \u00b7 "+d.progress.remainWeeks+" weeks left \u00b7 processed visits per clinic so far: "+clinicNote+"</div></div>"+
+    "<div class=panel><canvas id=ch height=110></canvas></div>"+
+    "<div class=panel><table><thead><tr><th>Week of</th><th>Visits</th><th>Target</th><th>Intakes</th><th>PVA</th><th>Status</th></tr></thead><tbody id=tb></tbody></table></div>"+
+    "<script>var WK="+JSON.stringify(WK)+";</script>"+
+    "<script>(function(){var tb=document.getElementById('tb');WK.forEach(function(r){var s=r.partial?'<span style=\"color:#94a3b8\">in progress</span>':(r.g?'<span class=g>GREEN</span>':'<span class=r>RED</span>');tb.insertAdjacentHTML('beforeend','<tr><td>'+r.w+'</td><td>'+r.v+'</td><td>'+r.t+'</td><td>'+r.i+'</td><td>'+r.p+'</td><td>'+s+'</td></tr>');});"+
+    "var ctx=document.getElementById('ch');new Chart(ctx,{type:'bar',data:{labels:WK.map(function(r){return r.w}),datasets:[{label:'Paid visits',data:WK.map(function(r){return r.v}),backgroundColor:WK.map(function(r){return r.partial?'#94a3b8':(r.g?'#16a34a':'#c0392b')})},{label:'Weekly target',type:'line',data:WK.map(function(r){return r.t}),borderColor:'#2563EB',borderDash:[6,5],pointRadius:0,fill:false}]},options:{plugins:{legend:{display:true}},scales:{y:{beginAtZero:true}}}});})();</script>"+
+    "</body></html>"
+  );
+});
+
+app.get("/cron/weekly-score", async (req,res)=>{
+  if(!kpiCronOK(req)) return res.status(403).json({ok:false,error:"bad key"});
+  try{ const d=await computeWeeklyCombined(); const last=[...d.rows].filter(r=>!r.partial).pop()||null;
+    res.json({ok:true, lastCompletedWeek:last, target:d.target, progress:d.progress, ref:d.ref}); }
+  catch(e){ res.status(200).json({ok:false,error:e.message}); }
+});
+
+app.get("/cron/weekly-sms", async (req,res)=>{
+  if(!kpiCronOK(req)) return res.status(403).json({ok:false,error:"bad key"});
+  const phone=process.env.PHONE_ALEX;
+  if(!phone) return res.status(200).json({ok:false,error:"PHONE_ALEX not set"});
+  try{ const d=await computeWeeklyCombined(); const text=kpiSummaryText(d);
+    const r=await sendSms("Rotterdam", phone, "Alex", text);
+    res.json({ok:true, sentTo:phone, text, ghl:r&&r.contactId?{contactId:r.contactId}:r}); }
+  catch(e){ res.status(200).json({ok:false,error:e.message}); }
+});
+
 app.get("/plan", gate, (req, res) => {
   const role = req.role || "owner";
   res.send(`<!doctype html><html><head><meta charset="utf-8">
@@ -4785,7 +5037,9 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   
   card("/coach","Coach the chiros","Drafts a warm SMS to each chiropractor toward your target. You review before it sends."),
   card("/pva","PVA / retention","Retention per chiropractor, month by month, with good/improve highlights for each."),
-  card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts.")
+  card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts."),
+  card("/ca-targets","CA doorplannen targets","Move the revenue slider \\u2014 the intakes &amp; care-starts each CA must book scale with it, against the 5 doorplannen KPIs."),
+  card("/kpi-goal","Weekly KPI \\u2014 road to \\u20ac1M","All clinics combined: weekly paid visits &amp; PVA vs the \\u20ac1,000,000 pace, scored red/green weekly, with a Monday SMS summary.")
 ], "#6366f1")}
 <h3 style="color:#10b981">\ud83d\udcb6 The money</h3>${grid([
   card("/practitioner-earnings","Earnings history","Per-practitioner monthly earnings pulled from PracticeHub, as far back as it serves \u2014 includes chiros who have left."),
