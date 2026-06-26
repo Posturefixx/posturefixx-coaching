@@ -770,9 +770,15 @@ html.dark body{background:#0f172a}html.dark .panel,html.dark .cc{background:#1e2
 // today; the €1M-required weekly pace is the target each week is scored red/green on.
 const KPI_PRICE = (function(){ const n=parseFloat(process.env.KPI_VISIT_PRICE); return isFinite(n)&&n>0?n:59; })();
 const KPI_CLINICS = ["Amstelveen","Bussum","Utrecht","Rotterdam"];
-const kpiIsPhone  = n => /telefon|telephone/i.test(n);
-const kpiIsVisit  = n => /intake|consultatie/i.test(n) && !kpiIsPhone(n);   // intake OR consultatie
-const kpiIsIntake = n => /intake/i.test(n) && !kpiIsPhone(n);
+const kpiIsPhone   = n => /telefon|telephone/i.test(n);
+// A "paid visit" = every PROCESSED appointment EXCEPT the non-paid types below
+// (telephone intake/advies, evaluatie / progress examination, gemiste afspraak /
+// afzegging, ROF 1+2 / report of findings). So losse behandeling, platina, the
+// €120/€100 SD intakes, consultaties and intakes all count.
+const kpiExcluded  = n => kpiIsPhone(n) || /evaluat|progress exam|voortgang|gemist|afzeg|report of findings|\brof\b/i.test(n);
+const kpiIsVisit   = n => !!String(n||"").trim() && !kpiExcluded(n);
+// Intakes (the PVA denominator) = new-patient appointments: name has "intake" or "SD"
+const kpiIsIntake  = n => (/intake/i.test(n) || /\bsd\b/i.test(n)) && !kpiIsPhone(n);
 function kpiRange(startDate, endDate){ const f=d=>d.toISOString().slice(0,19).replace("T"," "); return "between:"+f(startDate)+","+f(endDate); }
 function kpiParse(s){ const m=String(s||"").match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/); if(!m) return null;
   return { h:+m[4], dt:new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5])) }; }       // wall-clock as UTC for stable day math
@@ -865,7 +871,7 @@ app.get("/kpi-goal", gate, async (req,res)=>{
     "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Weekly KPI \u2014 road to \u20ac1M</title>"+
     "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script><style>"+CSS+"</style></head><body>"+
     "<h1>Weekly KPI \u2014 road to \u20ac1,000,000</h1>"+
-    "<p class=sub>All four clinics combined \u00b7 paid visits (intake + consultatie, processed; telephone/evaluatie/gemist/ROF excluded) \u00b7 week = Mon\u2192Sat 18:00. <a href='/'>\u2190 home</a></p>"+
+    "<p class=sub>All four clinics combined \u00b7 paid visits = every processed treatment except telephone, evaluatie, gemiste afspraak &amp; ROF \u00b7 week = Mon\u2192Sat 18:00. <a href='/'>\u2190 home</a></p>"+
     "<div class=cards>"+
       "<div class=card><div class=cl>Reference weekly PVA</div><div class=cv>"+d.ref.pva+"</div><div class=cs>Jan 1\u2192now, "+d.ref.weeksDone+" wks</div></div>"+
       "<div class=card><div class=cl>Reference weekly intakes</div><div class=cv>"+d.ref.wkIntakes+"</div><div class=cs>avg/wk so far</div></div>"+
