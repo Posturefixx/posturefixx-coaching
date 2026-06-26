@@ -111,13 +111,13 @@ const _earnCache = {};
 // Matched on the TYPE NAME, so it works across all four clinics even though
 // their type ID numbers differ. Tweak the words below any time.
 const isPhone   = (n) => /telefon|telephone/i.test(n);                 // phone advice, not a visit
-const isIntake  = (n) => /intake|new patient|nieuwe pati/i.test(n) && !isPhone(n);
+const isIntake  = (n) => /intake|new patient|nieuwe pati|\bsd\b/i.test(n) && !isPhone(n);  // SD = special/first-day intake
 const notAVisit = (n) =>                                               // exclude from the visit count
   isPhone(n) ||
-  /afzeg|gemiste afspraak|no.?show/i.test(n) ||   // Afzegging binnen 24h / missed
-  /evaluatie/i.test(n) ||                          // Evaluatie
+  /afzeg|gemist|no.?show/i.test(n) ||              // Afzegging binnen 24h / Gemiste afspraak / missed
+  /evaluat/i.test(n) ||                            // Evaluatie / Evaluation
   /\brof\b|report of findings/i.test(n) ||         // ROF 1 / ROF 2 / Report of Findings
-  /progress report/i.test(n);                      // Progress Report
+  /progress exam|voortgang/i.test(n);              // Progress Examination
 
 // ── THE KPI LAYER — turn raw appointments into per-chiro numbers ─────────────
 // Rules learned from the live data:
@@ -770,15 +770,13 @@ html.dark body{background:#0f172a}html.dark .panel,html.dark .cc{background:#1e2
 // today; the €1M-required weekly pace is the target each week is scored red/green on.
 const KPI_PRICE = (function(){ const n=parseFloat(process.env.KPI_VISIT_PRICE); return isFinite(n)&&n>0?n:59; })();
 const KPI_CLINICS = ["Amstelveen","Bussum","Utrecht","Rotterdam"];
-const kpiIsPhone   = n => /telefon|telephone/i.test(n);
-// A "paid visit" = every PROCESSED appointment EXCEPT the non-paid types below
-// (telephone intake/advies, evaluatie / progress examination, gemiste afspraak /
-// afzegging, ROF 1+2 / report of findings). So losse behandeling, platina, the
-// €120/€100 SD intakes, consultaties and intakes all count.
-const kpiExcluded  = n => kpiIsPhone(n) || /evaluat|progress exam|voortgang|gemist|afzeg|report of findings|\brof\b/i.test(n);
-const kpiIsVisit   = n => !!String(n||"").trim() && !kpiExcluded(n);
-// Intakes (the PVA denominator) = new-patient appointments: name has "intake" or "SD"
-const kpiIsIntake  = n => (/intake/i.test(n) || /\bsd\b/i.test(n)) && !kpiIsPhone(n);
+// Single source of truth: the weekly KPI page uses the SAME visit/intake rules as
+// computeKpis (isIntake / notAVisit defined near the top) so PVA is identical across
+// the whole dashboard. A paid visit = every processed treatment except telephone,
+// evaluatie/progress exam, gemiste afspraak/afzegging, ROF 1+2/report of findings.
+// Intakes (PVA denominator) = intake or SD types, telephone excluded.
+const kpiIsVisit   = n => !!String(n||"").trim() && !notAVisit(n);
+const kpiIsIntake  = n => isIntake(n);
 function kpiRange(startDate, endDate){ const f=d=>d.toISOString().slice(0,19).replace("T"," "); return "between:"+f(startDate)+","+f(endDate); }
 function kpiParse(s){ const m=String(s||"").match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/); if(!m) return null;
   return { h:+m[4], dt:new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5])) }; }       // wall-clock as UTC for stable day math
@@ -866,7 +864,7 @@ app.get("/kpi-goal", gate, async (req,res)=>{
     ".panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}"+
     "table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:6px 8px;border-bottom:1px solid #eef2f7;text-align:right}th:first-child,td:first-child{text-align:left}"+
     ".g{color:#16a34a;font-weight:700}.r{color:#c0392b;font-weight:700}"+
-    "html.dark body{background:#0f172a}html.dark .card,html.dark .panel{background:#1e293b;border-color:#334155}html.dark .bar{background:#243044}html.dark td,html.dark th{border-color:#334155}";
+    "html.dark body{background:#0f172a}html.dark .card,html.dark .panel{background:#1e293b;border-color:#334155}html.dark .bar{background:#243044}html.dark td,html.dark th{border-color:#334155}html.dark #tmore button{background:#1e293b;border-color:#334155;color:#e2e8f0}";
   res.send(
     "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Weekly KPI \u2014 road to \u20ac1M</title>"+
     "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script><style>"+CSS+"</style></head><body>"+
@@ -881,11 +879,16 @@ app.get("/kpi-goal", gate, async (req,res)=>{
     "<div class=panel><div style='display:flex;justify-content:space-between'><b>Progress to \u20ac1,000,000</b><span>\u20ac"+d.progress.cumEur.toLocaleString('en-US')+" ("+d.progress.pct+"%)</span></div>"+
       "<div class=bar><i style='width:"+d.progress.pct+"%'></i></div>"+
       "<div class=sub>Projected year-end at current pace: <b>\u20ac"+d.progress.projEur.toLocaleString('en-US')+"</b> \u00b7 "+d.progress.remainWeeks+" weeks left \u00b7 processed visits per clinic so far: "+clinicNote+"</div></div>"+
-    "<div class=panel><canvas id=ch height=110></canvas></div>"+
-    "<div class=panel><table><thead><tr><th>Week of</th><th>Visits</th><th>Target</th><th>Intakes</th><th>PVA</th><th>Status</th></tr></thead><tbody id=tb></tbody></table></div>"+
+    "<div class=panel><div id=chwrap style='overflow-x:auto;-webkit-overflow-scrolling:touch'><div id=chinner style='height:240px'><canvas id=ch></canvas></div></div></div>"+
+    "<div class=panel><table><thead><tr><th>Week of</th><th>Visits</th><th>Target</th><th>Intakes</th><th>PVA</th><th>Status</th></tr></thead><tbody id=tb></tbody></table><div id=tmore style='margin-top:10px'></div></div>"+
     "<script>var WK="+JSON.stringify(WK)+";</script>"+
-    "<script>(function(){var tb=document.getElementById('tb');WK.forEach(function(r){var s=r.partial?'<span style=\"color:#94a3b8\">in progress</span>':(r.g?'<span class=g>GREEN</span>':'<span class=r>RED</span>');tb.insertAdjacentHTML('beforeend','<tr><td>'+r.w+'</td><td>'+r.v+'</td><td>'+r.t+'</td><td>'+r.i+'</td><td>'+r.p+'</td><td>'+s+'</td></tr>');});"+
-    "var ctx=document.getElementById('ch');new Chart(ctx,{type:'bar',data:{labels:WK.map(function(r){return r.w}),datasets:[{label:'Paid visits',data:WK.map(function(r){return r.v}),backgroundColor:WK.map(function(r){return r.partial?'#94a3b8':(r.g?'#16a34a':'#c0392b')})},{label:'Weekly target',type:'line',data:WK.map(function(r){return r.t}),borderColor:'#2563EB',borderDash:[6,5],pointRadius:0,fill:false}]},options:{plugins:{legend:{display:true}},scales:{y:{beginAtZero:true}}}});})();</script>"+
+    "<script>(function(){var tb=document.getElementById('tb');var N=WK.length;var SHOW=8;"+
+    "function rowHtml(r){var s=r.partial?'<span style=\"color:#94a3b8\">in progress</span>':(r.g?'<span class=g>GREEN</span>':'<span class=r>RED</span>');return '<tr><td>'+r.w+'</td><td>'+r.v+'</td><td>'+r.t+'</td><td>'+r.i+'</td><td>'+r.p+'</td><td>'+s+'</td></tr>';}"+
+    "function paint(all){tb.innerHTML='';var from=all?0:Math.max(0,N-SHOW);for(var i=from;i<N;i++)tb.insertAdjacentHTML('beforeend',rowHtml(WK[i]));}"+
+    "paint(false);"+
+    "if(N>SHOW){var b=document.createElement('button');b.textContent='Show all '+N+' weeks';b.style.cssText='font-size:13px;padding:6px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer';var open=false;b.onclick=function(){open=!open;paint(open);b.textContent=open?'Show latest 8 weeks':('Show all '+N+' weeks');};document.getElementById('tmore').appendChild(b);}"+
+    "var wrap=document.getElementById('chwrap'),inner=document.getElementById('chinner');inner.style.width=Math.max(N*30,wrap.clientWidth)+'px';"+
+    "var ctx=document.getElementById('ch');new Chart(ctx,{type:'bar',data:{labels:WK.map(function(r){return r.w}),datasets:[{label:'Paid visits',data:WK.map(function(r){return r.v}),backgroundColor:WK.map(function(r){return r.partial?'#94a3b8':(r.g?'#16a34a':'#c0392b')})},{label:'Weekly target',type:'line',data:WK.map(function(r){return r.t}),borderColor:'#2563EB',borderDash:[6,5],pointRadius:0,fill:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true}},scales:{y:{beginAtZero:true}}}});})();</script>"+
     "</body></html>"
   );
 });
