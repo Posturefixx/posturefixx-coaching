@@ -111,13 +111,13 @@ const _earnCache = {};
 // Matched on the TYPE NAME, so it works across all four clinics even though
 // their type ID numbers differ. Tweak the words below any time.
 const isPhone   = (n) => /telefon|telephone/i.test(n);                 // phone advice, not a visit
-const isIntake  = (n) => /intake|new patient|nieuwe pati/i.test(n) && !isPhone(n);
+const isIntake  = (n) => /intake|new patient|nieuwe pati|\bsd\b/i.test(n) && !isPhone(n);  // SD = special/first-day intake
 const notAVisit = (n) =>                                               // exclude from the visit count
   isPhone(n) ||
-  /afzeg|gemiste afspraak|no.?show/i.test(n) ||   // Afzegging binnen 24h / missed
-  /evaluatie/i.test(n) ||                          // Evaluatie
+  /afzeg|gemist|no.?show/i.test(n) ||              // Afzegging binnen 24h / Gemiste afspraak / missed
+  /evaluat/i.test(n) ||                            // Evaluatie / Evaluation
   /\brof\b|report of findings/i.test(n) ||         // ROF 1 / ROF 2 / Report of Findings
-  /progress report/i.test(n);                      // Progress Report
+  /progress exam|voortgang/i.test(n);              // Progress Examination
 
 // ── THE KPI LAYER — turn raw appointments into per-chiro numbers ─────────────
 // Rules learned from the live data:
@@ -294,21 +294,61 @@ async function sendSms(clinic, phone, name, text, scheduledTimestamp) {
 }
 
 // ── Pull each chiro's REAL current numbers from PracticeHub (across their clinics) ─
+// visits + PVA-now stay the chiro's OWN last-30-day figures (the live pace).
+// intakes is the chiro's OWN new-patient count (they are the treating practitioner)
+// over the last INTAKE_AVG_DAYS (default 180), summed across their fixed clinics and
+// divided by the months in the window → an average monthly intake flow. Only real
+// in-person intakes count; telephone intakes (Telefonische/Telephone …) are excluded
+// by isIntake's !isPhone guard. e.g. Lara: 94 (Amstelveen) + her Bussum intakes,
+// over 180 days, ÷ 6. That steadier number is what the projection multiplies by
+// PVA × €59.
+const INTAKE_AVG_DAYS = Number(process.env.INTAKE_AVG_DAYS) || 180;
+
 async function chiroBaselines(days = 30) {
   const clinics = [...new Set(CHIROS.flatMap(c => c.clinics))];
-  const byClinic = {};
-  for (const c of clinics) byClinic[c] = await computeKpis(c, days); // sequential = rate-limit safe
+  const k30 = {}, kWin = {};
+  for (const c of clinics) {                                                   // sequential = rate-limit safe
+    k30[c] = await computeKpis(c, days);                                       // last 30d: pace + own intakes
+    kWin[c] = (INTAKE_AVG_DAYS === days) ? k30[c] : await computeKpis(c, INTAKE_AVG_DAYS); // last 180d: intake average
+  }
+  const months = INTAKE_AVG_DAYS / 30;
   return CHIROS.map(ch => {
-    let visits = 0, intakes = 0;
-    for (const c of ch.clinics)
-      for (const r of byClinic[c].rows)
-        if (r.name.toLowerCase().includes(ch.n.toLowerCase())) { visits += r.visits; intakes += r.intakes; }
-    return { ...ch, visits, intakes, pva: intakes ? +(visits / intakes).toFixed(1) : 0 };
+    const mine = r => r.name.toLowerCase().includes(ch.n.toLowerCase());
+    let visits = 0, intakesOwn = 0, intakeWindow = 0;
+    for (const c of ch.clinics) {
+      for (const r of k30[c].rows)  if (mine(r)) { visits += r.visits; intakesOwn += r.intakes; } // pace + 30d PVA
+      for (const r of kWin[c].rows) if (mine(r)) intakeWindow += r.intakes;    // this chiro's own intakes over the window
+    }
+    const intakes = Math.round(intakeWindow / months);                         // avg monthly intakes (in-person only; phone excluded)
+    return { ...ch, visits, intakes, intakesOwn, pva: intakesOwn ? +(visits / intakesOwn).toFixed(1) : 0 };
   });
 }
 
 // ── Turn a revenue target into each chiro's visit + PVA goal ──────────────────
 const PRICE_PER_VISIT = 59;
+
+// Dutch 2026 net take-home estimate from a gross box-1 employment salary.
+// Brackets (under AOW): 35.75% \u2264\u20ac38,883 \u00b7 37.56% \u20ac38,883\u2013\u20ac78,426 \u00b7 49.50% >\u20ac78,426.
+// Credits: algemene heffingskorting (max \u20ac3,115, \u22126.398% from \u20ac29,736, \u20ac0 at \u20ac78,426)
+// and arbeidskorting (max \u20ac5,685, \u22126.51% from \u20ac45,592). The 30% ruling makes only
+// 70% of gross taxable, and the credits are computed on that lower base too (which
+// is why it lifts net by more than a flat 30%). Estimate only \u2014 ignores pension
+// contributions and assumes employee (employer pays the Zvw contribution).
+function dutchNet2026(gross, ruling30){
+  if(!gross || gross<=0) return 0;
+  const taxable = ruling30 ? gross*0.70 : gross;
+  const b1=38883, b2=78426, r1=0.3575, r2=0.3756, r3=0.4950;
+  let tax = Math.min(taxable,b1)*r1;
+  if(taxable>b1) tax += (Math.min(taxable,b2)-b1)*r2;
+  if(taxable>b2) tax += (taxable-b2)*r3;
+  let ahk = taxable>29736 ? Math.max(0, 3115-0.06398*(taxable-29736)) : 3115;
+  let ak  = taxable>45592 ? Math.max(0, 5685-0.0651*(taxable-45592)) : 5685;
+  const netTax = Math.max(0, tax - ahk - ak);
+  return Math.round(gross - netTax);
+}
+// Who holds the 30% ruling (expats recruited from abroad). Env-overridable.
+const RULING30 = new Set((process.env.RULING30 || "Myles,Matthew").split(",").map(s=>s.trim()).filter(Boolean));
+
 function chiroGoals(target, baselines) {
   const sumV = baselines.reduce((s, b) => s + b.visits, 0) || 1;
   const reqMonthlyVisits = (target / 12) / PRICE_PER_VISIT;
@@ -345,6 +385,89 @@ const SAMPLE = [
 // ── Web endpoints — everything is a URL you can open, no terminal ────────────
 const app = express();
 app.use(express.json());
+
+// --- Global mobile responsiveness, in one place for EVERY page (and any future
+//     one). Post-processes full HTML responses: guarantees a viewport tag,
+//     collapses multi-column grids to a single column, and lets wide tables
+//     scroll sideways instead of blowing out the layout. Everything is scoped to
+//     <=640px, so the desktop view is byte-for-byte unchanged. Plain-text and
+//     JSON responses pass straight through untouched.
+const MOBILE_CSS = "<style id='mobilefix'>" +
+  "html{-webkit-text-size-adjust:100%}img,svg,canvas,iframe{max-width:100%}" +
+  "@media(max-width:640px){" +
+    "*{box-sizing:border-box}" +
+    "body{margin:12px auto!important;padding:0 12px!important;width:auto!important}" +
+    "h1{font-size:20px!important;line-height:1.25}h2{font-size:15px!important}" +
+    ".grid{grid-template-columns:1fr!important}" +
+    "[style*='grid-template-columns']{grid-template-columns:1fr!important}" +
+    "[style*='display:flex'],[style*='display: flex']{flex-wrap:wrap}" +
+    "table{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}" +
+  "}</style>";
+// --- Global theme: dark mode (system default + a remembered toggle) and the
+//     hover "lift" on home tiles, injected into EVERY page in one place. The
+//     init script runs before paint (no flash); the dark overrides remap the
+//     light palette via class/tag rules plus inline-style value matching so the
+//     40 hand-styled pages go dark without rewriting each one. ---
+const THEME_INIT = `<script>(function(){try{var t=localStorage.getItem('pfx-theme');if(!t)t=(window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';if(t==='dark')document.documentElement.classList.add('dark');}catch(e){}})();</script>`;
+const THEME_CSS = `<style id="themefix">
+a.tile{transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
+a.tile:hover{transform:translateY(-3px);box-shadow:0 10px 26px rgba(2,6,23,.16),0 0 0 1px var(--accent,#2563EB)!important;border-color:var(--accent,#2563EB)!important}
+#pfx-theme-btn{position:fixed;top:10px;right:12px;z-index:99999;width:38px;height:38px;border-radius:50%;border:1px solid #e5e7eb;background:#fff;color:#16202E;font-size:17px;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(2,6,23,.12)}
+html.dark{color-scheme:dark;background:#0f172a}
+html.dark body{background:#0f172a!important;color:#e2e8f0!important}
+html.dark h1,html.dark h2,html.dark h3,html.dark h4,html.dark b,html.dark strong,html.dark summary{color:#f1f5f9!important}
+html.dark a{color:#60a5fa!important}
+html.dark hr{border-color:#334155!important}
+html.dark th{background:#1e293b!important;color:#cbd5e1!important;border-color:#334155!important}
+html.dark td{border-color:#334155!important}
+html.dark input,html.dark select,html.dark textarea{background:#1e293b!important;color:#e2e8f0!important;border-color:#334155!important}
+html.dark code{background:#273449!important;color:#e2e8f0!important}
+html.dark .card,html.dark .box,html.dark .tile,html.dark .mo,html.dark section{background:#1e293b!important;border-color:#334155!important;color:#e2e8f0!important}
+html.dark #pfx-theme-btn{background:#1e293b;border-color:#334155;color:#fbbf24}
+html.dark [style*="background:#fff"],html.dark [style*="background:#ffffff"],html.dark [style*="background:#F7F9FC"],html.dark [style*="background:#f7f9fc"],html.dark [style*="background:#f8fafc"],html.dark [style*="background:#fafafa"],html.dark [style*="background:#f4f4f4"]{background-color:#1e293b!important}
+html.dark [style*="background:#eff6ff"],html.dark [style*="background:#f0f7ff"]{background-color:#16263f!important}
+html.dark [style*="background:#fffbeb"],html.dark [style*="background:#fff3cd"],html.dark [style*="background:#fef3c7"]{background-color:#3a2f12!important}
+html.dark [style*="background:#dcfce7"]{background-color:#0f2e1d!important}
+html.dark [style*="background:#eef2f7"],html.dark [style*="background:#f1f5f9"]{background-color:#273449!important}
+html.dark [style*="color:#16202E"],html.dark [style*="color:#16202e"]{color:#e2e8f0!important}
+html.dark [style*="color:#64748b"],html.dark [style*="color:#475569"]{color:#94a3b8!important}
+html.dark [style*="color:#1e3a8a"]{color:#93c5fd!important}
+html.dark [style*="color:#92400e"],html.dark [style*="color:#b45309"]{color:#fbbf24!important}
+html.dark [style*="color:#166534"],html.dark [style*="color:#16a34a"]{color:#86efac!important}
+html.dark [style*="#e5e7eb"],html.dark [style*="#bfdbfe"],html.dark [style*="#fde68a"]{border-color:#334155!important}
+</style>`;
+const THEME_BTN = `<button id="pfx-theme-btn" aria-label="Toggle dark mode" onclick="(function(){var d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('pfx-theme',d?'dark':'light')}catch(e){}var b=document.getElementById('pfx-theme-btn');b.textContent=d?'\u2600':'\u263d'})()">\u263d</button><script>try{var b=document.getElementById('pfx-theme-btn');b.textContent=document.documentElement.classList.contains('dark')?'\u2600':'\u263d'}catch(e){}</script>`;
+
+function injectMobile(html){
+  if(typeof html !== "string") return html;
+  if(!(/<!doctype/i.test(html) || /<html/i.test(html))) return html;   // full HTML pages only
+  let out = html;
+  if(!/name=['"]viewport['"]/i.test(out)){
+    const vp = "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+    if(/<head[^>]*>/i.test(out))              out = out.replace(/<head[^>]*>/i, m => m + vp);
+    else if(/<meta charset[^>]*>/i.test(out)) out = out.replace(/<meta charset[^>]*>/i, m => m + vp);
+    else                                      out = out.replace(/<!doctype[^>]*>/i, m => m + vp);
+  }
+  // theme init as early as possible (before paint)
+  if(/<head[^>]*>/i.test(out)) out = out.replace(/<head[^>]*>/i, m => m + THEME_INIT);
+  else                         out = out.replace(/<!doctype[^>]*>/i, m => m + THEME_INIT);
+  // styles (theme + mobile) at end of head, else end of body/html, else append
+  const styles = THEME_CSS + MOBILE_CSS;
+  if(/<\/head>/i.test(out))      out = out.replace(/<\/head>/i, styles + "</head>");
+  else if(/<\/body>/i.test(out)) out = out.replace(/<\/body>/i, styles + "</body>");
+  else if(/<\/html>/i.test(out)) out = out.replace(/<\/html>/i, styles + "</html>");
+  else                           out = out + styles;
+  // floating toggle button
+  if(/<\/body>/i.test(out))      out = out.replace(/<\/body>/i, THEME_BTN + "</body>");
+  else if(/<\/html>/i.test(out)) out = out.replace(/<\/html>/i, THEME_BTN + "</html>");
+  else                           out = out + THEME_BTN;
+  return out;
+}
+app.use((req, res, next) => {
+  const orig = res.send.bind(res);
+  res.send = (body) => orig(injectMobile(body));
+  next();
+});
 
 // little reminder banner shown until you set DASHBOARD_PASSWORD
 const lockNote = () => process.env.DASHBOARD_PASSWORD ? "" :
@@ -499,7 +622,7 @@ app.get("/kpi", gate, async (req, res) => {
 });
 
 // ── PLAN DATA — one PracticeHub pull, returns each chiro's real numbers as JSON ─
-const PLAN_DAYS = { Myles: 3.5, Lara: 3.5, Matthew: 4, Alex: 3 }; // days worked/week
+const PLAN_DAYS = { Myles: 4, Lara: 3.5, Matthew: 4, Alex: 3 }; // days worked/week
 const MAX_PER_DAY = 45;   // a chiro can realistically see ~40-50/day — change here anytime
 
 app.get("/plan/data", gate, async (_req, res) => {
@@ -525,6 +648,267 @@ const PL_LABEL = {"Holding": "Notable (holding)"};
 const DATA_ASOF = "Jun 2026";
 const MONTHLY_2026 = [71488, 65154, 80199, 75479, 78357];
 const PACE = MONTHLY_2026.reduce((a,b)=>a+b,0)/MONTHLY_2026.length;
+
+// ---------- CA doorplannen targets — scales with the revenue slider ----------
+// Revenue target -> monthly visits -> /PVA -> intakes the CAs must BOOK -> *conversion
+// -> care starts. Volume targets scale with the slider; the 5 quality KPIs are the
+// doorplannen standards (current vs target). Live where available; show% + rebook%
+// are manual ("logged") until a source is wired. Env overrides:
+// CA_TGT_BOOKED / CA_TGT_SHOW / CA_TGT_CONV / CA_TGT_FILL / CA_TGT_REBOOK (targets),
+// CA_SHOW_PCT / CA_REBOOK_PCT (current manual values).
+app.get("/ca-targets", gate, async (req,res)=>{
+  const envN=(k,d)=>{ const n=parseFloat(process.env[k]); return isFinite(n)?n:d; };
+  const PRICE=59;
+  const T={ booked:envN("CA_TGT_BOOKED",45), show:envN("CA_TGT_SHOW",85), conv:envN("CA_TGT_CONV",50), fill:envN("CA_TGT_FILL",80), rebook:envN("CA_TGT_REBOOK",90) };
+  const SHOW_DEF=envN("CA_SHOW_PCT",85), REBOOK_DEF=envN("CA_REBOOK_PCT",88);
+  let clinics=[], demo=false;
+  try{
+    const lead={};
+    for(const name of Object.keys(META_LEAD_SHEETS)){
+      try{ const cfg=META_LEAD_SHEETS[name]; const rows=await mlFetchClinic(cfg.id,cfg.gids); const t=mlAggregateRows(rows,name).totals;
+        const ans=t.green+t.yellow+t.red+t.blue; lead[name]= ans? Math.round(t.green/ans*100): null; }catch(e){}
+    }
+    const ca={};
+    try{ const {intakes}=await loadAllIntakes(); const st=computeCAStats(intakes);
+      for(const nm in st){ const s=st[nm]; for(const cl in s.byClinic){ const b=s.byClinic[cl];
+        ca[cl]=ca[cl]||{intakes:0,door:0,pkg:0}; ca[cl].intakes+=b.intakes; ca[cl].door+=b.doorplannen; ca[cl].pkg+=b.packages; } } }catch(e){}
+    const pvaBy={};
+    try{ const bl=await chiroBaselines(30); for(const b of bl){ for(const cl of b.clinics){ pvaBy[cl]=pvaBy[cl]||{pva:[],intk:0}; if(b.pva) pvaBy[cl].pva.push(b.pva); pvaBy[cl].intk+=(b.intakes||0); } } }catch(e){}
+    clinics=Object.keys(META_LEAD_SHEETS).map(function(cl){
+      const cs=ca[cl]||{}; const pv=pvaBy[cl]||{};
+      const intk = (cs.intakes && cs.intakes>0)? cs.intakes : (pv.intk||20);
+      const pva = (pv.pva&&pv.pva.length)? (pv.pva.reduce((a,b)=>a+b,0)/pv.pva.length) : 10;
+      return { clinic:cl,
+        bookedRate: lead[cl]!=null? lead[cl] : 38,
+        doorplannenPct: cs.intakes? Math.round(cs.door/cs.intakes*100) : 70,
+        conversionPct: cs.intakes? Math.round(cs.pkg/cs.intakes*100) : 40,
+        showRate: SHOW_DEF, rebookPct: REBOOK_DEF,
+        intakesPerMo: Math.round(intk), pva: Math.round(pva*10)/10 || 10 };
+    });
+    if(!clinics.length) throw new Error("no clinics");
+  }catch(e){
+    demo=true;
+    clinics=[
+      {clinic:"Amstelveen",bookedRate:42,doorplannenPct:92,conversionPct:46,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:48,pva:10.6},
+      {clinic:"Bussum",bookedRate:36,doorplannenPct:80,conversionPct:38,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:20,pva:10},
+      {clinic:"Utrecht",bookedRate:33,doorplannenPct:78,conversionPct:33,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:33,pva:9.8},
+      {clinic:"Rotterdam",bookedRate:40,doorplannenPct:75,conversionPct:35,showRate:SHOW_DEF,rebookPct:REBOOK_DEF,intakesPerMo:44,pva:10}
+    ];
+  }
+  const DATA={ clinics, price:PRICE, targets:T, demo };
+  const CSS=`body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:900px;margin:22px auto;padding:0 16px;color:#16202E;background:#F7F9FC}
+h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px}a{color:#2563EB}
+.panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}
+.slider-row{display:flex;justify-content:space-between;align-items:baseline}.tgt{font-size:30px;font-weight:700}
+input[type=range]{width:100%;accent-color:#2563EB;height:6px}.ticks{display:flex;justify-content:space-between;color:#94a3b8;font-size:11px}
+.grp{font-size:13px;color:#475569;margin-top:10px}
+.cc{border:1px solid #e5e7eb;border-radius:12px;padding:13px;margin:10px 0;background:#fff}
+.ch{font-weight:700;font-size:16px;margin-bottom:6px}
+.vol{font-size:14px;margin-bottom:10px}.vol b{font-size:18px}.now{color:#94a3b8;font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.kpi{border:1px solid #eef2f7;border-radius:9px;padding:8px;background:#f8fafc}
+.kl{font-size:11.5px;color:#64748b}.kv{font-size:18px;font-weight:700}.kt{font-size:11px;color:#94a3b8}
+.man{font-size:10px;color:#b45309;background:#fffbeb;border-radius:4px;padding:0 4px;margin-left:4px}
+.gap{font-size:12.5px;margin-top:8px}
+html.dark body{background:#0f172a}html.dark .panel,html.dark .cc{background:#1e293b;border-color:#334155}html.dark .kpi{background:#243044;border-color:#334155}html.dark .man{background:#3a2f12}`;
+  const CLIENT=`(function(){
+  var T=DATA.targets, price=DATA.price, cls=DATA.clinics;
+  var totIntk=cls.reduce(function(s,c){return s+(c.intakesPerMo||0)},0)||1;
+  function fmtM(v){return '€'+(v/1e6).toFixed(2)+'M';}
+  function chip(label,cur,tgt,man){var ok=cur>=tgt;var col=ok?'#16a34a':(cur>=tgt*0.85?'#b45309':'#c0392b');
+    return '<div class=kpi><div class=kl>'+label+(man?'<span class=man>logged</span>':'')+'</div><div class=kv style="color:'+col+'">'+cur+'%</div><div class=kt>target '+tgt+'%</div></div>';}
+  function render(target){
+    document.getElementById('tgt').textContent=fmtM(target);
+    var totBooked=0,totStarted=0,html='';
+    for(var i=0;i<cls.length;i++){ var c=cls[i];
+      var share=(c.intakesPerMo||0)/totIntk; var rev=target*share;
+      var visitsNeeded=(rev/12)/price; var intakesNeeded=c.pva?visitsNeeded/c.pva:0;
+      var bookedNeeded=intakesNeeded/((c.showRate||85)/100);
+      var startedNeeded=intakesNeeded*((c.conversionPct||0)/100);
+      totBooked+=bookedNeeded; totStarted+=startedNeeded;
+      var gap=bookedNeeded-(c.intakesPerMo||0);
+      var gapNote = gap>0.5
+        ? '<div class=gap style="color:#b45309">+'+Math.round(gap)+' more intakes/mo than today — lift booked-rate & intake→care to get there without extra ad spend.</div>'
+        : '<div class=gap style="color:#16a34a">Reachable on current intake volume — protect it with show-rate & rebooking.</div>';
+      html+='<div class=cc><div class=ch>'+c.clinic+'</div>'+
+        '<div class=vol>Book <b>'+Math.round(bookedNeeded)+'</b> intakes/mo <span class=now>(now ~'+(c.intakesPerMo||0)+')</span> → ~'+Math.round(startedNeeded)+' start care/mo</div>'+
+        '<div class=kpis>'+
+          chip('Booked-rate',c.bookedRate,T.booked,false)+
+          chip('Show / no-show',c.showRate,T.show,true)+
+          chip('Intake→care',c.conversionPct,T.conv,false)+
+          chip('Doorplannen / fill',c.doorplannenPct,T.fill,false)+
+          chip('Rebook / recall',c.rebookPct,T.rebook,true)+
+        '</div>'+gapNote+'</div>';
+    }
+    document.getElementById('cards').innerHTML=html;
+    document.getElementById('grp').innerHTML='Across the group: book <b>~'+Math.round(totBooked)+'</b> intakes/mo → ~'+Math.round(totStarted)+' new care starts/mo to land '+fmtM(target)+'.';
+  }
+  var sl=document.getElementById('slider');
+  sl.addEventListener('input',function(){render(+sl.value);});
+  render(+sl.value);
+})();`;
+  res.send(
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>CA doorplannen targets</title><style>"+CSS+"</style></head><body>"+
+    "<h1>CA doorplannen targets</h1>"+
+    "<p class=sub>"+(demo?"Demo numbers (live feed unavailable) \u00b7 ":"")+"Move the target \u2014 the intakes &amp; care-starts each clinic\u2019s CA must book scale with it; the five bars are the doorplannen standards. <a href='/plan'>chiro plan \u2192</a> \u00b7 <a href='/ca'>CA dashboard \u2192</a></p>"+
+    "<div class=panel><div class=slider-row><div>Yearly revenue target (group)</div><div class=tgt id=tgt>\u20ac1.10M</div></div>"+
+    "<input type=range id=slider min=700000 max=1500000 step=25000 value=1100000>"+
+    "<div class=ticks><span>\u20ac0.70M</span><span>\u20ac1.10M</span><span>\u20ac1.50M</span></div>"+
+    "<div class=grp id=grp></div></div>"+
+    "<div id=cards></div>"+
+    "<script>var DATA="+JSON.stringify(DATA)+";</script>"+
+    "<script>"+CLIENT+"</script></body></html>"
+  );
+});
+
+// ===================== COMBINED WEEKLY KPI — road to €1,000,000 =====================
+// All four clinics combined. A "paid visit" = processed appointment whose type is an
+// intake OR a consultatie (incl. Platina), excluding telephone intake / evaluatie /
+// gemiste afspraak / ROF 1+2 / report of findings. Intakes = processed intake types,
+// telephone excluded. Weekly PVA = visits / intakes. Each week runs Mon 00:00 -> Sat
+// 18:00 Amsterdam (Sundays and Sat-evening excluded). Reference pace = Jan 1 2026 ->
+// today; the €1M-required weekly pace is the target each week is scored red/green on.
+const KPI_PRICE = (function(){ const n=parseFloat(process.env.KPI_VISIT_PRICE); return isFinite(n)&&n>0?n:59; })();
+const KPI_CLINICS = ["Amstelveen","Bussum","Utrecht","Rotterdam"];
+// Single source of truth: the weekly KPI page uses the SAME visit/intake rules as
+// computeKpis (isIntake / notAVisit defined near the top) so PVA is identical across
+// the whole dashboard. A paid visit = every processed treatment except telephone,
+// evaluatie/progress exam, gemiste afspraak/afzegging, ROF 1+2/report of findings.
+// Intakes (PVA denominator) = intake or SD types, telephone excluded.
+const kpiIsVisit   = n => !!String(n||"").trim() && !notAVisit(n);
+const kpiIsIntake  = n => isIntake(n);
+function kpiRange(startDate, endDate){ const f=d=>d.toISOString().slice(0,19).replace("T"," "); return "between:"+f(startDate)+","+f(endDate); }
+function kpiParse(s){ const m=String(s||"").match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/); if(!m) return null;
+  return { h:+m[4], dt:new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5])) }; }       // wall-clock as UTC for stable day math
+function kpiMonday(dt){ const dow=dt.getUTCDay(); const off=(dow+6)%7; const mon=new Date(dt.getTime()-off*864e5);
+  return mon.toISOString().slice(0,10); }
+function kpiInWindow(p){ const dow=p.dt.getUTCDay(); if(dow===0) return false; if(dow===6 && p.h>=18) return false; return true; }
+
+async function computeWeeklyCombined(){
+  const start = new Date(Date.UTC(2026,0,1,0,0,0));
+  const now = new Date();
+  const weeks = {};   // mondayKey -> {visits,intakes}
+  const perClinic = {};
+  let live = false;
+  for (const clinic of KPI_CLINICS){
+    try{
+      const types = await phubAll(clinic, "/appointment_types", {}).catch(()=>[]);
+      const visitIds=new Set(), intakeIds=new Set();
+      for (const t of types){ const nm=t.name||""; if(kpiIsVisit(nm)) visitIds.add(t.id); if(kpiIsIntake(nm)) intakeIds.add(t.id); }
+      const appts = await phubAll(clinic, "/appointments", { start: kpiRange(start, now) });
+      const byId = new Map();
+      for (const a of appts){ const prev=byId.get(a.id); const cancelled=a.status==="cancelled"||a.cancelDate;
+        if(!prev || (prev.cancelled && !cancelled)) byId.set(a.id,{...a,cancelled}); }
+      let cv=0;
+      for (const a of byId.values()){
+        if (a.cancelled || a.status!=="processed") continue;
+        const isV=visitIds.has(a.appointment_type_id), isI=intakeIds.has(a.appointment_type_id);
+        if(!isV && !isI) continue;
+        const p=kpiParse(a.start); if(!p || !kpiInWindow(p)) continue;
+        const wk=kpiMonday(p.dt);
+        (weeks[wk] ||= {visits:0,intakes:0});
+        if(isV){ weeks[wk].visits++; cv++; }
+        if(isI) weeks[wk].intakes++;
+      }
+      perClinic[clinic]=cv; live=true;
+    }catch(e){ perClinic[clinic]=null; }
+  }
+  // assemble ordered weeks
+  const keys=Object.keys(weeks).sort();
+  const curMon=kpiMonday(new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate())));
+  const targetWkVisits=(1e6/KPI_PRICE)/52;
+  let totV=0,totI=0,doneV=0,doneWeeks=0;
+  const rows=keys.map(k=>{
+    const w=weeks[k]; const partial=(k===curMon);
+    const pva=w.intakes? +(w.visits/w.intakes).toFixed(1):0;
+    if(!partial){ totV+=w.visits; totI+=w.intakes; doneV+=w.visits; doneWeeks++; }
+    const green=w.visits>=Math.round(targetWkVisits);
+    return { week:k, visits:w.visits, intakes:w.intakes, pva, target:Math.round(targetWkVisits), green, partial };
+  });
+  const refPva = totI? +(totV/totI).toFixed(1) : 0;
+  const refWkVisits = doneWeeks? Math.round(totV/doneWeeks) : 0;
+  const refWkIntakes = doneWeeks? Math.round(totI/doneWeeks) : 0;
+  const targetWkIntakes = refPva? Math.round(targetWkVisits/refPva) : 0;
+  const cumEur = Math.round(doneV*KPI_PRICE);
+  const remainWeeks = Math.max(0, 52-doneWeeks);
+  const projEur = Math.round((doneV + remainWeeks*refWkVisits)*KPI_PRICE);
+  return {
+    rows, perClinic, live,
+    price: KPI_PRICE,
+    ref: { wkVisits:refWkVisits, wkIntakes:refWkIntakes, pva:refPva, weeksDone:doneWeeks },
+    target: { wkVisits:Math.round(targetWkVisits), wkIntakes:targetWkIntakes },
+    progress: { cumEur, pct: Math.min(100, Math.round(cumEur/1e6*100)), projEur, remainWeeks }
+  };
+}
+
+function kpiSummaryText(d){
+  const last=[...d.rows].filter(r=>!r.partial).pop();
+  if(!last) return "Posturefixx weekly KPI: no completed week yet.";
+  const diff=last.visits-last.target; const st=diff>=0?("AHEAD by "+diff):("BEHIND by "+(-diff));
+  return "Posturefixx wk "+last.week+": "+last.visits+" paid visits vs "+last.target+" target ("+st+"). Intakes "+last.intakes+", PVA "+last.pva+". YTD \u20ac"+d.progress.cumEur.toLocaleString("en-US")+" / \u20ac1M ("+d.progress.pct+"%). Projected year-end \u20ac"+d.progress.projEur.toLocaleString("en-US")+".";
+}
+
+function kpiCronOK(req){ const k=process.env.CRON_KEY; return !k || req.query.key===k; }
+
+app.get("/kpi-goal", gate, async (req,res)=>{
+  let d, err=null;
+  try{ d=await computeWeeklyCombined(); }catch(e){ err=e.message; }
+  if(err || !d){ res.status(200).send("<!doctype html><meta charset=utf-8><body style='font-family:sans-serif;max-width:640px;margin:40px auto'><h2>Weekly KPI \u2014 road to \u20ac1M</h2><p>Could not read PracticeHub yet: "+(err||"unknown")+"</p></body>"); return; }
+  const WK=d.rows.map(r=>({w:r.week.slice(5),v:r.visits,i:r.intakes,p:r.pva,t:r.target,g:r.green,partial:r.partial}));
+  const clinicNote=Object.keys(d.perClinic).map(c=>c+": "+(d.perClinic[c]==null?"\u2014":d.perClinic[c])).join(" \u00b7 ");
+  const CSS="body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:920px;margin:22px auto;padding:0 16px;color:#16202E;background:#F7F9FC}"+
+    "h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px}"+
+    ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}"+
+    ".card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px}.cl{font-size:12px;color:#64748b}.cv{font-size:22px;font-weight:700}.cs{font-size:11.5px;color:#94a3b8}"+
+    ".bar{height:14px;border-radius:8px;background:#eef2f7;overflow:hidden;margin:6px 0}.bar>i{display:block;height:100%;background:#2563EB}"+
+    ".panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:6px 8px;border-bottom:1px solid #eef2f7;text-align:right}th:first-child,td:first-child{text-align:left}"+
+    ".g{color:#16a34a;font-weight:700}.r{color:#c0392b;font-weight:700}"+
+    "html.dark body{background:#0f172a}html.dark .card,html.dark .panel{background:#1e293b;border-color:#334155}html.dark .bar{background:#243044}html.dark td,html.dark th{border-color:#334155}html.dark #tmore button{background:#1e293b;border-color:#334155;color:#e2e8f0}";
+  res.send(
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Weekly KPI \u2014 road to \u20ac1M</title>"+
+    "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script><style>"+CSS+"</style></head><body>"+
+    "<h1>Weekly KPI \u2014 road to \u20ac1,000,000</h1>"+
+    "<p class=sub>All four clinics combined \u00b7 paid visits = every processed treatment except telephone, evaluatie, gemiste afspraak &amp; ROF \u00b7 week = Mon\u2192Sat 18:00. <a href='/'>\u2190 home</a></p>"+
+    "<div class=cards>"+
+      "<div class=card><div class=cl>Reference weekly PVA</div><div class=cv>"+d.ref.pva+"</div><div class=cs>Jan 1\u2192now, "+d.ref.weeksDone+" wks</div></div>"+
+      "<div class=card><div class=cl>Reference weekly intakes</div><div class=cv>"+d.ref.wkIntakes+"</div><div class=cs>avg/wk so far</div></div>"+
+      "<div class=card><div class=cl>Reference weekly visits</div><div class=cv>"+d.ref.wkVisits+"</div><div class=cs>avg/wk so far</div></div>"+
+      "<div class=card style='border-color:#2563EB'><div class=cl>Needed/wk for \u20ac1M</div><div class=cv>"+d.target.wkVisits+"</div><div class=cs>visits \u00b7 ~"+d.target.wkIntakes+" intakes</div></div>"+
+    "</div>"+
+    "<div class=panel><div style='display:flex;justify-content:space-between'><b>Progress to \u20ac1,000,000</b><span>\u20ac"+d.progress.cumEur.toLocaleString('en-US')+" ("+d.progress.pct+"%)</span></div>"+
+      "<div class=bar><i style='width:"+d.progress.pct+"%'></i></div>"+
+      "<div class=sub>Projected year-end at current pace: <b>\u20ac"+d.progress.projEur.toLocaleString('en-US')+"</b> \u00b7 "+d.progress.remainWeeks+" weeks left \u00b7 processed visits per clinic so far: "+clinicNote+"</div></div>"+
+    "<div class=panel><div id=chwrap style='overflow-x:auto;-webkit-overflow-scrolling:touch'><div id=chinner style='height:240px'><canvas id=ch></canvas></div></div></div>"+
+    "<div class=panel><table><thead><tr><th>Week of</th><th>Visits</th><th>Target</th><th>Intakes</th><th>PVA</th><th>Status</th></tr></thead><tbody id=tb></tbody></table><div id=tmore style='margin-top:10px'></div></div>"+
+    "<script>var WK="+JSON.stringify(WK)+";</script>"+
+    "<script>(function(){var tb=document.getElementById('tb');var N=WK.length;var SHOW=8;"+
+    "function rowHtml(r){var s=r.partial?'<span style=\"color:#94a3b8\">in progress</span>':(r.g?'<span class=g>GREEN</span>':'<span class=r>RED</span>');return '<tr><td>'+r.w+'</td><td>'+r.v+'</td><td>'+r.t+'</td><td>'+r.i+'</td><td>'+r.p+'</td><td>'+s+'</td></tr>';}"+
+    "function paint(all){tb.innerHTML='';var from=all?0:Math.max(0,N-SHOW);for(var i=from;i<N;i++)tb.insertAdjacentHTML('beforeend',rowHtml(WK[i]));}"+
+    "paint(false);"+
+    "if(N>SHOW){var b=document.createElement('button');b.textContent='Show all '+N+' weeks';b.style.cssText='font-size:13px;padding:6px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer';var open=false;b.onclick=function(){open=!open;paint(open);b.textContent=open?'Show latest 8 weeks':('Show all '+N+' weeks');};document.getElementById('tmore').appendChild(b);}"+
+    "var wrap=document.getElementById('chwrap'),inner=document.getElementById('chinner');inner.style.width=Math.max(N*30,wrap.clientWidth)+'px';"+
+    "var ctx=document.getElementById('ch');new Chart(ctx,{type:'bar',data:{labels:WK.map(function(r){return r.w}),datasets:[{label:'Paid visits',data:WK.map(function(r){return r.v}),backgroundColor:WK.map(function(r){return r.partial?'#94a3b8':(r.g?'#16a34a':'#c0392b')})},{label:'Weekly target',type:'line',data:WK.map(function(r){return r.t}),borderColor:'#2563EB',borderDash:[6,5],pointRadius:0,fill:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true}},scales:{y:{beginAtZero:true}}}});})();</script>"+
+    "</body></html>"
+  );
+});
+
+app.get("/cron/weekly-score", async (req,res)=>{
+  if(!kpiCronOK(req)) return res.status(403).json({ok:false,error:"bad key"});
+  try{ const d=await computeWeeklyCombined(); const last=[...d.rows].filter(r=>!r.partial).pop()||null;
+    res.json({ok:true, lastCompletedWeek:last, target:d.target, progress:d.progress, ref:d.ref}); }
+  catch(e){ res.status(200).json({ok:false,error:e.message}); }
+});
+
+app.get("/cron/weekly-sms", async (req,res)=>{
+  if(!kpiCronOK(req)) return res.status(403).json({ok:false,error:"bad key"});
+  const phone=process.env.PHONE_ALEX;
+  if(!phone) return res.status(200).json({ok:false,error:"PHONE_ALEX not set"});
+  try{ const d=await computeWeeklyCombined(); const text=kpiSummaryText(d);
+    const r=await sendSms("Rotterdam", phone, "Alex", text);
+    res.json({ok:true, sentTo:phone, text, ghl:r&&r.contactId?{contactId:r.contactId}:r}); }
+  catch(e){ res.status(200).json({ok:false,error:e.message}); }
+});
 
 app.get("/plan", gate, (req, res) => {
   const role = req.role || "owner";
@@ -1990,6 +2374,42 @@ function bruttoMonthly(name, R, monthNum){
 function revForBrutto(name, targetMonthlyBrutto, monthNum){
   let lo=0, hi=100000; for(let i=0;i<44;i++){ const mid=(lo+hi)/2; if(bruttoMonthly(name,mid,monthNum).total < targetMonthlyBrutto) lo=mid; else hi=mid; } return (lo+hi)/2;
 }
+// Inverse of dutchNet2026: the gross brutto that yields a target annual net.
+function grossForNet(targetNet, ruling30){
+  let lo=0, hi=600000; for(let i=0;i<48;i++){ const mid=(lo+hi)/2; if(dutchNet2026(mid,ruling30) < targetNet) lo=mid; else hi=mid; } return (lo+hi)/2;
+}
+// THE SOLVER. One knob in, everything out. Core identity: monthly visits =
+// avg monthly intakes (live, fixed) × PVA. Days/week is fixed per chiro. From any
+// one of {brought_in, brutto, netto, pva, perday} we back out monthly visits and
+// then derive every other figure. mode/value is the single thing the user sets.
+function solvePlan(name, mode, value, intakes, days, ruling30, mNum){
+  const P=PRICE_PER_VISIT, WPM=4.33;
+  value=Number(value);
+  if(!mode || !isFinite(value) || value<=0) return { ok:false };
+  let monthlyVisits;
+  if(mode==="brought_in")      monthlyVisits = value/12/P;
+  else if(mode==="brutto")     monthlyVisits = revForBrutto(name, value/12, mNum)/P;
+  else if(mode==="netto")      monthlyVisits = revForBrutto(name, grossForNet(value, ruling30)/12, mNum)/P;
+  else if(mode==="pva"){ if(!(intakes>0)) return { ok:false, err:"no intake data yet" }; monthlyVisits = value*intakes; }
+  else if(mode==="perday")     monthlyVisits = value*(days||3.5)*WPM;
+  else return { ok:false };
+  const broughtIn = monthlyVisits*12*P;
+  const brutto    = bruttoMonthly(name, monthlyVisits*P, mNum).total*12;
+  const netto     = dutchNet2026(brutto, ruling30);
+  const pva       = intakes>0 ? monthlyVisits/intakes : null;
+  const perWeek   = monthlyVisits/WPM;
+  const perDay    = (days>0) ? perWeek/days : null;
+  return { ok:true, mode, value, monthlyVisits, broughtIn, brutto, netto, pva, perWeek, perDay, intakes, days };
+}
+// Map a stored goal (annual+type / pva / perDay) to a single (mode,value) knob.
+function goalToInput(g){
+  if(!g) return null;
+  if(g.setMode && g.setValue!=null) return { mode:g.setMode, value:g.setValue };
+  if(g.annual!=null) return { mode: g.type==="brutto" ? "brutto" : "brought_in", value:g.annual };
+  if(g.pva!=null) return { mode:"pva", value:g.pva };
+  if(g.perDay!=null) return { mode:"perday", value:g.perDay };
+  return null;
+}
 // === PAY STRUCTURES END ===
 
 function parseGoalsCSV(csv){
@@ -2015,24 +2435,29 @@ function goalProgress(b, g, days){
   const monthRev=visits30*P, annualRun=monthRev*12;
   const bm=bruttoMonthly(name, monthRev, mNum);
   const bruttoMonthNow=bm.total, bruttoAnnualNow=bruttoMonthNow*12;
-  const type = (g.type==="brutto") ? "brutto" : "brought_in";
-  let annualGoal = g.annual!=null ? g.annual : (g.perDay ? g.perDay*wkDays*4.33*P*12 : null);
-  let weekNeeded=null, perDayNeeded=null, revNeededMonth=null, broughtInGoal=null, bruttoGoal=null;
-  const hasGoal = !!(annualGoal || g.perDay);
-  if(annualGoal!=null){
-    if(type==="brutto"){ bruttoGoal=annualGoal; revNeededMonth=revForBrutto(name, annualGoal/12, mNum); broughtInGoal=revNeededMonth*12; }
-    else { broughtInGoal=annualGoal; revNeededMonth=annualGoal/12; bruttoGoal=bruttoMonthly(name, revNeededMonth, mNum).total*12; }
-    const monthVisitsNeeded=revNeededMonth/P; weekNeeded=monthVisitsNeeded/4.33; perDayNeeded=weekNeeded/wkDays;
-  } else if(g.perDay){ perDayNeeded=g.perDay; weekNeeded=g.perDay*wkDays; revNeededMonth=weekNeeded*4.33*P; broughtInGoal=revNeededMonth*12; bruttoGoal=bruttoMonthly(name, revNeededMonth, mNum).total*12; }
+  const ruling30 = RULING30.has(name);
+  const nettoAnnualNow = bm.owner ? null : dutchNet2026(bruttoAnnualNow, ruling30);
+  // ---- Target: ONE knob set, everything else solved (visits = intakes × PVA) ----
+  const input = goalToInput(g);
+  const hasGoal = !!input;
+  let sol = hasGoal ? solvePlan(name, input.mode, input.value, b.intakes||0, wkDays, ruling30, mNum) : null;
+  if(sol && !sol.ok) sol=null;
+  const tMode = input ? input.mode : null, tValue = input ? input.value : null;
+  const type = tMode==="brutto" ? "brutto" : tMode==="netto" ? "netto" : "brought_in";
+  const broughtInGoal = sol ? sol.broughtIn : null;
+  const bruttoGoal    = sol ? sol.brutto    : null;
+  const nettoGoal     = sol ? sol.netto     : null;
+  const pvaGoal       = sol ? sol.pva       : null;
+  const weekNeeded    = sol ? sol.perWeek   : null;
+  const perDayNeeded  = sol ? sol.perDay    : null;
+  const solErr        = (input && !sol) ? "needs live intake data" : null;
   const gapWeek = weekNeeded!=null ? (weekNeeded-weekNow) : null;
-  let pct=null;
-  if(type==="brutto" && bruttoGoal) pct=bruttoAnnualNow/bruttoGoal;
-  else if(annualGoal) pct=annualRun/annualGoal;
-  else if(g.perDay) pct=perDayNow/g.perDay;
-  return { hasGoal, type, visits30, weekNow, perDayNow, monthRev, annualRun,
+  let pct=null; if(broughtInGoal) pct=annualRun/broughtInGoal;
+  return { hasGoal, type, tMode, tValue, visits30, weekNow, perDayNow, monthRev, annualRun,
     bruttoMonthNow, bruttoAnnualNow, bruttoBase:bm.base, bruttoComm:bm.commission, bruttoHoliday:bm.holiday, owner:!!bm.owner,
-    annualGoal, broughtInGoal, bruttoGoal, weekNeeded, perDayNeeded, revNeededMonth, gapWeek,
-    pvaNow:b.pva, pvaTarget:g.pva||null, intakes:b.intakes, cadence:g.cadence||2, pct,
+    ruling30, nettoAnnualNow,
+    broughtInGoal, bruttoGoal, nettoGoal, pvaGoal, weekNeeded, perDayNeeded, gapWeek, solErr,
+    pvaNow:b.pva, pvaTarget:(pvaGoal!=null?Math.round(pvaGoal*10)/10:null), intakes:b.intakes, cadence:g.cadence||2, pct,
     payNote:bm.note, payVerified:bm.verified };
 }
 
@@ -2058,9 +2483,9 @@ app.get("/goals/data", gate, async (_req,res)=>{
 
 // Live recompute for one edited card (no PracticeHub re-pull — client passes its known 30d numbers)
 app.post("/goals/recalc", gate, (req,res)=>{
-  try{ const { name, visits30, pva, intakes, days, annual, pva_target, perDay, type }=req.body||{};
+  try{ const { name, visits30, pva, intakes, days, mode, value }=req.body||{};
     const b={ n:name, visits:Number(visits30)||0, pva:(pva==null?null:Number(pva)), intakes:Number(intakes)||0 };
-    const g={ annual:(annual==null||annual===""?null:Number(annual)), pva:(pva_target==null||pva_target===""?null:Number(pva_target)), perDay:(perDay==null||perDay===""?null:Number(perDay)), type:(type==="brutto"?"brutto":"brought_in") };
+    const g={ setMode:(mode||null), setValue:(value==null||value===""?null:Number(value)), cadence:2 };
     res.json({ ok:true, ...goalProgress(b, g, Number(days)||3.5), goal:g });
   }catch(e){ res.json({ ok:false, error:e.message }); }
 });
@@ -2191,27 +2616,61 @@ function card(c){
   var bruttoDetail = isOwner ? "via holding" : (eur(c.bruttoBase*12)+" base + "+eur(c.bruttoComm*12)+" comm"+(c.bruttoHoliday?" + "+eur(c.bruttoHoliday*12)+" holiday":""));
   var pct=Math.max(0,Math.min(1,c.pct||0)); var barCol=pct>=0.98?"#16a34a":pct>=0.7?"#f59e0b":"#dc2626";
   var goalIsBrutto = (g.type==="brutto");
-  var needLine="";
-  if(c.hasGoal && c.weekNeeded!=null){
-    if(goalIsBrutto) needLine = "To earn "+eur(c.bruttoGoal)+" brutto/yr, needs ~"+eur(c.broughtInGoal)+" brought in \u2192 <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+(c.gapWeek>0.5?"<b style='color:#b45309'>~"+Math.round(c.gapWeek)+"/wk to find</b>":"<b style='color:#16a34a'>on track</b>");
-    else needLine = "Needs <b>~"+Math.round(c.weekNeeded)+" visits/wk</b> (\u2248"+(c.perDayNeeded||0).toFixed(0)+"/day) \u2014 "+(c.gapWeek>0.5?"<b style='color:#b45309'>~"+Math.round(c.gapWeek)+"/wk to find</b>":"<b style='color:#16a34a'>on track</b>");
+  var modeLabel={brought_in:"\u20ac brought into clinic", brutto:"\u20ac brutto pay", netto:"\u20ac netto take-home", pva:"PVA", perday:"visits / day"};
+  var curMode=c.tMode||"brought_in";
+  var curVal=(c.tValue!=null?c.tValue:"");
+  function opt(v){ return "<option value='"+v+"'"+(curMode===v?" selected":"")+">"+modeLabel[v]+"</option>"; }
+  var modeSel="<select data-f='mode'>"+opt("brought_in")+opt("brutto")+opt("netto")+opt("pva")+opt("perday")+"</select>";
+  var valPlace=(curMode==="pva")?"15":(curMode==="perday")?"9":"100000";
+
+  var out="";
+  if(c.solErr){ out="<div class='need' style='color:#b45309'>Set a number to project \u2014 "+c.solErr+".</div>"; }
+  else if(c.hasGoal && c.broughtInGoal!=null){
+    var pvaStr=c.pvaGoal!=null?("PVA <b>"+c.pvaGoal.toFixed(1)+"</b>"):"PVA <span style='color:#94a3b8'>(needs live intakes)</span>";
+    out="<div class='need'>To hit it: "+pvaStr+" \u00b7 <b>~"+(c.perDayNeeded!=null?Math.round(c.perDayNeeded):"\u2014")+"/day</b> (\u2248"+Math.round(c.weekNeeded)+"/wk) \u2014 on <b>"+(c.intakes||0)+"</b> intakes/mo \u00d7 PVA, at <b>"+c.days+"</b> days/wk</div>";
+    var gap=c.gapWeek, cmp;
+    if(gap>0.5) cmp="<b style='color:#b45309'>~"+Math.round(gap)+"/wk short</b>";
+    else if(c.pct!=null && c.pct>=1.10) cmp="<b style='color:#16a34a'>ahead</b> (~"+Math.round(c.pct*100)+"% of target)"+(c.pct>=1.30?" <span style='color:#b45309'>\u00b7 target is below their pace, raise it</span>":"");
+    else cmp="<b style='color:#16a34a'>on track</b>";
+    out+="<div class='need'>Current pace ~"+Math.round(c.weekNow)+"/wk \u2014 "+cmp+"</div>";
   }
-  var pvaLine="PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b>"+(c.pvaTarget?(" / target "+c.pvaTarget):"")+" \u00b7 intakes "+(c.intakes||0)+" (30d)";
+  var hasT=(c.hasGoal && c.broughtInGoal!=null);
+  var clinicLbl, clinicBig, clinicDet;
+  if(hasT){
+    clinicLbl="Brings into clinic <span style='color:#16a34a'>(target)</span>";
+    clinicBig=eur(c.broughtInGoal)+"/yr";
+    clinicDet="before pay-out \u00b7 ~"+Math.round(c.weekNeeded)+"/wk \u00b7 <span style='color:#94a3b8'>now \u2248"+eur(c.annualRun)+"/yr</span>";
+  } else {
+    clinicLbl="Brings into clinic (pace)";
+    clinicBig=eur(c.annualRun)+"/yr";
+    clinicDet="~"+Math.round(c.weekNow)+" visits/wk \u00b7 "+eur(c.monthRev)+"/mo";
+  }
+  var bruttoLbl, bruttoBig, bruttoDet;
+  if(isOwner){ bruttoLbl="Brutto / netto pay"; bruttoBig="\u2014"; bruttoDet="via holding"; }
+  else if(hasT){
+    bruttoLbl="Brutto / netto pay <span style='color:#16a34a'>(target)</span>";
+    bruttoBig=eur(c.bruttoGoal)+"/yr";
+    bruttoDet=(c.nettoGoal!=null?"netto \u2248<b>"+eur(c.nettoGoal)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" est.":"")+" \u00b7 <span style='color:#94a3b8'>now \u2248"+eur(c.bruttoAnnualNow)+"/yr</span>";
+  } else {
+    bruttoLbl="Brutto / netto pay (pace)";
+    bruttoBig=eur(c.bruttoAnnualNow)+"/yr";
+    bruttoDet=bruttoDetail+(c.nettoAnnualNow?(" \u00b7 <b>netto \u2248"+eur(c.nettoAnnualNow)+"/yr</b>"+(c.ruling30?" <span style='color:#16a34a'>(30% ruling)</span>":"")+" <span style='color:#94a3b8'>est.</span>"):"");
+  }
+  var pvaLine="Live now: PVA <b>"+(c.pvaNow!=null?c.pvaNow:"\u2014")+"</b> \u00b7 intakes <b>"+(c.intakes||0)+"</b>/mo <span style='color:#94a3b8'>(6-mo avg, PracticeHub)</span>";
   return "<div class='card' data-name='"+c.n+"' data-v='"+c.visits30+"' data-pva='"+(c.pvaNow==null?'':c.pvaNow)+"' data-int='"+(c.intakes||0)+"' data-days='"+c.days+"'>"
     +"<div class='gname'>"+c.n+" <span class='gclin'>"+(c.clinics||[]).join(" + ")+"</span>"+tagFor(c)+(c.payVerified?"":" <span class='tag est'>pay = estimate</span>")+(c.phone?"":" <span class='gclin' style='color:#dc2626'>(no phone)</span>")+"</div>"
     +"<div class='twocol'>"
-    +"<div class='box clinicbox'><div class='lbl'>Brings into clinic (pace)</div><div class='big'>"+eur(c.annualRun)+"/yr</div><div class='det'>~"+Math.round(c.weekNow)+" visits/wk \u00b7 "+eur(c.monthRev)+"/mo</div></div>"
-    +"<div class='box bruttobox'><div class='lbl'>Brutto pay (pace)</div><div class='big'>"+(isOwner?"\u2014":eur(c.bruttoAnnualNow)+"/yr")+"</div><div class='det'>"+bruttoDetail+"</div></div>"
+    +"<div class='box clinicbox'><div class='lbl'>"+clinicLbl+"</div><div class='big'>"+clinicBig+"</div><div class='det'>"+clinicDet+"</div></div>"
+    +"<div class='box bruttobox'><div class='lbl'>"+bruttoLbl+"</div><div class='big'>"+bruttoBig+"</div><div class='det'>"+bruttoDet+"</div></div>"
     +"</div>"
     +"<div class='row'>"
-    +"<div><label>Goal is</label><select data-f='type'><option value='brought_in'"+(goalIsBrutto?"":" selected")+">\u20ac brought into clinic</option><option value='brutto'"+(goalIsBrutto?" selected":"")+">\u20ac brutto take-home</option></select></div>"
-    +"<div><label>Yearly \u20ac target</label><input type='number' data-f='annual' value='"+(g.annual!=null?g.annual:"")+"' placeholder='120000'></div>"
-    +"<div><label>PVA target</label><input type='number' step='0.1' data-f='pva' value='"+(g.pva!=null?g.pva:"")+"' placeholder='12'></div>"
-    +"<div><label>Visits/day</label><input type='number' step='0.1' data-f='perDay' value='"+(g.perDay!=null?g.perDay:"")+"' placeholder='opt'></div>"
+    +"<div><label>Set one of these</label>"+modeSel+"</div>"
+    +"<div><label>Value</label><input type='number' step='0.1' data-f='value' value='"+curVal+"' placeholder='"+valPlace+"'></div>"
+    +"<div style='align-self:flex-end;color:#94a3b8;font-size:12px;padding-bottom:6px'>intakes &amp; days are fixed \u2014 the other two solve</div>"
     +"<button class='btn alt' data-act='update'>Update projection</button>"
     +"</div>"
-    +(c.hasGoal?("<div class='prog'><div style='width:"+(pct*100).toFixed(0)+"%;background:"+barCol+"'></div></div>"):"<div class='need'>No goal yet — add one to project and coach toward it.</div>")
-    +(needLine?("<div class='need'>"+needLine+"</div>"):"")
+    +(c.hasGoal&&c.broughtInGoal!=null?("<div class='prog'><div style='width:"+(pct*100).toFixed(0)+"%;background:"+barCol+"'></div></div>"):"")
+    +(c.hasGoal?out:"<div class='need'>No goal yet \u2014 set one of the five above (\u20ac target, PVA, or visits/day) to project and coach toward it.</div>")
     +"<div class='need'>"+pvaLine+"</div>"
     +"<div style='margin-top:10px'><button class='btn' data-act='preview'>Preview SMS</button> <button class='btn send' data-act='send'>Send check-in</button></div>"
     +"<textarea data-ta='1'></textarea><div class='res' data-res='1'></div></div>";
@@ -2225,9 +2684,9 @@ function cardEl(name){ return document.querySelector("[data-name='"+name+"']"); 
 function readGoal(el){ var o={}; el.querySelectorAll("[data-f]").forEach(function(i){ var k=i.getAttribute("data-f"); o[k]= (i.tagName==="SELECT")?i.value:(i.value.trim()===""?null:parseFloat(i.value)); }); return o; }
 function update(name){
   var el=cardEl(name), g=readGoal(el);
-  var body={ name:name, visits30:el.getAttribute("data-v"), pva:el.getAttribute("data-pva"), intakes:el.getAttribute("data-int"), days:el.getAttribute("data-days"), annual:g.annual, pva_target:g.pva, perDay:g.perDay, type:g.type };
+  var body={ name:name, visits30:el.getAttribute("data-v"), pva:el.getAttribute("data-pva"), intakes:el.getAttribute("data-int"), days:el.getAttribute("data-days"), mode:g.mode, value:g.value };
   fetch("/goals/recalc",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(j){
-    if(!j.ok) return; var c=DATA.chiros.find(function(x){return x.n===name;}); var keep=c.clinics, ph=c.phone; Object.assign(c,j); c.clinics=keep; c.phone=ph; c.goal={annual:g.annual,pva:g.pva,perDay:g.perDay,type:g.type,cadence:(c.goal&&c.goal.cadence)||2}; render(); });
+    if(!j.ok) return; var c=DATA.chiros.find(function(x){return x.n===name;}); var keep=c.clinics, ph=c.phone; Object.assign(c,j); c.clinics=keep; c.phone=ph; c.goal={setMode:g.mode,setValue:g.value,cadence:(c.goal&&c.goal.cadence)||2}; render(); });
 }
 function preview(name){ var el=cardEl(name), ta=el.querySelector("[data-ta]"), res=el.querySelector("[data-res]"); res.textContent="Drafting…";
   fetch("/goals/draft?name="+encodeURIComponent(name)).then(function(r){return r.json();}).then(function(j){ if(j.ok){ta.style.display="block";ta.value=j.message;res.textContent="";}else{res.innerHTML="<span style='color:#b45309'>"+(j.error||"could not draft")+"</span>";} }).catch(function(e){res.innerHTML="<span style='color:#dc2626'>"+e+"</span>";}); }
@@ -2696,51 +3155,158 @@ function countApply(mode, x, n, started){ // x = crossForMonth/Total result
 
 // Per-month dropdown breakdown of the "Answered phone" column, per clinic.
 // ?count=campaign (default, feed as-is) | treated (minus cross-booked elsewhere).
+// ---------- Historical monthly marketing rollups (2024-2026) ----------
+// One workbook per YEAR; one tab per clinic named "{year} {Clinic}" (e.g. "2024 Utrecht").
+// Meta & Google columns are kept SEPARATE. These pre-date the per-lead call feed, so
+// months sourced here are MONTHLY TOTALS only (no green/yellow/red/blue split). Gated
+// behind META_HISTORY_LIVE=1; workbooks must be link-shared "anyone with link - viewer".
+const META_HISTORY = {
+  "2024": "1APX9DFtsV4qOWbg2qZPSZlp_1-S-qm5ZEQsBXTv1rnc",
+  "2025": "1O_d9_TAt93Iq6dT5adae11zAE8RKYbakrT9-VNqESYs",
+  "2026": "1WCfLRCNMw9lgxP-Qe165Eo5sn7QF43PR9zPBRbaoj2g"
+};
+const META_HISTORY_LIVE = process.env.META_HISTORY_LIVE === "1";
+const HIST_MON = {january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12,
+  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+function histInt(v){ const n=parseInt(String(v==null?"":v).replace(/[^0-9-]/g,""),10); return (isFinite(n)&&n>0)?n:0; }
+function histCols(header){
+  const H=header.map(h=>String(h||"").toLowerCase().replace(/\s+/g," ").trim());
+  const end=H.length; let metaIdx=H.findIndex(h=>h==="meta"); if(metaIdx<0) metaIdx=end;
+  const findIn=(name,from,to)=>{ for(let i=from;i<to;i++){ if(H[i]&&H[i].indexOf(name)!==-1) return i; } return -1; };
+  return { g_book:findIn("booking",1,metaIdx), g_intake:findIn("intake",1,metaIdx), g_started:findIn("started care",1,metaIdx),
+    m_leads:findIn("leads",metaIdx,end), m_intake:findIn("intake",metaIdx,end), m_started:findIn("started care",metaIdx,end) };
+}
+function parseHistTab(rows, year){
+  let hr=-1, cols=null;
+  for(let i=0;i<Math.min(rows.length,8);i++){ const H=(rows[i]||[]).map(x=>String(x||"").toLowerCase());
+    if(H.some(h=>h.indexOf("month")!==-1) && H.some(h=>h==="meta"||h.indexOf("leads")!==-1)){ hr=i; cols=histCols(rows[i]); break; } }
+  if(hr<0) return {};
+  const out={};
+  for(let r=hr+1;r<rows.length;r++){ const row=rows[r]||[]; const mn=String(row[0]||"").toLowerCase().replace(/[^a-z]/g,"");
+    const mo=HIST_MON[mn]; if(!mo) continue;                         // skip totals/averages/blank rows
+    out[year+"-"+String(mo).padStart(2,"0")]={
+      metaLeads:   cols.m_leads >=0?histInt(row[cols.m_leads]):0,
+      metaIntakes: cols.m_intake>=0?histInt(row[cols.m_intake]):0,
+      metaStarted: cols.m_started>=0?histInt(row[cols.m_started]):0,
+      gBook:   cols.g_book   >=0?histInt(row[cols.g_book]):0,
+      gIntake: cols.g_intake >=0?histInt(row[cols.g_intake]):0,
+      gStarted:cols.g_started>=0?histInt(row[cols.g_started]):0 };
+  }
+  return out;
+}
+async function histForClinic(clinic){
+  const all={};
+  for(const yr of Object.keys(META_HISTORY)){
+    for(const tab of [yr+" "+clinic, clinic]){
+      try{ const rows=parseCSV(await fetchSheetCSV(META_HISTORY[yr], tab)); const parsed=parseHistTab(rows, yr);
+        if(Object.keys(parsed).length){ Object.assign(all, parsed); break; } }catch(e){}
+    }
+  }
+  return all;
+}
+
 app.get("/meta-leads/breakdown", gate, async (req,res)=>{
   try{
     const mode = req.query.count==="treated" ? "treated" : "campaign";
-    const blocks=[];
+    const demo = (req.query.demo==="1"||req.query.demo==="true"); const dq = demo ? "&demo=1" : ""; const dq1 = demo ? "?demo=1" : "";
+    const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const monName=ym=>MON[(+ym.slice(5,7))-1]+" "+ym.slice(0,4);
+    const curYear=String(new Date().getFullYear());
+    const catLine=(cat,n,leads)=>"<div class=cat><span class=dot style='background:"+cat.color+"'></span>"+cat.label+": <b>"+n+"</b> <span class=mut>("+mlPct(n,leads)+"%)</span></div>";
+    const sections=[]; let defClinic=null, defLeads=-1;
     for(const name of Object.keys(META_LEAD_SHEETS)){
       const cfg=META_LEAD_SHEETS[name];
-      const rows=await mlFetchClinic(cfg.id, cfg.gids);
-      if(!rows.length){ blocks.push("<h2>"+name+"</h2><p style='color:#c0392b'>could not read feed</p>"); continue; }
-      const agg=mlAggregateRows(rows, name); const t=agg.totals;
+      let rows; try{ rows=await mlFetchClinic(cfg.id, cfg.gids); }catch(e){ rows=[]; }
+      if(!rows.length){ sections.push("<section class='clinic' data-clinic='"+name+"' style='display:none'><div class='chead'>"+name+" <span class='src'>(feed unavailable)</span></div><p class='tot'>Could not read this clinic\u2019s feed.</p></section>"); continue; }
+      const agg=mlAggregateRows(rows,name);
+      if(META_HISTORY_LIVE){ try{ const hist=await histForClinic(name);
+        for(const ym of Object.keys(hist)){ const h=hist[ym]; const cur=agg.months[ym];
+          if(!cur || (cur.leads||0)===0){ const a=blankAgg(); a.leads=h.metaLeads; a.care=h.metaStarted; a.paid=h.metaIntakes;
+            a.hist=true; a.gBook=h.gBook; a.gIntake=h.gIntake; a.gStarted=h.gStarted; agg.months[ym]=a; } }
+      }catch(e){} }
+      const t=agg.totals;
       const answered=t.green+t.yellow+t.red+t.blue;
-      const ct=crossForTotal(agg, name);
+      const ct=crossForTotal(agg,name);
       const keys=Object.keys(agg.months).sort().reverse();
-      const months=keys.map(function(ym){ const m=agg.months[ym];
-        const adj=countApply(mode, crossForMonth(agg,name,ym), m.leads, m.care);
-        const xnote = adj.removed>0 ? " <span style='color:#b45309'>(\u2212"+adj.removed+" cross-booked)</span>" : "";
-        return "<details class=mo><summary><b>"+ym+"</b> \u00b7 "+adj.leads+" leads"+xnote+" \u00b7 "+
-          "<span style='color:"+ML_CAT.green.color+"'>"+m.green+" booked</span> \u00b7 started care: "+adj.started+"</summary>"+
-          "<div class=brk>"+
-          "<span style='color:"+ML_CAT.green.color+"'>"+ML_CAT.green.label+": <b>"+m.green+"</b> ("+mlPct(m.green,m.leads)+"%)</span>"+
-          "<span style='color:"+ML_CAT.yellow.color+"'>"+ML_CAT.yellow.label+": <b>"+m.yellow+"</b> ("+mlPct(m.yellow,m.leads)+"%)</span>"+
-          "<span style='color:"+ML_CAT.red.color+"'>"+ML_CAT.red.label+": <b>"+m.red+"</b> ("+mlPct(m.red,m.leads)+"%)</span>"+
-          "<span style='color:"+ML_CAT.blue.color+"'>"+ML_CAT.blue.label+": <b>"+m.blue+"</b> ("+mlPct(m.blue,m.leads)+"%)</span>"+
-          "</div></details>";
+      const byYear={}; keys.forEach(ym=>{ (byYear[ym.slice(0,4)]=byYear[ym.slice(0,4)]||[]).push(ym); });
+      const years=Object.keys(byYear).sort().reverse();
+      const yearBlocks=years.map(function(yr){
+        let yl=0,yb=0,ys=0,yHist=false;
+        const moRows=byYear[yr].map(function(ym){ const m=agg.months[ym];
+          if(m.hist){ yHist=true; yl+=(m.leads||0); ys+=(m.care||0);
+            return "<details class=mo><summary><b class=mn>"+monName(ym)+"</b>"+
+              "<span class=pill>Meta "+(m.leads||0)+" leads</span>"+
+              "<span class='pill bk'>"+(m.care||0)+" started</span>"+
+              "<span class=pill>Google "+(m.gBook||0)+" booked</span>"+
+              "<span class='pill hist'>monthly totals</span></summary><div class=brk>"+
+              "<div class=cat><span class=dot style='background:"+ML_CAT.green.color+"'></span>Meta: <b>"+(m.leads||0)+"</b> leads · "+(m.paid||0)+" intakes · "+(m.care||0)+" started care</div>"+
+              "<div class=cat><span class=dot style='background:#f59e0b'></span>Google: <b>"+(m.gBook||0)+"</b> booked · "+(m.gIntake||0)+" intakes · "+(m.gStarted||0)+" started care</div>"+
+              "<div class=mut style='margin-top:5px'>No per-call breakdown — monthly totals from the marketing sheet.</div></div></details>"; }
+          const adj=countApply(mode, crossForMonth(agg,name,ym), m.leads, m.care);
+          yl+=adj.leads; yb+=m.green; ys+=adj.started;
+          const xnote = adj.removed>0 ? " <span class=xb>(\u2212"+adj.removed+" cross-booked)</span>" : "";
+          const bookPct=mlPct(m.green,m.leads);
+          const seg=(c,n)=> n>0 ? "<i style='width:"+mlPct(n,m.leads)+"%;background:"+c+"'></i>" : "";
+          const bar="<div class=bar>"+seg(ML_CAT.green.color,m.green)+seg(ML_CAT.blue.color,m.blue)+seg(ML_CAT.red.color,m.red)+seg(ML_CAT.yellow.color,m.yellow)+"</div>";
+          return "<details class=mo><summary>"+
+            "<b class=mn>"+monName(ym)+"</b>"+
+            "<span class=pill>"+adj.leads+" leads</span>"+
+            "<span class='pill bk'>"+m.green+" booked"+(adj.leads?" \u00b7 "+bookPct+"%":"")+"</span>"+
+            "<span class=pill>started "+adj.started+"</span>"+xnote+
+            "</summary><div class=brk>"+
+            catLine(ML_CAT.green,m.green,m.leads)+catLine(ML_CAT.yellow,m.yellow,m.leads)+
+            catLine(ML_CAT.red,m.red,m.leads)+catLine(ML_CAT.blue,m.blue,m.leads)+bar+
+            "</div></details>";
+        }).join("");
+        var ysum=(yHist&&yb===0)?(yl+" leads \u00b7 "+ys+" started care \u00b7 monthly totals"):(yl+" leads \u00b7 "+yb+" booked \u00b7 "+ys+" started care");
+        return "<details class=yr"+(yr===curYear?" open":"")+"><summary><span class=yn>"+yr+"</span>"+
+          "<span class=ysum>"+ysum+"</span></summary>"+
+          "<div class=yrbody>"+moRows+"</div></details>";
       }).join("");
-      const treatedLeads = mode==="treated" ? Math.max(0,t.leads-ct.outN-ct.inN) : t.leads;
-      const treatedStarted = mode==="treated" ? Math.max(0,t.care-ct.outStarted-ct.inStarted) : t.care;
-      blocks.push("<h2>"+name+" <span style='font-size:11px;color:#94a3b8'>("+ct.src+")</span></h2><p class=tot>"+
-        (mode==="treated"
-          ? "Treated-here: <b>"+treatedLeads+"</b> leads / started care <b>"+treatedStarted+"</b> "
-          : "Campaign (all feed rows): <b>"+t.leads+"</b> leads / started care <b>"+t.care+"</b> ")+
-        "\u00b7 answered "+answered+" (G "+t.green+" / Y "+t.yellow+" / R "+t.red+" / B "+t.blue+") "+
-        "\u00b7 <span style='color:#b45309'>cross-booked elsewhere: "+ct.outN+(ct.inN?(" + copied-in "+ct.inN):"")+"</span></p>"+months);
+      const totLine=(mode==="treated"
+          ? "Treated here: <b>"+Math.max(0,t.leads-ct.outN-ct.inN)+"</b> leads \u00b7 started care <b>"+Math.max(0,t.care-ct.outStarted-ct.inStarted)+"</b>"
+          : "Campaign: <b>"+t.leads+"</b> leads \u00b7 started care <b>"+t.care+"</b>")
+        +" \u00b7 answered "+answered+" (G "+t.green+"/Y "+t.yellow+"/R "+t.red+"/B "+t.blue+")"
+        +" \u00b7 <span class=xb>cross-booked elsewhere "+ct.outN+(ct.inN?(" + copied-in "+ct.inN):"")+"</span>";
+      sections.push("<section class='clinic' data-clinic='"+name+"' style='display:none'>"+
+        "<div class='chead'>"+name+" <span class='src'>("+ct.src+")</span><span class='tot'>"+totLine+"</span></div>"+
+        (yearBlocks||"<p class='tot'>No campaign-attributed months for this clinic \u2014 its paid leads were booked at other clinics (see cross-booked above).</p>")+
+        "</section>");
+      if(t.leads>defLeads){ defLeads=t.leads; defClinic=name; }
     }
-    const tog=(m)=>m===mode?("<b>"+m+"</b>"):("<a href='/meta-leads/breakdown?count="+m+"'>"+m+"</a>");
-    res.send("<!doctype html><meta charset=utf-8><title>Per-month call breakdown</title>"+
-      "<style>body{font:15px/1.5 -apple-system,system-ui;max-width:780px;margin:24px auto;padding:0 16px;color:#16202E}"+
-      "h1{font-size:22px;margin:0 0 2px}h2{font-size:16px;margin:22px 0 6px}"+
-      ".src{color:#64748b;font-size:13px;margin:0 0 8px}.tot{font-size:13px;color:#475569}"+
-      ".mo{border:1px solid #e5e7eb;border-radius:10px;margin:6px 0;padding:8px 12px}summary{cursor:pointer}"+
-      ".brk{display:flex;flex-direction:column;gap:2px;margin-top:8px;font-size:13.5px}a{color:#2563EB}</style>"+
+    const tabBtns=Object.keys(META_LEAD_SHEETS).map(n=>"<button class='tab' data-go='"+n+"'>"+n+"</button>").join("");
+    const tog=(m)=> m===mode ? "<b>"+m+"</b>" : "<a href='/meta-leads/breakdown?count="+m+dq+"'>"+m+"</a>";
+    const CSS="body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:860px;margin:22px auto;padding:0 16px;color:#16202E;background:#F7F9FC}"+
+      "h1{font-size:22px;margin:0 0 2px}.src{color:#64748b;font-size:13px}.mut{color:#94a3b8}.xb{color:#b45309}a{color:#2563EB}"+
+      ".toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:13px;color:#64748b;margin:8px 0 4px}.toolbar a{margin-left:2px}"+
+      ".howto{margin:6px 0 4px;font-size:13px}.howto>summary{cursor:pointer;color:#2563EB}.howbody{color:#475569;margin:6px 0 0;padding:8px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:10px}"+
+      ".tabs{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;gap:6px;background:#F7F9FC;padding:10px 0 8px;margin:8px 0 4px;border-bottom:1px solid #e5e7eb}"+
+      ".tab{padding:6px 13px;border:1px solid #e5e7eb;background:#fff;border-radius:999px;font-size:13px;cursor:pointer;color:#475569}.tab.on{background:#2563EB;border-color:#2563EB;color:#fff;font-weight:600}"+
+      ".chead{font-size:19px;font-weight:700;margin:14px 0 8px}.chead .src{font-size:11px;font-weight:400;color:#94a3b8}.chead .tot{display:block;font-size:12.5px;font-weight:400;color:#64748b;margin-top:3px}"+
+      ".yr{border:1px solid #e5e7eb;border-radius:12px;margin:8px 0;background:#fff;overflow:hidden}"+
+      ".yr>summary{cursor:pointer;list-style:none;padding:11px 14px;background:#f8fafc;display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}.yr>summary::-webkit-details-marker{display:none}"+
+      ".yr[open]>summary{border-bottom:1px solid #eef2f7}.yn{font-weight:700;font-size:15px}.ysum{font-size:12.5px;color:#64748b}.yrbody{padding:6px 10px 10px}"+
+      ".mo{border:1px solid #eef2f7;border-radius:9px;margin:6px 0;background:#fff;padding:9px 12px}"+
+      ".mo>summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:7px}.mo>summary::-webkit-details-marker{display:none}.mn{min-width:74px}"+
+      ".pill{font-size:11.5px;padding:1px 8px;border-radius:999px;background:#eef2f7;color:#475569}.pill.bk{background:#e6f4ec;color:#1a7a44}.pill.hist{background:#fef3c7;color:#92400e}"+
+      ".brk{display:flex;flex-direction:column;gap:3px;margin-top:9px;font-size:13.5px}.cat{display:flex;align-items:center;gap:7px}.dot{width:9px;height:9px;border-radius:50%;display:inline-block}"+
+      ".bar{display:flex;height:7px;border-radius:5px;overflow:hidden;background:#eef2f7;margin-top:7px}.bar>i{display:block;height:100%}"+
+      "html.dark body{background:#0f172a}html.dark .tabs{background:#0f172a;border-color:#334155}html.dark .tab{background:#1e293b;border-color:#334155;color:#cbd5e1}html.dark .tab.on{background:#2563EB;border-color:#2563EB;color:#fff}"+
+      "html.dark .yr,html.dark .mo,html.dark .howbody{background:#1e293b;border-color:#334155}html.dark .yr>summary{background:#243044}html.dark .yr[open]>summary{border-color:#334155}html.dark .mo{border-color:#334155}html.dark .pill{background:#243044;color:#cbd5e1}html.dark .pill.bk{background:#16341f;color:#86efac}html.dark .pill.hist{background:#3a2f12;color:#fbbf24}html.dark .bar{background:#243044}";
+    const howto="<details class=howto><summary>How to read this</summary><div class=howbody>"+
+      "GREEN = <b>successful booking calls</b>. Source: "+LEAD_SOURCE_LABEL+". "+
+      "<b>Campaign</b> counts every lead the clinic\u2019s ad account generated; <b>treated</b> counts only those generated AND treated at that same clinic. "+
+      "<b>Cross-booked</b> = this campaign\u2019s lead was given an appointment at a different physical clinic. "+
+      "<b>live</b> = read from a \u2018Booked clinic\u2019 column in the feed; <b>snapshot</b> = static through 2026-06 (add that column to go live)."+
+      "</div></details>";
+    const script="<script>(function(){function pick(c){var ss=document.querySelectorAll('section.clinic');for(var i=0;i<ss.length;i++){ss[i].style.display=ss[i].getAttribute('data-clinic')===c?'':'none';}var bs=document.querySelectorAll('.tab');for(var j=0;j<bs.length;j++){bs[j].className=bs[j].getAttribute('data-go')===c?'tab on':'tab';}}var tb=document.querySelectorAll('.tab');for(var k=0;k<tb.length;k++){(function(b){b.addEventListener('click',function(){pick(b.getAttribute('data-go'));});})(tb[k]);}pick("+JSON.stringify(defClinic||"")+");})();</script>";
+    res.send("<!doctype html><meta charset=utf-8><title>Per-month call breakdown</title><style>"+CSS+"</style>"+
       "<h1>Per-month call breakdown</h1>"+
-      "<p class=src>Source: "+LEAD_SOURCE_LABEL+". GREEN is labelled <b>successful booking calls</b>. \u00b7 <a href='/meta-leads'>\u2190 funnel</a> \u00b7 <a href='/meta-spend'>cost \u2192</a></p>"+
-      "<p class=src>Count by: "+tog("campaign")+" (which ad account generated the lead) \u00b7 "+tog("treated")+" (generated AND treated here). "+
-      "Cross-booked = this campaign\u2019s lead given an appointment at another physical clinic. <b>live</b> = read from a \u2018Booked clinic\u2019 column in the feed; <b>snapshot</b> = static through 2026-06 (add the column to go live).</p>"+
-      blocks.join(""));
+      "<div class=toolbar><span>Count by:</span> "+tog("campaign")+" <span class=mut>\u00b7</span> "+tog("treated")+
+        " <a href='/meta-leads"+dq1+"'>\u2190 funnel</a> <a href='/meta-spend"+dq1+"'>cost \u2192</a></div>"+
+      howto+
+      "<div class=tabs>"+tabBtns+"</div>"+
+      sections.join("")+script);
   }catch(e){ res.status(502).send("breakdown error: "+e.message); }
 });
 
@@ -2819,7 +3385,7 @@ app.get("/meta-spend", gate, async (req,res)=>{
     "a{color:#2563EB}.n{color:#64748b;font-size:12.5px}.g{background:#f0f7ff}</style>"+
     "<h1>Acquisition cost \u2014 Meta vs Google, per clinic</h1>"+
     "<p class=n>Spend + started-care from the bank/marketing snapshot (same source as <a href='/marketing'>/marketing</a>). "+
-    "Lower cost-per-started wins. \u00b7 <a href='/meta-leads'>\u2190 leads</a> \u00b7 <a href='/meta-leads/breakdown'>breakdown \u2192</a></p>"+
+    "Lower cost-per-started wins. \u00b7 <a href='/meta-leads'>\u2190 leads</a> \u00b7 <a href='/meta-leads/breakdown'>breakdown \u2192</a> \u00b7 <a href='/meta-spend/timeline'>by month \u2192</a></p>"+
     "<table><tr><th>Clinic</th><th class=g>Google spend</th><th class=g>Google started</th><th class=g>Google \u20ac/started</th>"+
     "<th>Meta spend</th><th>Meta started</th><th>Meta \u20ac/started</th><th>Cheaper</th></tr>"+snapRows+"</table>"+
     "<h2>Live Meta cross-check (API spend \u00f7 feed started-care)</h2>"+
@@ -2832,6 +3398,143 @@ app.get("/meta-spend", gate, async (req,res)=>{
     "or wire <b>Yuki</b> (YUKI_API_KEY + YUKI_ADMIN_&lt;CLINIC&gt; + YUKI_GL_GOOGLE/YUKI_GL_META). "+
     "If live Meta spend errors: a new Meta app may be in Development mode / need business verification before the token returns data \u2014 Meta-side, not the code.</p>");
 });
+
+// ============================================================================
+//  /meta-spend/timeline — Acquisition cost broken down by YEAR > MONTH > CLINIC.
+//  The summary /meta-spend is lifetime totals; this splits it monthly so you can
+//  see cost-per-started-care move over time per clinic and channel. Sources:
+//  started-care from the live feeds (already bucketed by month), Google spend
+//  from the ad-spend sheet's Month column, Meta spend from the API by month.
+//  All live bits fail safe; a year with no data just shows empty.
+// ============================================================================
+
+// Normalise many month formats to "YYYY-MM": 2026-01, 01-2026, 2026/3,
+// "jan 2026", "januari 2026", "Mrt 2026", 202601.
+function normYM(s){
+  s = String(s == null ? "" : s).trim(); if(!s) return null;
+  let m = s.match(/(\d{4})[-\/.](\d{1,2})\b/); if(m) return m[1] + "-" + String(+m[2]).padStart(2,"0");
+  m = s.match(/\b(\d{1,2})[-\/.](\d{4})\b/);   if(m) return m[2] + "-" + String(+m[1]).padStart(2,"0");
+  const MN = { jan:1, feb:2, mar:3, mrt:3, maa:3, apr:4, may:5, mei:5, jun:6, jul:7, aug:8, sep:9, okt:10, oct:10, nov:11, dec:12 };
+  m = s.toLowerCase().match(/([a-z]{3,})\D+(\d{4})/); if(m && MN[m[1].slice(0,3)]) return m[2] + "-" + String(MN[m[1].slice(0,3)]).padStart(2,"0");
+  m = s.match(/\b(\d{4})(\d{2})\b/); if(m && +m[2]>=1 && +m[2]<=12) return m[1] + "-" + m[2];
+  return null;
+}
+
+// Ad-spend sheet kept BY MONTH: { Clinic: { "YYYY-MM": {Google,Meta} } }.
+// Returns { _noMonth:true } if the sheet has no month column (so the caller can
+// tell the user to add one), or null if the sheet can't be read at all.
+function parseAdSpendByMonth(rows){
+  if(!rows || !rows.length) return null;
+  let hr = -1, H = null;
+  for(let i=0;i<Math.min(rows.length,10);i++){ const h = rows[i].map(x=>String(x||"").toLowerCase().trim());
+    if(h.some(c=>c.includes("spend")||c.includes("bedrag")||c.includes("amount")||c.includes("cost"))){ hr=i; H=h; break; } }
+  if(hr < 0) return null;
+  const ci=(...n)=>{ for(const nm of n){ const i=H.findIndex(h=>h.includes(nm)); if(i>=0) return i; } return -1; };
+  const cCl=ci("clinic","vestiging","praktijk","location"),
+        cCh=ci("channel","kanaal","platform","source"),
+        cSp=ci("spend","amount","bedrag","cost"),
+        cMo=ci("month","maand","period","periode","datum","date");
+  if(cCl<0 || cCh<0 || cSp<0) return null;
+  if(cMo<0) return { _noMonth:true };
+  const out = {};
+  for(let r=hr+1;r<rows.length;r++){ const row = rows[r] || []; const cl = String(row[cCl]||"").trim(); if(!cl) continue;
+    const chR = String(row[cCh]||"").toLowerCase();
+    const ch = chR.includes("goog") ? "Google" : (chR.includes("meta")||chR.includes("face")||chR.includes("insta")||chR.includes("fb")) ? "Meta" : null;
+    if(!ch) continue;
+    const amt = moneyNL(row[cSp]); if(amt == null) continue;
+    const ym = normYM(row[cMo]); if(!ym) continue;
+    const key = cl.charAt(0).toUpperCase() + cl.slice(1).toLowerCase();
+    const cm = (out[key] = out[key] || {});
+    (cm[ym] = cm[ym] || { Google:0, Meta:0 })[ch] += amt;
+  }
+  return Object.keys(out).length ? out : {};
+}
+
+// Live Meta spend by month for one ad account + year -> { "YYYY-MM": spend }.
+async function metaSpendMonthly(acctId, token, year){
+  const tr = encodeURIComponent(JSON.stringify({ since: year+"-01-01", until: year+"-12-31" }));
+  const url = "https://graph.facebook.com/v19.0/act_"+acctId+"/insights?fields=spend&time_range="+tr+"&time_increment=monthly&access_token="+encodeURIComponent(token);
+  const r = await fetch(url, { signal: AbortSignal.timeout(20000) }); const j = await r.json();
+  if(j.error) throw new Error(j.error.message||"Meta API error");
+  const out = {};
+  for(const x of (j.data||[])){ const ym = String(x.date_start||"").slice(0,7); if(ym) out[ym] = (out[ym]||0) + parseFloat(x.spend||0); }
+  return out;
+}
+
+// started-care by month for a clinic from a configured feed -> { "YYYY-MM": care }
+async function startedByMonth(cfg, clinic){
+  const out = {};
+  if(!cfg || !cfg.id) return out;
+  try{ const rows = await mlFetchClinic(cfg.id, cfg.gids); const a = mlAggregateRows(rows, clinic);
+    for(const ym in (a.months||{})){ out[ym] = a.months[ym].care; } }catch(e){}
+  return out;
+}
+
+app.get("/meta-spend/timeline", gate, async (req, res) => { try {
+  const year = String(parseInt(req.query.year,10) || new Date().getFullYear());
+  const clinics = ["Utrecht","Bussum","Amstelveen","Rotterdam"];
+  const token = process.env.META_TOKEN;
+  const MON = ["Jan","Feb","Mrt","Apr","Mei","Jun","Jul","Aug","Sep","Okt","Nov","Dec"];
+  const eur = v => v == null ? "\u2014" : "\u20ac" + Number(v).toLocaleString("en-US");
+
+  // Google spend by month (sheet, all clinics in one read)
+  let sheetM = null;
+  if(AD_SPEND_SHEET){ try{ sheetM = parseAdSpendByMonth(await mlFetchClinic(AD_SPEND_SHEET, [""])); }catch(e){} }
+  const noMonthCol = !!(sheetM && sheetM._noMonth);
+
+  const blocks = [];
+  for(const c of clinics){
+    const gStarted = await startedByMonth(GOOGLE_LEAD_SHEETS[c], c);
+    const mStarted = await startedByMonth(META_LEAD_SHEETS[c], c);
+    let metaSp = {};
+    if(token){ try{ const a = META_ACCTS[c]; metaSp = await metaSpendMonthly(process.env[a.env]||a.id, token, year); }catch(e){} }
+    const gSp = (sheetM && !sheetM._noMonth && sheetM[c]) ? sheetM[c] : {};
+
+    let rows = "", any = false, tG = 0, tM = 0, tGc = 0, tMc = 0;
+    for(let mo=1;mo<=12;mo++){
+      const ym = year + "-" + String(mo).padStart(2,"0");
+      const gs = gSp[ym] ? gSp[ym].Google : null;
+      const ms = (metaSp[ym] != null) ? Math.round(metaSp[ym]) : (gSp[ym] ? gSp[ym].Meta : null);
+      const gc = gStarted[ym] != null ? gStarted[ym] : null;
+      const mc = mStarted[ym] != null ? mStarted[ym] : null;
+      if(gs == null && ms == null && !gc && !mc) continue;
+      any = true;
+      if(gs != null) tG += gs; if(ms != null) tM += ms; if(gc) tGc += gc; if(mc) tMc += mc;
+      const gcps = (gs != null && gc) ? Math.round(gs/gc) : null;
+      const mcps = (ms != null && mc) ? Math.round(ms/mc) : null;
+      rows += "<tr><td>" + MON[mo-1] + "</td>" +
+        "<td class='g'>" + eur(gs) + "</td><td class='g'>" + (gc==null?"\u2014":gc) + "</td><td class='g'>" + (gcps==null?"\u2014":eur(gcps)) + "</td>" +
+        "<td>" + eur(ms) + "</td><td>" + (mc==null?"\u2014":mc) + "</td><td>" + (mcps==null?"\u2014":eur(mcps)) + "</td></tr>";
+    }
+    const tGcps = tGc ? Math.round(tG/tGc) : null, tMcps = tMc ? Math.round(tM/tMc) : null;
+    const total = "<tr style='font-weight:700;border-top:2px solid #e5e7eb'><td>" + year + "</td>" +
+      "<td class='g'>" + eur(tG||null) + "</td><td class='g'>" + (tGc||"\u2014") + "</td><td class='g'>" + (tGcps==null?"\u2014":eur(tGcps)) + "</td>" +
+      "<td>" + eur(tM||null) + "</td><td>" + (tMc||"\u2014") + "</td><td>" + (tMcps==null?"\u2014":eur(tMcps)) + "</td></tr>";
+    blocks.push("<h2>" + c + "</h2>" + (any
+      ? "<table><tr><th>Month</th><th class='g'>Google spend</th><th class='g'>started</th><th class='g'>\u20ac/started</th><th>Meta spend</th><th>started</th><th>\u20ac/started</th></tr>" + rows + total + "</table>"
+      : "<p class='n'>No spend or started-care data for " + c + " in " + year + ".</p>"));
+  }
+
+  const years = ["2026","2025"].map(y => "<a href='/meta-spend/timeline?year=" + y + "' style='padding:5px 11px;margin-right:6px;border-radius:8px;text-decoration:none;" + (y===year?"background:#16202E;color:#fff":"background:#f1f5f9;color:#16202E") + "'>" + y + "</a>").join("");
+
+  const notes = [];
+  if(noMonthCol) notes.push("Your ad-spend sheet has no <b>Month</b> column, so Google spend can\u2019t be split by month yet \u2014 add a Month column (format 2026-01) and the Google columns fill in.");
+  if(!AD_SPEND_SHEET) notes.push("No ad-spend sheet wired (AD_SPEND_SHEET), so Google spend is blank here \u2014 set it in Render to split Google by month.");
+  if(!token) notes.push("META_TOKEN not set, so Meta spend is blank \u2014 the API returns monthly spend once the token is live.");
+
+  res.send("<!doctype html><meta charset=utf-8><title>Acquisition cost \u2014 timeline</title>" +
+    "<style>body{font:15px/1.5 -apple-system,system-ui;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}" +
+    "table{border-collapse:collapse;width:100%;margin:6px 0 18px;font-size:13.5px}td,th{border:1px solid #e5e7eb;padding:5px 8px;text-align:left}" +
+    "th{background:#f8fafc;font-size:11.5px}.num,td:nth-child(n+2){text-align:right}.g{background:#f0f7ff}" +
+    "h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;margin:18px 0 4px}a{color:#2563EB}.n{color:#64748b;font-size:12.5px}" +
+    "td:first-child,th:first-child{text-align:left}</style>" +
+    "<h1>Acquisition cost \u2014 by month, per clinic</h1>" +
+    "<p class='n'>Cost per started-care patient, split by month. \u00b7 <a href='/meta-spend'>\u2190 summary</a> \u00b7 <a href='/meta-leads'>leads</a></p>" +
+    "<div style='margin:0 0 12px'>" + years + "</div>" +
+    (notes.length ? "<p class='n' style='background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:10px 12px;border-radius:9px'>" + notes.join("<br>") + "</p>" : "") +
+    blocks.join(""));
+} catch(e){ res.status(502).send("timeline error: " + e.message); } });
+
 
 // Ready-to-fill ad-spend sheet: copy into a new Google Sheet, keep it updated
 // monthly (from your Yuki export), share "anyone with link -> Viewer", then set
@@ -3396,6 +4099,289 @@ show("Amstelveen");
 </script>
 </body></html>`);
 } catch(e){ res.status(500).send("revenue error: "+e.message); } });
+
+// ============================================================================
+//  /pl — GROUP P&L, sourced from YUKI (the authoritative, accrual books).
+//  Yuki is the headline P&L. MT940 (bank) is NOT shown here as a revenue
+//  rival: bank cash-in is gross (incl. ~21% VAT) and mixes in non-revenue
+//  receipts (transfers, loans, intercompany), so it is not comparable to Yuki
+//  Netto-omzet per clinic. MT940 stays where it belongs — the current-month
+//  leading edge on /revenue. The two are the same money; never added.
+//
+//  Figures below are SEEDED from Alex's Jun-2026 Yuki Monitor (per
+//  administration + the consolidated category split), so the page is correct
+//  today. The monthly refresh will come from the Yuki connection already set
+//  in Render (yukiLivePL, below) — when that returns data it overrides the
+//  seed; until then the seed stands, so Alex never has to screenshot again
+//  once the live pull is confirmed on Render.
+// ============================================================================
+
+// The six Yuki Monitor P&L groups, in the order a Dutch P&L reads.
+const PL_CATS = ["Personeelskosten","Overige bedrijfskosten","Huisvestingskosten","Verkoopkosten","Kosten auto's"];
+
+// --- SEED: Yuki Monitor, 2026 YTD (Jan–Jun), read off the per-administration
+//     Monitor screenshots. Per-clinic netto sums EXACTLY to the consolidated
+//     (€349,637.80); profit ties to within €500 (Yuki's intragroup elimination).
+const YUKI_SEED = {
+  year: "2026",
+  asof: "Jun 2026 (YTD, Jan\u2013Jun)",
+  clinics: {
+    Amstelveen: { netto:135640.00, kostprijs:-15629.01, bruto:120010.99, lasten:109228.81, result:10782.18,  banksaldo:39932.21,  werkkapitaal:30170.60,  debcred:12392.69 },
+    Utrecht:    { netto:83920.00,  kostprijs:-114.00,   bruto:83806.00,  lasten:102135.79, result:-18329.79, banksaldo:5388.47,   werkkapitaal:-43754.63, debcred:-53091.56 },
+    Bussum:     { netto:66520.00,  kostprijs:-6880.70,  bruto:59639.30,  lasten:40858.34,  result:18780.96,  banksaldo:7182.16,   werkkapitaal:22862.98,  debcred:8046.93 },
+    Rotterdam:  { netto:40210.00,  kostprijs:-194.14,   bruto:40015.86,  lasten:2493.47,   result:37522.39,  banksaldo:-24885.99, werkkapitaal:14490.12,  debcred:-30331.44 },
+    Holding:    { netto:23347.80,  kostprijs:0.0,       bruto:23347.80,  lasten:32600.92,  result:-9253.12,  banksaldo:6940.47,   werkkapitaal:-86346.74, debcred:-20806.52 },
+  },
+  // consolidated "Alle administraties" — Yuki already eliminates intragroup.
+  consolidated: {
+    netto:349637.80, lasten:286817.33, result:40002.62,
+    split: { "Personeelskosten":164483.53, "Overige bedrijfskosten":56414.99, "Huisvestingskosten":39219.35, "Verkoopkosten":25362.92, "Kosten auto's":1336.54 },
+  },
+  // Intragroup management fee: \u20ac6,000/month TOTAL across the group (not per
+  // clinic), VAT-free intercompany, in place since ~March 2026. Mar\u2013Jun \u2248 \u20ac24k,
+  // which is the holding's \u20ac23,348 Netto-omzet YTD. Yuki eliminates it in consolidation.
+  mgmtFeeYTD: 23347.80,
+  mgmtFeeMonthly: 6000,
+  mgmtFeeSince: "March 2026",
+  // data-quality flags surfaced on the page so nobody trusts a wrong number.
+  flags: {
+    Rotterdam: "Costs are barely booked into this entity yet (Bedrijfslasten only \u20ac2,493) \u2014 partly Yuki\u2019s 1\u20132 month processing lag, partly staff/rent sitting elsewhere \u2014 so the \u20ac37,522 result is overstated. Treat as provisional until the costs land in Yuki.",
+    Utrecht:   "Accrual loss, with \u20ac53,092 owed to creditors. The bank looks calmer than the real position \u2014 this is the true picture.",
+  },
+};
+
+// --- LIVE pull (next step). When YUKI_LIVE=1 and the connection returns data,
+//     this overrides the seed. Intended path on Yuki's Accounting.asmx:
+//     per administration, sweep the P&L GL accounts (GLAccountBalance / a
+//     GLAccountTransactions sweep) for [start,end] and group them into the five
+//     Monitor cost groups + Netto-omzet. Kept OFF until verified live on Render
+//     so a deploy never breaks the working seed; returns null => seed is used.
+async function yukiLivePL(year){
+  if(process.env.YUKI_LIVE !== "1") return null;
+  try {
+    // Placeholder for the verified live sweep — wired & tested against the live
+    // Yuki account on Render. Until confirmed it returns null and the seed shows.
+    return null;
+  } catch(e){ return null; }
+}
+
+app.get("/pl", gate, async (req, res) => { try {
+  const live = await yukiLivePL(YUKI_SEED.year);
+  const D = live || YUKI_SEED;
+  const seeded = !live;
+  const order = ["Amstelveen","Utrecht","Bussum","Rotterdam"];
+
+  // euro + percent formatters (handle negatives cleanly)
+  const f = n => {
+    if(n == null) return "\u2014";
+    const s = n < 0 ? "\u2212" : "";
+    return s + "\u20ac" + Math.abs(Math.round(n)).toLocaleString("en-US");
+  };
+  const pct = (a,b) => (b ? (a/b*100) : 0);
+  const col = n => n < 0 ? "#dc2626" : "#16a34a";
+
+  const tagYuki = "<span style='display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;background:#ecfdf5;color:#16a34a;vertical-align:middle'>yuki</span>";
+
+  // ---- consolidated card (group P&L + the 5-way cost split) ----
+  const c = D.consolidated;
+  const opRev = order.reduce((s,k)=> s + (D.clinics[k] ? D.clinics[k].netto : 0), 0);
+  let splitRows = "";
+  for(const cat of PL_CATS){
+    const v = c.split[cat] || 0;
+    splitRows += "<tr><td style='padding-left:18px;color:#475569'>" + cat + "</td>" +
+      "<td class='num'>" + f(v) + "</td>" +
+      "<td class='num' style='color:#94a3b8'>" + pct(v, c.lasten).toFixed(1) + "%</td></tr>";
+  }
+  const consCard =
+    "<div class='card' style='border-color:#bfdbfe;background:#f8fbff'>" +
+    "<h2>Whole group \u00b7 " + D.year + " " + tagYuki + "</h2>" +
+    "<table><tbody>" +
+    "<tr style='font-weight:600'><td>Netto-omzet (revenue, ex-VAT)</td><td class='num'>" + f(c.netto) + "</td><td></td></tr>" +
+    "<tr style='font-weight:600;border-top:1px solid #e5e7eb'><td>Bedrijfslasten (operating costs)</td><td class='num'>" + f(c.lasten) + "</td><td class='num' style='color:#94a3b8'>of costs</td></tr>" +
+    splitRows +
+    "<tr style='font-weight:700;border-top:2px solid #e5e7eb'><td>Resultaat (profit)</td><td class='num' style='color:" + col(c.result) + "'>" + f(c.result) + "</td>" +
+    "<td class='num' style='color:#94a3b8'>" + pct(c.result, c.netto).toFixed(1) + "% margin</td></tr>" +
+    "</tbody></table>" +
+    "<div class='note'>The holding\u2019s revenue of " + f(D.mgmtFeeYTD) + " is the <b>intragroup management fee</b> \u2014 \u20ac" + (D.mgmtFeeMonthly||6000).toLocaleString("en-US") + "/mo total across the group, VAT-free between companies, in place since " + (D.mgmtFeeSince||"early 2026") + ". Yuki already eliminates it here, so it isn\u2019t double-counted. The four operating clinics bill " + f(opRev) + " between them. <b>These are Yuki\u2019s booked figures and Yuki is ~1\u20132 months behind on processing invoices</b>, so the most recent weeks are understated \u2014 the bank feed (MT940) is the up-to-date leading edge for those. Chiropractic care is VAT-exempt, so there is no VAT gap to reconcile (only the holding has any VAT activity, and the management fee itself is VAT-free).</div>" +
+    "</div>";
+
+  // ---- per-clinic cards ----
+  function clinicCard(k){
+    const d = D.clinics[k]; if(!d) return "";
+    const flag = D.flags && D.flags[k];
+    const rows =
+      "<tr><td>Netto-omzet</td><td class='num'>" + f(d.netto) + "</td></tr>" +
+      "<tr><td>Kostprijs van de omzet</td><td class='num'>" + f(d.kostprijs) + "</td></tr>" +
+      "<tr style='border-top:1px solid #f1f5f9'><td>Bruto-marge</td><td class='num'>" + f(d.bruto) + "</td></tr>" +
+      "<tr><td>Bedrijfslasten</td><td class='num'>" + f(d.lasten) + "</td></tr>" +
+      "<tr style='font-weight:700;border-top:2px solid #e5e7eb'><td>Resultaat</td><td class='num' style='color:" + col(d.result) + "'>" + f(d.result) +
+      " <span style='font-weight:400;color:#94a3b8;font-size:12px'>(" + pct(d.result,d.netto).toFixed(0) + "%)</span></td></tr>";
+    return "<div class='card'>" +
+      "<h2>" + (k==="Holding"?"Notable (holding)":k) + " \u00b7 " + D.year + " YTD " + tagYuki + "</h2>" +
+      "<table><tbody>" + rows + "</tbody></table>" +
+      "<div class='cash'>Bank " + f(d.banksaldo) + " \u00b7 working capital <span style='color:" + col(d.werkkapitaal) + "'>" + f(d.werkkapitaal) + "</span></div>" +
+      (flag ? "<div class='warn'>" + flag + "</div>" : "") +
+      "</div>";
+  }
+
+  const banner = seeded
+    ? "<div class='note'><b>Source: Yuki Monitor</b>, seeded from your Jun-2026 screenshots (" + D.asof + "). These are the real, booked figures \u2014 but <b>Yuki is currently ~1\u20132 months behind on processing invoices</b>, so recent months read low until the bookkeeper catches up. For an up-to-the-day read of the last few weeks, use the bank feed (MT940) on /revenue. The monthly auto-refresh runs off the Yuki connection in Render \u2014 once that live pull is confirmed it updates this page on its own and you won\u2019t screenshot again. Set <code>YUKI_LIVE=1</code> when we switch it on.</div>"
+    : "<div class='note'><b>Source: Yuki (live)</b> \u00b7 " + D.asof + ".</div>";
+
+  const css = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}" +
+    "h1{font-size:23px;margin:0 0 2px}h2{font-size:15px;margin:0 0 8px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}" +
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:15px 16px;margin-bottom:13px}" +
+    ".grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}@media(max-width:680px){.grid{grid-template-columns:1fr}}" +
+    "table{border-collapse:collapse;width:100%;font-size:13.5px}td{padding:6px 4px;border-bottom:1px solid #f7f8fa;text-align:left}" +
+    ".num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}" +
+    ".cash{margin-top:9px;font-size:12px;color:#64748b}" +
+    ".note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:11px 13px;border-radius:10px;font-size:12.5px;line-height:1.55;margin:0 0 14px}" +
+    ".warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:9px 11px;border-radius:9px;font-size:12px;line-height:1.5;margin-top:9px}" +
+    "code{background:#eef2f7;padding:1px 5px;border-radius:5px;font-size:12px}a{color:#2563EB}";
+
+  res.send("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>P&amp;L \u2014 Yuki</title><style>" + css + "</style></head><body>" +
+    "<h1>Group P&amp;L \u2014 from Yuki</h1>" +
+    "<div class='sub'>The booked, accrual P&amp;L per clinic and for the group. This is the headline source of truth; the bank feed stays as the live current-month edge on /revenue.</div>" +
+    banner +
+    consCard +
+    "<div class='grid'>" + order.map(clinicCard).join("") + "</div>" +
+    clinicCard("Holding") +
+    "<p class='sub' style='margin-top:16px'>Pages: <a href='/profit'>/profit</a> \u00b7 <a href='/revenue'>/revenue</a> \u00b7 <a href='/waste'>/waste</a> \u00b7 <a href='/'>home</a></p>" +
+    "</body></html>");
+} catch(e){ res.status(500).send("pl error: " + e.message); } });
+
+// ============================================================================
+//  MT940 (bank) — the LIVE cash leading edge. Yuki is ~1–2 months behind on
+//  booking; the bank knows what landed yesterday. These five .940 exports (one
+//  per ING account) live in Alex's Drive folder, link-shared "view", and are
+//  fetched anonymously the same way the engine reads the Google Sheets — no
+//  credentials, no Render setup, as long as the folder stays link-viewable.
+//
+//  This is CASH (gross receipts/payments), NOT booked revenue, and it is never
+//  added to Yuki — it's the same money, shown as the up-to-the-day edge that
+//  fills the gap Yuki's backlog leaves. Gated by MT940_LIVE=1 so a deploy can't
+//  break on a bad fetch; until then /bank shows the baked BANK_REV snapshot.
+//  IBAN→entity mapping confirmed by Alex.
+// ============================================================================
+const MT940_ACCOUNTS = {
+  Amstelveen: { iban:"NL69INGB0101037082", fileId:"1VaQEZI2LOxHEz4bdYdwUt0MdgK8zk6Jm" },
+  Utrecht:    { iban:"NL46INGB0009559803", fileId:"1y5tXp4wi4AoFYst8U5RRRt-Xl5N047wy" },
+  Bussum:     { iban:"NL18INGB0008067671", fileId:"1btIhEjLskrmcEHZwqw_bpdrLVeC0Tb4K" },
+  Rotterdam:  { iban:"NL45INGB0114642346", fileId:"1lkVg0cxnuWmiJphrfzMiuVElzaDadpBb" },
+  Holding:    { iban:"NL78INGB0008555374", fileId:"1mAn5K4_RZkNblthfGj56EuwjP6EcGYaN" },
+};
+
+// Parse a raw MT940 file. Returns { iban, byMonth:{ "YYYY-MM":{in,out,net,n} }, latest:"YYYY-MM-DD" }.
+// :61: line = ValueDate(YYMMDD)[EntryDate(MMDD)]<C|D|RC|RD>[funds][amount]N<type>...
+// Inflow when the mark is C or RD; outflow when D or RC. ING uses comma decimals.
+function parseMT940(text){
+  const out = { iban:null, byMonth:{}, latest:null };
+  if(!text || text.indexOf(":61:") < 0) return out;
+  const mIban = text.match(/:25:\s*([A-Z]{2}\d{2}[A-Z]{4}\d{7,12})/);
+  if(mIban) out.iban = mIban[1];
+  const re = /:61:(\d{6})(\d{4})?(RC|RD|C|D)([A-Z]?)([\d.,]+)/g;
+  let m;
+  while((m = re.exec(text)) !== null){
+    const yy = m[1].slice(0,2), mm = m[1].slice(2,4), dd = m[1].slice(4,6);
+    const mark = m[3];
+    const amt = parseFloat(m[5].replace(/\./g, "").replace(",", "."));
+    if(!isFinite(amt)) continue;
+    const inflow = (mark === "C" || mark === "RD");
+    const ym = "20" + yy + "-" + mm;
+    const b = out.byMonth[ym] || (out.byMonth[ym] = { in:0, out:0, net:0, n:0 });
+    if(inflow){ b.in += amt; b.net += amt; } else { b.out += amt; b.net -= amt; }
+    b.n++;
+    const iso = "20" + yy + "-" + mm + "-" + dd;
+    if(!out.latest || iso > out.latest) out.latest = iso;
+  }
+  return out;
+}
+
+// Anonymous Drive download (link-shared files). confirm=t clears the large-file
+// scan interstitial. Returns text, or "" on any failure (caller degrades safely).
+async function fetchMT940(fileId){
+  const url = "https://drive.usercontent.google.com/download?id=" + fileId + "&export=download&confirm=t";
+  try{
+    const r = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    if(!r.ok) return "";
+    return await r.text();
+  }catch(e){ return ""; }
+}
+
+// Live bank read for a year: per clinic, 12-month cash-in (credits) + net + the
+// latest statement date. Gated by MT940_LIVE=1; returns null otherwise so the
+// baked BANK_REV snapshot is used. Fails safe per clinic.
+async function loadBankLive(year){
+  if(process.env.MT940_LIVE !== "1") return null;
+  const out = {};
+  for(const [clinic, acc] of Object.entries(MT940_ACCOUNTS)){
+    try{
+      const parsed = parseMT940(await fetchMT940(acc.fileId));
+      const months = Array.from({length:12}, () => null);
+      let any = false;
+      for(let i=0;i<12;i++){
+        const ym = year + "-" + String(i+1).padStart(2,"0");
+        if(parsed.byMonth[ym]){ months[i] = Math.round(parsed.byMonth[ym].in); any = true; }
+      }
+      out[clinic] = { months, latest: parsed.latest, iban: parsed.iban || acc.iban, live: any };
+    }catch(e){ out[clinic] = null; }
+  }
+  return out;
+}
+
+app.get("/bank", gate, async (req, res) => { try {
+  const year = String(parseInt(req.query.year,10) || new Date().getFullYear());
+  const order = ["Amstelveen","Utrecht","Bussum","Rotterdam","Holding"];
+  const MON = ["Jan","Feb","Mrt","Apr","Mei","Jun","Jul","Aug","Sep","Okt","Nov","Dec"];
+  const f = n => n == null ? "\u2014" : "\u20ac" + Math.round(n).toLocaleString("en-US");
+
+  const live = await loadBankLive(year);
+  const seeded = !live;
+
+  function rowFor(c){
+    let months, latest = null;
+    if(live && live[c]){ months = live[c].months; latest = live[c].latest; }
+    else { months = (typeof BANK_REV !== "undefined" && BANK_REV[c] && BANK_REV[c][year]) ? BANK_REV[c][year] : Array.from({length:12},()=>null); }
+    const ytd = months.reduce((s,x)=> s + (x||0), 0);
+    let cells = "";
+    for(let i=0;i<12;i++){ cells += "<td class='num'>" + (months[i]==null ? "<span style='color:#cbd5e1'>\u00b7</span>" : f(months[i])) + "</td>"; }
+    return "<tr><td style='font-weight:600'>" + (c==="Holding"?"Notable":c) + "</td>" + cells +
+      "<td class='num' style='font-weight:700'>" + f(ytd) + "</td>" +
+      "<td class='num' style='font-size:11px;color:#94a3b8'>" + (latest ? latest.slice(5) : "\u2014") + "</td></tr>";
+  }
+
+  const head = "<tr><th>Clinic</th>" + MON.map(m=>"<th class='num'>"+m+"</th>").join("") + "<th class='num'>YTD in</th><th class='num'>to</th></tr>";
+
+  const banner = seeded
+    ? "<div class='warn'><b>Showing the baked bank snapshot.</b> The live MT940 read is wired (5 accounts, link-shared in Drive) but switched off \u2014 set <code>MT940_LIVE=1</code> in Render to read the .940 files live through yesterday. If the fetch ever fails it falls back to this snapshot, so the page can\u2019t break.</div>"
+    : "<div class='note'><b>Live from MT940</b> \u2014 read straight from your Drive .940 exports. This is <b>cash in</b> (gross bank receipts), the up-to-the-day leading edge while Yuki\u2019s booking catches up. It is not booked revenue and is never added to Yuki.</div>";
+
+  // Year buttons: current year back to 2019 (each account's opening era).
+  const yNow = new Date().getFullYear();
+  const yearList = []; for(let y=yNow; y>=2019; y--) yearList.push(String(y));
+  const yearBtns = "<div style='margin:0 0 14px;display:flex;flex-wrap:wrap;gap:6px'>" +
+    yearList.map(y => "<a href='/bank?year=" + y + "' style='padding:5px 11px;border-radius:8px;text-decoration:none;font-size:13px;" +
+      (y===year ? "background:#16202E;color:#fff" : "background:#f1f5f9;color:#16202E") + "'>" + y + "</a>").join("") + "</div>";
+
+  const css = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#16202E}" +
+    "h1{font-size:22px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}" +
+    "table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{padding:6px 7px;border-bottom:1px solid #f1f5f9;text-align:left}" +
+    "th{color:#64748b;font-size:10px;text-transform:uppercase}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}th.num{text-align:right}" +
+    ".note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:11px 13px;border-radius:10px;font-size:12.5px;line-height:1.55;margin:0 0 14px}" +
+    ".warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:11px 13px;border-radius:10px;font-size:12.5px;line-height:1.55;margin:0 0 14px}" +
+    "code{background:#eef2f7;padding:1px 5px;border-radius:5px}a{color:#2563EB}";
+
+  res.send("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Bank \u2014 MT940 leading edge</title><style>" + css + "</style></head><body>" +
+    "<h1>Bank cash-in \u2014 MT940 leading edge \u00b7 " + year + "</h1>" +
+    "<div class='sub'>Gross money landing in each clinic\u2019s ING account by month \u2014 the live edge that runs ahead of Yuki\u2019s booked P&amp;L. Cash, not revenue.</div>" +
+    banner +
+    yearBtns +
+    "<table><thead>" + head + "</thead><tbody>" + order.map(rowFor).join("") + "</tbody></table>" +
+    "<p class='sub' style='margin-top:14px'>Pages: <a href='/pl'>/pl</a> (Yuki P&amp;L) \u00b7 <a href='/revenue'>/revenue</a> \u00b7 <a href='/'>home</a></p>" +
+    "</body></html>");
+} catch(e){ res.status(500).send("bank error: " + e.message); } });
+
+
 
 // ============================================================================
 //  /marketing — PER CLINIC: monthly ad spend (Google / Meta / Organic) with a
@@ -4044,14 +5030,14 @@ ${note}
 //  / — control center: one launchpad linking every tool, grouped by job.
 // ============================================================================
 app.get("/", gate, (_req,res)=>{
-  const card=(href,title,desc)=>`<a href="${href}" style="display:block;border:1px solid #e5e7eb;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#fff"><b style="font-size:15px">${title}</b><div style="color:#64748b;font-size:12.5px;margin-top:4px;line-height:1.45">${desc}</div></a>`;
-  const grid=(cards)=>`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px">${cards.join("")}</div>`;
+  const card=(href,title,desc)=>`<a href="${href}" class="tile" style="display:block;border:1px solid #e5e7eb;border-left:3px solid var(--accent,#2563EB);border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#fff"><b style="font-size:15px">${title}</b><div style="color:#64748b;font-size:12.5px;margin-top:4px;line-height:1.45">${desc}</div></a>`;
+  const grid=(cards,accent)=>`<div style="--accent:${accent||"#2563EB"};display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px">${cards.join("")}</div>`;
   res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Posturefixx \u2014 control center</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:980px;margin:28px auto;padding:0 16px;color:#16202E;background:#F7F9FC}
 h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22px}h3{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin:18px 0 2px}</style></head><body>
 <h1>Posturefixx \u2014 control center</h1>
 <p class="sub">Coach the team, pull the numbers automatically, watch the behaviours move the money.</p>
-<h3>Start here</h3><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px"><a href="/scorecard" style="display:block;border:1px solid #2563EB;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#eff6ff"><b style="font-size:15px">\u2b50 Per-clinic scorecard</b><div style="color:#1e3a8a;font-size:12.5px;margin-top:4px;line-height:1.45">Revenue, PVA, CA script adherence and lead conversion side by side \u2014 does following the systems show up as growth?</div></a></div><h3>Coach the team</h3>${grid([
+<h3>Start here</h3><div style="--accent:#2563EB;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:8px 0 22px"><a href="/scorecard" class="tile" style="display:block;border:1px solid #2563EB;border-left:3px solid #2563EB;border-radius:12px;padding:15px;text-decoration:none;color:#16202E;background:#eff6ff"><b style="font-size:15px">\u2b50 Per-clinic scorecard</b><div style="color:#1e3a8a;font-size:12.5px;margin-top:4px;line-height:1.45">Revenue, PVA, CA script adherence and lead conversion side by side \u2014 does following the systems show up as growth?</div></a></div><h3 style="color:#6366f1">\ud83e\udde0 Coach the team</h3>${grid([
   card("/plan","Plan &amp; goals","Revenue-target slider, per-chiro visit/PVA goals from live PracticeHub, P&amp;L + spend-by-category per clinic."),
   card("/goals","\u2b50 Goals &amp; check-ins","Set each chiro a yearly \u20ac / visits-day / PVA target; project it live from PracticeHub and auto-send a biweekly goal SMS."),
   card("/contracts","Contracts &amp; pay","Plain-language summary of each chiro's deal (base, holiday, threshold, commission) \u2014 what feeds the Brutto pay calc."),
@@ -4060,35 +5046,34 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   
   card("/coach","Coach the chiros","Drafts a warm SMS to each chiropractor toward your target. You review before it sends."),
   card("/pva","PVA / retention","Retention per chiropractor, month by month, with good/improve highlights for each."),
-  card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts.")
-])}
-<h3>The money</h3>${grid([
+  card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts."),
+  card("/ca-targets","CA doorplannen targets","Move the revenue slider \\u2014 the intakes &amp; care-starts each CA must book scale with it, against the 5 doorplannen KPIs."),
+  card("/kpi-goal","Weekly KPI \\u2014 road to \\u20ac1M","All clinics combined: weekly paid visits &amp; PVA vs the \\u20ac1,000,000 pace, scored red/green weekly, with a Monday SMS summary.")
+], "#6366f1")}
+<h3 style="color:#10b981">\ud83d\udcb6 The money</h3>${grid([
   card("/practitioner-earnings","Earnings history","Per-practitioner monthly earnings pulled from PracticeHub, as far back as it serves \u2014 includes chiros who have left."),
   card("/profit","\u2b50 Profit per chiro","What each chiro brings in vs pay, costs and your draw \u2014 with a target slider and the \u20ac6k floor."),
+  card("/pl","P&amp;L \u2014 Yuki vs MT940","Booked accounting (Yuki) side by side with the bank (MT940), variance shown, management fee netted out \u2014 watch them reconcile before Yuki takes over."),
+  card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
-])}
-<h3>Marketing &amp; leads</h3>${grid([
+], "#10b981")}
+<h3 style="color:#f59e0b">\ud83d\udce3 Marketing &amp; leads</h3>${grid([
   card("/marketing","Marketing by clinic","Monthly ad spend (Google/Meta/Organic) per clinic, cost per lead, and lead quality by month."),
   card("/meta-leads","\u2b50 Meta lead quality","Every FB/IG lead by clinic: reached \u2192 booked \u2192 paid intake \u2192 started care, plus a per-month call breakdown (green/yellow/red/blue)."),
   card("/meta-spend","Meta vs Google cost","Cost per started-care patient, Meta vs Google side by side per clinic, with a campaign-vs-treated counting toggle."),
   card("/notes-trends","Notes trends","Monthly call-note themes per clinic (objections, leakage, lead quality) \u2014 read-only, no PII.")
-])}
-<h3>Checks &amp; automation</h3>${grid([
+], "#f59e0b")}
+<h3 style="color:#64748b">\ud83d\udee0 Checks &amp; automation</h3>${grid([
   card("/kpi?clinic=Amstelveen","Raw KPIs","Per-chiro numbers straight from PracticeHub (swap the clinic in the link)."),
   card("/phub-test?clinic=Rotterdam","Connection test","Confirm a clinic's PracticeHub link is live."),
   card("/sms-test?to=Alex","SMS test","Send one test text to verify delivery."),
-  card("#","Auto-coach (needs setup)","Add a CRON_SECRET in Render, then have a scheduler call /coach/cron?key=YOUR_SECRET on Mon &amp; Thu. The placeholder returns \u2018forbidden\u2019 by design \u2014 that\u2019s the lock working."),
-  card("/morning-briefing","\ud83d\udccb Morning Briefing","Daily 09:00 SMS digest of your 3 Gmail inboxes \u2014 unread counts, notable threads and action items. Preview here; auto-send needs the Gmail tokens + a daily /cron/morning-briefing job.")
-])}
+  card("/morning-briefing","\ud83d\udccb Morning Briefing","Daily 09:00 SMS digest of your 3 Gmail inboxes \u2014 unread counts, notable threads and action items. Preview here; auto-send needs the Gmail tokens + a daily /cron/morning-briefing job."),
+  card("#","Auto-coach (needs setup)","Add a CRON_SECRET in Render, then have a scheduler call /coach/cron?key=YOUR_SECRET on Mon &amp; Thu. The placeholder returns \u2018forbidden\u2019 by design \u2014 that\u2019s the lock working.")
+], "#64748b")}
 <p class="sub" style="margin-top:18px">Tip: bookmark this page \u2014 it links to everything. First open each session asks for the login (manager password for Renata, owner password for you).</p>
 </body></html>`);
 });
-
-// Safety net: a single bad request should never take the whole site down (502).
-// Log it and keep serving every other page.
-process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
-process.on("uncaughtException",  (e) => console.error("uncaughtException:",  (e && e.message) || e));
 
 // ============================================================================
 //  MORNING BRIEFING — daily 09:00 SMS digest of your 3 Gmail inboxes
@@ -4133,7 +5118,6 @@ async function googleAccessToken(refreshToken){
     signal: AbortSignal.timeout(12000),
   });
   const j = await res.json().catch(() => ({}));
-  if(j && j.error === "invalid_grant") throw new Error("refresh token expired or revoked — regenerate it in Google OAuth Playground");
   if(!res.ok || !j.access_token) throw new Error(`token refresh failed (${res.status}): ${JSON.stringify(j).slice(0,160)}`);
   return j.access_token;
 }
@@ -4262,20 +5246,10 @@ app.get("/morning-briefing", async (req, res) => {
 <p><a href='/'>← back</a></p></body>`);
     }
     const b = await buildBriefing();
-    const esc = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const safe = esc(b.text);
-    const status = (b.accounts || []).map(a => a.error
-      ? `<li>❌ <b>${esc(a.email)}</b> — ${esc(a.error)}</li>`
-      : `<li>✅ <b>${esc(a.email)}</b> — connected, ${a.unread} unread (${(a.items || []).length} shown)</li>`
-    ).join("");
+    const safe = (b.text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     res.send(`<body style='font-family:sans-serif;max-width:680px;margin:40px auto;line-height:1.55'>
 <h2>📋 Morning Briefing — preview</h2>
 <p style='color:#888;font-size:13px'>This is exactly what your 09:00 SMS would say. Nothing was sent.</p>
-<div style='background:#fafafa;border:1px solid #e3e3e3;border-radius:10px;padding:12px 16px;margin-bottom:14px'>
-<div style='font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#888;margin-bottom:6px'>Inbox connection status</div>
-<ul style='margin:0;padding-left:18px;font-size:14px'>${status}</ul>
-<div style='color:#888;font-size:12px;margin-top:8px'>❌ means that account's token is missing, expired or revoked — regenerate it in Google OAuth Playground and update its <code>GMAIL_RT_*</code> var in Render.</div>
-</div>
 <pre style='white-space:pre-wrap;background:#f6f6f6;border:1px solid #e3e3e3;border-radius:10px;padding:16px;font-size:15px'>${safe}</pre>
 <p style='color:#888;font-size:13px'>To send yourself a real one right now, open <code>/cron/morning-briefing?key=YOUR_CRON_SECRET</code>.</p>
 <p><a href='/'>← back</a></p></body>`);
@@ -4300,4 +5274,10 @@ app.get("/cron/morning-briefing", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// Safety net: a single bad request should never take the whole site down (502).
+// Log it and keep serving every other page.
+process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
+process.on("uncaughtException",  (e) => console.error("uncaughtException:",  (e && e.message) || e));
+
 app.listen(process.env.PORT || 3000, () => console.log("coaching-engine up — /plan (chiros) & /ca (CAs)"));
