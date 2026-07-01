@@ -5062,7 +5062,8 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/marketing","Marketing by clinic","Monthly ad spend (Google/Meta/Organic) per clinic, cost per lead, and lead quality by month."),
   card("/meta-leads","\u2b50 Meta lead quality","Every FB/IG lead by clinic: reached \u2192 booked \u2192 paid intake \u2192 started care, plus a per-month call breakdown (green/yellow/red/blue)."),
   card("/meta-spend","Meta vs Google cost","Cost per started-care patient, Meta vs Google side by side per clinic, with a campaign-vs-treated counting toggle."),
-  card("/notes-trends","Notes trends","Monthly call-note themes per clinic (objections, leakage, lead quality) \u2014 read-only, no PII.")
+  card("/notes-trends","Notes trends","Monthly call-note themes per clinic (objections, leakage, lead quality) \u2014 read-only, no PII."),
+  card("/demographics","\ud83d\uddfa Patient demographics","Top 5 cities each clinic\u2019s patients come from (by %) and their age distribution \u2014 live from PracticeHub. Handy for ad targeting and creative.")
 ], "#f59e0b")}
 <h3 style="color:#64748b">\ud83d\udee0 Checks &amp; automation</h3>${grid([
   card("/kpi?clinic=Amstelveen","Raw KPIs","Per-chiro numbers straight from PracticeHub (swap the clinic in the link)."),
@@ -5273,6 +5274,157 @@ app.get("/cron/morning-briefing", async (req, res) => {
     console.error("[morning-briefing] failed", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ============================================================================
+//  /demographics — WHERE patients come from + HOW OLD they are, per clinic.
+//  Pulls the patient list from each clinic's PracticeHub (/patients) and shows:
+//    • Top 5 cities each clinic's patients live in, as a share of all patients
+//      whose city we could read.
+//    • Age distribution in 5-year bands (0-5, 6-10, 11-15 …) as a bar chart,
+//      plus the average age.
+//  PracticeHub field names for city / date-of-birth aren't documented here, so
+//  every common English + Dutch variant is tried (flat and nested). Open
+//  /demographics/data?clinic=Amstelveen&debug=1 to see the real field names if
+//  coverage looks low — send them to me and I'll lock onto the exact fields.
+//  Cached 1h in memory per clinic so the page is snappy after the first pull.
+// ============================================================================
+const _demoCache = {};
+const DEMO_BUCKETS = [[0,5],[6,10],[11,15],[16,20],[21,25],[26,30],[31,35],[36,40],[41,45],[46,50],[51,55],[56,60],[61,65],[66,70],[71,75],[76,80],[81,200]];
+function demoBucketLabel(lo,hi){ return hi>=200 ? (lo+"+") : (lo+"-"+hi); }
+function demoBucketIndex(age){ for(let i=0;i<DEMO_BUCKETS.length;i++){ if(age>=DEMO_BUCKETS[i][0] && age<=DEMO_BUCKETS[i][1]) return i; } return -1; }
+
+// Title-case a city, collapsing whitespace ("AMSTERDAM " -> "Amsterdam").
+function demoTitle(s){
+  return String(s||"").trim().replace(/\s+/g," ").toLowerCase()
+    .replace(/(^|[\s\-'])([a-z\u00e0-\u00ff])/g, (m,a,b)=>a+b.toUpperCase());
+}
+
+// Pull a city out of a patient record — tries flat fields then nested address/contact objects.
+function demoCity(p){
+  if(!p || typeof p!=="object") return null;
+  let c = p.city||p.town||p.place||p.plaats||p.woonplaats||p.residence||p.city_name||p.cityName||p.locality;
+  const nests = [p.address, p.contact, p.contact_details, p.contactDetails, p.details, p.demographics, p.person];
+  for(const nb of nests){ if(!c && nb && typeof nb==="object"){ c = nb.city||nb.town||nb.place||nb.plaats||nb.woonplaats||nb.residence||nb.city_name||nb.cityName||nb.locality; } }
+  c = String(c||"").trim();
+  return c ? demoTitle(c) : null;
+}
+
+// Parse a date-of-birth string in ISO (YYYY-MM-DD) or Dutch DD-MM-YYYY / DD/MM/YYYY.
+function demoParseDate(s){
+  s = String(s==null?"":s).trim(); if(!s) return null;
+  let m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+  if(m){ const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3])); return isNaN(d)?null:d; }
+  m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);           // DD-MM-YYYY (Dutch default)
+  if(m){ const d=new Date(Date.UTC(+m[3],+m[2]-1,+m[1])); return isNaN(d)?null:d; }
+  const t = Date.parse(s); return isNaN(t)?null:new Date(t);
+}
+function demoDOB(p){
+  if(!p || typeof p!=="object") return null;
+  let raw = p.date_of_birth||p.dob||p.birth_date||p.birthDate||p.birthdate||p.geboortedatum||p.born||p.dateOfBirth||p.birth;
+  const nests = [p.details, p.demographics, p.person, p.profile];
+  for(const nb of nests){ if(!raw && nb && typeof nb==="object"){ raw = nb.date_of_birth||nb.dob||nb.birth_date||nb.birthDate||nb.geboortedatum||nb.dateOfBirth; } }
+  return raw ? demoParseDate(raw) : null;
+}
+// Age from a direct age field if present, else computed from DOB as of asOf.
+function demoAge(p, asOf){
+  const direct = p && (p.age!=null ? p.age : (p.details && p.details.age));
+  if(direct!=null && isFinite(+direct) && +direct>0 && +direct<130) return Math.floor(+direct);
+  const dob = demoDOB(p); if(!dob) return null;
+  let a = asOf.getUTCFullYear() - dob.getUTCFullYear();
+  const mo = asOf.getUTCMonth() - dob.getUTCMonth();
+  if(mo<0 || (mo===0 && asOf.getUTCDate()<dob.getUTCDate())) a--;
+  return (a>=0 && a<130) ? a : null;
+}
+
+// Pure aggregation — testable with no network. Returns top-5 cities (% of those
+// with a city) and 5-year age bands (% of those with an age) + average age.
+function demoAggregate(patients, asOf){
+  asOf = asOf || new Date();
+  const cityCount = {}; let withCity=0, withAge=0, ageSum=0;
+  const buckets = DEMO_BUCKETS.map(b=>({ label:demoBucketLabel(b[0],b[1]), n:0 }));
+  for(const p of (patients||[])){
+    const city = demoCity(p); if(city){ withCity++; cityCount[city]=(cityCount[city]||0)+1; }
+    const age = demoAge(p, asOf); if(age!=null){ withAge++; ageSum+=age; const bi=demoBucketIndex(age); if(bi>=0) buckets[bi].n++; }
+  }
+  const cities = Object.keys(cityCount)
+    .map(c=>({ city:c, n:cityCount[c], pct: withCity? Math.round(1000*cityCount[c]/withCity)/10 : 0 }))
+    .sort((a,b)=>b.n-a.n);
+  const ageBuckets = buckets.map(b=>({ label:b.label, n:b.n, pct: withAge? Math.round(1000*b.n/withAge)/10 : 0 }));
+  return {
+    total: (patients||[]).length, withCity, withAge,
+    avgAge: withAge ? Math.round(10*ageSum/withAge)/10 : null,
+    topCities: cities.slice(0,5), otherCitiesCount: Math.max(0, cities.length-5),
+    otherCitiesPatients: cities.slice(5).reduce((s,c)=>s+c.n,0), distinctCities: cities.length,
+    ageBuckets,
+  };
+}
+
+// JSON per clinic (?clinic=Amstelveen). ?debug=1 dumps the real field names + 2 sample rows.
+app.get("/demographics/data", gate, async (req,res)=>{
+  const clinic = req.query.clinic || "Amstelveen";
+  if(!CLINICS[clinic]) return res.json({ error: "unknown clinic \u201c"+clinic+"\u201d" });
+  const debug = req.query.debug==="1";
+  try{
+    const ck = "demo|"+clinic;
+    if(!debug && _demoCache[ck] && Date.now()-_demoCache[ck].t < 3600000) return res.json(_demoCache[ck].v);
+    const patients = await phubAll(clinic, "/patients", {});
+    const out = Object.assign({ clinic }, demoAggregate(patients, new Date()));
+    if(debug){ out.sampleKeys = patients.length ? Object.keys(patients[0]) : []; out.sample = patients.slice(0,2); }
+    else _demoCache[ck] = { t: Date.now(), v: out };
+    res.json(out);
+  }catch(e){ res.json({ error: e.message, clinic }); }
+});
+
+// The page — clinic tabs, top-5 city bars (%), age bar chart, coverage + avg age.
+app.get("/demographics", gate, (req,res)=>{
+  const clinics = Object.keys(CLINICS);
+  const CSS = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:940px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}"+
+    ".tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}"+
+    ".kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:12px;padding:14px}.kpi b{font-size:24px;display:block}.kpi span{font-size:12px;color:#64748b}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}.card h3{margin:0 0 12px;font-size:15px}"+
+    ".rg{display:flex;align-items:center;gap:10px;margin:8px 0}.rg .nm{width:150px;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"+
+    ".rg .bar{flex:1;background:#f1f5f9;border-radius:6px;height:20px;overflow:hidden}.rg .bar>div{height:100%;background:#2563eb;border-radius:6px}"+
+    ".rg .vl{width:118px;text-align:right;font-size:12.5px;color:#475569}"+
+    ".warn{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#92400e;margin-bottom:14px}"+
+    ".legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.5}a{color:#2563EB}";
+  res.send(
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Patient demographics \u2014 Posturefixx</title>"+
+    "<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'></script><style>"+CSS+"</style></head><body>"+
+    "<h1>Where your patients come from &amp; how old they are</h1>"+
+    "<div class=sub>Live from each clinic\u2019s PracticeHub patient list \u00b7 top 5 cities by share, and age in 5-year bands. First load per clinic can take ~20\u201340s (it pages through every patient), then it\u2019s cached for an hour.</div>"+
+    "<div class=tabs id=tabs></div>"+
+    "<div id=warn></div>"+
+    "<div class=kpis id=kpis></div>"+
+    "<div class=card><h3>Top 5 cities \u2014 share of patients</h3><div id=cities></div><div class=legend id=citiesNote></div></div>"+
+    "<div class=card><h3>Age distribution</h3><canvas id=ageChart height=120></canvas><div class=legend id=ageNote></div></div>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/marketing'>/marketing</a> \u00b7 <a href='/meta-leads'>/meta-leads</a> \u00b7 <a href='/scorecard'>/scorecard</a></p>"+
+    "<script>var CLINICS="+JSON.stringify(clinics)+";var SEL=CLINICS[0];var CH=null;var CACHE={};"+
+    "function eur(){}"+
+    "function tabs(){var t=document.getElementById('tabs');t.innerHTML=CLINICS.map(function(c){return \"<div class='tab\"+(c===SEL?' on':'')+\"' data-c='\"+c+\"'>\"+c+\"</div>\";}).join('');Array.prototype.forEach.call(t.querySelectorAll('.tab'),function(b){b.addEventListener('click',function(){SEL=b.getAttribute('data-c');tabs();load();});});}"+
+    "function pct(n){return (Math.round(n*10)/10)+'%';}"+
+    "function render(d){"+
+      "if(d.error){document.getElementById('warn').innerHTML=\"<div class=warn>Couldn\\u2019t load \"+SEL+\": \"+d.error+\"</div>\";document.getElementById('kpis').innerHTML='';document.getElementById('cities').innerHTML='';if(CH){CH.destroy();CH=null;}return;}"+
+      "var cov=[];if(d.total&&d.withCity/d.total<0.5)cov.push('city found for only '+pct(100*d.withCity/d.total)+' of patients');if(d.total&&d.withAge/d.total<0.5)cov.push('date-of-birth found for only '+pct(100*d.withAge/d.total)+' of patients');"+
+      "document.getElementById('warn').innerHTML=cov.length?(\"<div class=warn>Heads up \u2014 \"+cov.join('; ')+\". PracticeHub may store these under a different field name. Open <a href='/demographics/data?clinic=\"+SEL+\"&debug=1'>/demographics/data?clinic=\"+SEL+\"&debug=1</a> and send me the field names and I\\u2019ll lock onto them exactly.</div>\"):'';"+
+      "document.getElementById('kpis').innerHTML="+
+        "\"<div class=kpi><b>\"+d.total.toLocaleString('en-US')+\"</b><span>patients on file</span></div>\"+"+
+        "\"<div class=kpi><b>\"+(d.avgAge==null?'\\u2014':d.avgAge)+\"</b><span>average age</span></div>\"+"+
+        "\"<div class=kpi><b>\"+d.distinctCities.toLocaleString('en-US')+\"</b><span>distinct cities</span></div>\"+"+
+        "\"<div class=kpi><b>\"+(d.topCities[0]?d.topCities[0].city:'\\u2014')+\"</b><span>top city</span></div>\";"+
+      "var max=d.topCities.length?d.topCities[0].pct:1;"+
+      "document.getElementById('cities').innerHTML=d.topCities.length?d.topCities.map(function(c){return \"<div class=rg><div class=nm>\"+c.city+\"</div><div class=bar><div style='width:\"+(max?100*c.pct/max:0)+\"%'></div></div><div class=vl>\"+pct(c.pct)+\" \u00b7 \"+c.n+\"</div></div>\";}).join(''):\"<div class=sub>No city data readable for this clinic.</div>\";"+
+      "document.getElementById('citiesNote').innerHTML=d.withCity?(\"Share of the \"+d.withCity.toLocaleString('en-US')+\" patients whose city we could read. \"+(d.otherCitiesCount?(\"The other \"+d.otherCitiesCount+\" cities hold \"+d.otherCitiesPatients+\" patients between them.\"):''):'');"+
+      "var labels=d.ageBuckets.map(function(b){return b.label;});var counts=d.ageBuckets.map(function(b){return b.n;});var pcts=d.ageBuckets.map(function(b){return b.pct;});"+
+      "if(CH){CH.destroy();CH=null;}"+
+      "if(typeof Chart!=='undefined'){CH=new Chart(document.getElementById('ageChart'),{type:'bar',data:{labels:labels,datasets:[{label:'Patients',data:counts,backgroundColor:'#2563eb',borderRadius:4}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.parsed.y+' patients \u00b7 '+pcts[ctx.dataIndex]+'%';}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'patients'}},x:{title:{display:true,text:'age'}}}}});}"+
+      "document.getElementById('ageNote').textContent=d.withAge?('Based on the '+d.withAge.toLocaleString('en-US')+' patients with a date of birth on file. Average age '+d.avgAge+'.'):'No date-of-birth data readable for this clinic.';"+
+    "}"+
+    "function load(){var box=document.getElementById('kpis');box.innerHTML=\"<div class=kpi><b>\\u2026</b><span>reading PracticeHub\\u2026</span></div>\";if(CACHE[SEL]){render(CACHE[SEL]);return;}"+
+      "fetch('/demographics/data?clinic='+encodeURIComponent(SEL)).then(function(r){return r.json();}).then(function(d){CACHE[SEL]=d;render(d);}).catch(function(e){render({error:String(e)});});}"+
+    "tabs();load();</script></body></html>"
+  );
 });
 
 // Safety net: a single bad request should never take the whole site down (502).
