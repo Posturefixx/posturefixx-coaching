@@ -5063,7 +5063,7 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/meta-leads","\u2b50 Meta lead quality","Every FB/IG lead by clinic: reached \u2192 booked \u2192 paid intake \u2192 started care, plus a per-month call breakdown (green/yellow/red/blue)."),
   card("/meta-spend","Meta vs Google cost","Cost per started-care patient, Meta vs Google side by side per clinic, with a campaign-vs-treated counting toggle."),
   card("/notes-trends","Notes trends","Monthly call-note themes per clinic (objections, leakage, lead quality) \u2014 read-only, no PII."),
-  card("/demographics","\ud83d\uddfa Patient demographics","Top 5 cities each clinic\u2019s patients come from (by %) and their age distribution \u2014 live from PracticeHub. Handy for ad targeting and creative.")
+  card("/demographics","\ud83d\uddfa Patient demographics","Top 5 cities each clinic\u2019s patients come from (by %) and their age distribution \u2014 split active vs inactive, live from PracticeHub.")
 ], "#f59e0b")}
 <h3 style="color:#64748b">\ud83d\udee0 Checks &amp; automation</h3>${grid([
   card("/kpi?clinic=Amstelveen","Raw KPIs","Per-chiro numbers straight from PracticeHub (swap the clinic in the link)."),
@@ -5277,30 +5277,27 @@ app.get("/cron/morning-briefing", async (req, res) => {
 });
 
 // ============================================================================
-//  /demographics — WHERE patients come from + HOW OLD they are, per clinic.
-//  Pulls the patient list from each clinic's PracticeHub (/patients) and shows:
-//    • Top 5 cities each clinic's patients live in, as a share of all patients
-//      whose city we could read.
+//  /demographics — WHERE patients come from + HOW OLD they are, per clinic,
+//  split into ACTIVE vs INACTIVE clients.
+//    • Top 5 cities (share of patients) — switchable All / Active / Inactive.
 //    • Age distribution in 5-year bands (0-5, 6-10, 11-15 …) as a bar chart,
-//      plus the average age.
-//  PracticeHub field names for city / date-of-birth aren't documented here, so
-//  every common English + Dutch variant is tried (flat and nested). Open
-//  /demographics/data?clinic=Amstelveen&debug=1 to see the real field names if
-//  coverage looks low — send them to me and I'll lock onto the exact fields.
-//  Cached 1h in memory per clinic so the page is snappy after the first pull.
+//      shown as Active vs Inactive side by side, plus the average age.
+//  PracticeHub field names for city / date-of-birth / active-status aren't
+//  documented here, so every common English + Dutch variant is tried (flat and
+//  nested). The page shows which field it matched and its coverage; if that
+//  looks wrong, open /demographics/data?clinic=Amstelveen&debug=1 to see the raw
+//  field names and send them to me and I'll lock onto the exact ones.
+//  Cached 1h per clinic so it's snappy after the first pull.
 // ============================================================================
 const _demoCache = {};
 const DEMO_BUCKETS = [[0,5],[6,10],[11,15],[16,20],[21,25],[26,30],[31,35],[36,40],[41,45],[46,50],[51,55],[56,60],[61,65],[66,70],[71,75],[76,80],[81,200]];
 function demoBucketLabel(lo,hi){ return hi>=200 ? (lo+"+") : (lo+"-"+hi); }
 function demoBucketIndex(age){ for(let i=0;i<DEMO_BUCKETS.length;i++){ if(age>=DEMO_BUCKETS[i][0] && age<=DEMO_BUCKETS[i][1]) return i; } return -1; }
 
-// Title-case a city, collapsing whitespace ("AMSTERDAM " -> "Amsterdam").
 function demoTitle(s){
   return String(s||"").trim().replace(/\s+/g," ").toLowerCase()
     .replace(/(^|[\s\-'])([a-z\u00e0-\u00ff])/g, (m,a,b)=>a+b.toUpperCase());
 }
-
-// Pull a city out of a patient record — tries flat fields then nested address/contact objects.
 function demoCity(p){
   if(!p || typeof p!=="object") return null;
   let c = p.city||p.town||p.place||p.plaats||p.woonplaats||p.residence||p.city_name||p.cityName||p.locality;
@@ -5309,13 +5306,11 @@ function demoCity(p){
   c = String(c||"").trim();
   return c ? demoTitle(c) : null;
 }
-
-// Parse a date-of-birth string in ISO (YYYY-MM-DD) or Dutch DD-MM-YYYY / DD/MM/YYYY.
 function demoParseDate(s){
   s = String(s==null?"":s).trim(); if(!s) return null;
   let m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
   if(m){ const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3])); return isNaN(d)?null:d; }
-  m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);           // DD-MM-YYYY (Dutch default)
+  m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);            // DD-MM-YYYY (Dutch default)
   if(m){ const d=new Date(Date.UTC(+m[3],+m[2]-1,+m[1])); return isNaN(d)?null:d; }
   const t = Date.parse(s); return isNaN(t)?null:new Date(t);
 }
@@ -5326,7 +5321,6 @@ function demoDOB(p){
   for(const nb of nests){ if(!raw && nb && typeof nb==="object"){ raw = nb.date_of_birth||nb.dob||nb.birth_date||nb.birthDate||nb.geboortedatum||nb.dateOfBirth; } }
   return raw ? demoParseDate(raw) : null;
 }
-// Age from a direct age field if present, else computed from DOB as of asOf.
 function demoAge(p, asOf){
   const direct = p && (p.age!=null ? p.age : (p.details && p.details.age));
   if(direct!=null && isFinite(+direct) && +direct>0 && +direct<130) return Math.floor(+direct);
@@ -5337,8 +5331,42 @@ function demoAge(p, asOf){
   return (a>=0 && a<130) ? a : null;
 }
 
-// Pure aggregation — testable with no network. Returns top-5 cities (% of those
-// with a city) and 5-year age bands (% of those with an age) + average age.
+// Active vs inactive. Returns true / false / null(unknown). Tries positive flags,
+// negative flags, then a status string (English + Dutch).
+function demoFlag(v){
+  if(v===true) return true; if(v===false) return false;
+  const s = String(v==null?"":v).toLowerCase().trim();
+  if(["1","true","yes","y","active","actief"].includes(s)) return true;
+  if(["0","false","no","n","inactive","inactief"].includes(s)) return false;
+  return null;
+}
+function demoActive(p){
+  if(!p || typeof p!=="object") return null;
+  for(const k of ["active","is_active","isActive","enabled","actief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return t; } }
+  for(const k of ["inactive","is_inactive","archived","is_archived","deleted","discharged","inactief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return !t; } }
+  const st = String(p.status||p.patient_status||p.state||(p.details&&p.details.status)||"").toLowerCase().trim();
+  if(st){
+    if(/inactiv|inactief|archiv|discharg|uitgeschr|overled|deceased|former|closed|left|stopped/.test(st)) return false;
+    if(/activ|actief|current|ingeschr|enrolled|open/.test(st)) return true;
+  }
+  return null;
+}
+
+// Which field name actually carried each value (for the on-page diagnostic).
+function demoDetectFields(patients){
+  const cityKeys=["city","town","place","plaats","woonplaats","residence","city_name","cityName","locality"];
+  const dobKeys=["date_of_birth","dob","birth_date","birthDate","birthdate","geboortedatum","born","dateOfBirth","birth"];
+  const actKeys=["active","is_active","isActive","actief","inactive","archived","status","patient_status","state"];
+  const out={ city:null, dob:null, active:null };
+  for(let i=0;i<patients.length && i<80;i++){ const p=patients[i]||{};
+    if(!out.city){ for(const k of cityKeys){ if(p[k]!=null && String(p[k]).trim()){ out.city=k; break; } if(p.address && p.address[k]!=null && String(p.address[k]).trim()){ out.city="address."+k; break; } } }
+    if(!out.dob){ for(const k of dobKeys){ if(p[k]!=null && String(p[k]).trim()){ out.dob=k; break; } } }
+    if(!out.active){ for(const k of actKeys){ if(p[k]!=null && String(p[k]).trim()!==""){ out.active=k; break; } } }
+  }
+  return out;
+}
+
+// Aggregate ONE list of patients → top-5 cities (%), 5-year age bands, avg age.
 function demoAggregate(patients, asOf){
   asOf = asOf || new Date();
   const cityCount = {}; let withCity=0, withAge=0, ageSum=0;
@@ -5350,17 +5378,28 @@ function demoAggregate(patients, asOf){
   const cities = Object.keys(cityCount)
     .map(c=>({ city:c, n:cityCount[c], pct: withCity? Math.round(1000*cityCount[c]/withCity)/10 : 0 }))
     .sort((a,b)=>b.n-a.n);
-  const ageBuckets = buckets.map(b=>({ label:b.label, n:b.n, pct: withAge? Math.round(1000*b.n/withAge)/10 : 0 }));
   return {
-    total: (patients||[]).length, withCity, withAge,
+    total:(patients||[]).length, withCity, withAge,
     avgAge: withAge ? Math.round(10*ageSum/withAge)/10 : null,
     topCities: cities.slice(0,5), otherCitiesCount: Math.max(0, cities.length-5),
     otherCitiesPatients: cities.slice(5).reduce((s,c)=>s+c.n,0), distinctCities: cities.length,
-    ageBuckets,
+    ageBuckets: buckets.map(b=>({ label:b.label, n:b.n, pct: withAge? Math.round(1000*b.n/withAge)/10 : 0 })),
   };
 }
 
-// JSON per clinic (?clinic=Amstelveen). ?debug=1 dumps the real field names + 2 sample rows.
+// Split into active / inactive / unknown, then aggregate each segment + the whole.
+function demoSegment(patients, asOf){
+  const act=[], inact=[]; let unknown=0;
+  for(const p of (patients||[])){ const s=demoActive(p); if(s===true) act.push(p); else if(s===false) inact.push(p); else unknown++; }
+  return {
+    counts:{ total:(patients||[]).length, active:act.length, inactive:inact.length, unknown },
+    all: demoAggregate(patients, asOf),
+    active: demoAggregate(act, asOf),
+    inactive: demoAggregate(inact, asOf),
+  };
+}
+
+// JSON per clinic (?clinic=Amstelveen). ?debug=1 adds 3 raw sample rows.
 app.get("/demographics/data", gate, async (req,res)=>{
   const clinic = req.query.clinic || "Amstelveen";
   if(!CLINICS[clinic]) return res.json({ error: "unknown clinic \u201c"+clinic+"\u201d" });
@@ -5369,61 +5408,83 @@ app.get("/demographics/data", gate, async (req,res)=>{
     const ck = "demo|"+clinic;
     if(!debug && _demoCache[ck] && Date.now()-_demoCache[ck].t < 3600000) return res.json(_demoCache[ck].v);
     const patients = await phubAll(clinic, "/patients", {});
-    const out = Object.assign({ clinic }, demoAggregate(patients, new Date()));
-    if(debug){ out.sampleKeys = patients.length ? Object.keys(patients[0]) : []; out.sample = patients.slice(0,2); }
+    const seg = demoSegment(patients, new Date());
+    const out = { clinic, counts:seg.counts, all:seg.all, active:seg.active, inactive:seg.inactive,
+      fields: demoDetectFields(patients), sampleKeys: patients.length ? Object.keys(patients[0]) : [] };
+    if(debug){ out.sample = patients.slice(0,3); }
     else _demoCache[ck] = { t: Date.now(), v: out };
     res.json(out);
   }catch(e){ res.json({ error: e.message, clinic }); }
 });
 
-// The page — clinic tabs, top-5 city bars (%), age bar chart, coverage + avg age.
+// The page — clinic tabs, top-5 city bars (All/Active/Inactive), age bars (active vs inactive).
 app.get("/demographics", gate, (req,res)=>{
   const clinics = Object.keys(CLINICS);
   const CSS = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:940px;margin:24px auto;padding:0 16px;color:#16202E}"+
     "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 16px}"+
-    ".tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}"+
-    ".kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:12px;padding:14px}.kpi b{font-size:24px;display:block}.kpi span{font-size:12px;color:#64748b}"+
-    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}.card h3{margin:0 0 12px;font-size:15px}"+
+    ".tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}"+
+    ".kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi{flex:1;min-width:130px;border:1px solid #e5e7eb;border-radius:12px;padding:14px}.kpi b{font-size:22px;display:block}.kpi span{font-size:12px;color:#64748b}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}.card h3{margin:0;font-size:15px}"+
+    ".chead{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px}"+
+    ".segrow{display:flex;gap:6px;flex-wrap:wrap}.seg{border:1px solid #d1d5db;background:#fff;color:#334155;padding:5px 12px;border-radius:999px;font-size:12.5px;cursor:pointer}.seg.on{background:#16202E;color:#fff;border-color:#16202E}"+
     ".rg{display:flex;align-items:center;gap:10px;margin:8px 0}.rg .nm{width:150px;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"+
     ".rg .bar{flex:1;background:#f1f5f9;border-radius:6px;height:20px;overflow:hidden}.rg .bar>div{height:100%;background:#2563eb;border-radius:6px}"+
     ".rg .vl{width:118px;text-align:right;font-size:12.5px;color:#475569}"+
     ".warn{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#92400e;margin-bottom:14px}"+
+    ".diag{color:#64748b;font-size:12px;margin-bottom:14px}"+
     ".legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.5}a{color:#2563EB}";
   res.send(
     "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Patient demographics \u2014 Posturefixx</title>"+
     "<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'></script><style>"+CSS+"</style></head><body>"+
     "<h1>Where your patients come from &amp; how old they are</h1>"+
-    "<div class=sub>Live from each clinic\u2019s PracticeHub patient list \u00b7 top 5 cities by share, and age in 5-year bands. First load per clinic can take ~20\u201340s (it pages through every patient), then it\u2019s cached for an hour.</div>"+
+    "<div class=sub>Live from each clinic\u2019s PracticeHub patient list, split into active and inactive. First load per clinic can take ~20\u201340s (it pages through every patient), then it\u2019s cached for an hour.</div>"+
     "<div class=tabs id=tabs></div>"+
     "<div id=warn></div>"+
     "<div class=kpis id=kpis></div>"+
-    "<div class=card><h3>Top 5 cities \u2014 share of patients</h3><div id=cities></div><div class=legend id=citiesNote></div></div>"+
-    "<div class=card><h3>Age distribution</h3><canvas id=ageChart height=120></canvas><div class=legend id=ageNote></div></div>"+
+    "<div class=card><div class=chead><h3>Top 5 cities \u2014 share of patients</h3><div class=segrow id=segs></div></div><div id=cities></div><div class=legend id=citiesNote></div></div>"+
+    "<div class=card><h3>Age distribution \u2014 active vs inactive</h3><canvas id=ageChart height=120 style='margin-top:10px'></canvas><div class=legend id=ageNote></div></div>"+
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/marketing'>/marketing</a> \u00b7 <a href='/meta-leads'>/meta-leads</a> \u00b7 <a href='/scorecard'>/scorecard</a></p>"+
-    "<script>var CLINICS="+JSON.stringify(clinics)+";var SEL=CLINICS[0];var CH=null;var CACHE={};"+
-    "function eur(){}"+
-    "function tabs(){var t=document.getElementById('tabs');t.innerHTML=CLINICS.map(function(c){return \"<div class='tab\"+(c===SEL?' on':'')+\"' data-c='\"+c+\"'>\"+c+\"</div>\";}).join('');Array.prototype.forEach.call(t.querySelectorAll('.tab'),function(b){b.addEventListener('click',function(){SEL=b.getAttribute('data-c');tabs();load();});});}"+
-    "function pct(n){return (Math.round(n*10)/10)+'%';}"+
-    "function render(d){"+
-      "if(d.error){document.getElementById('warn').innerHTML=\"<div class=warn>Couldn\\u2019t load \"+SEL+\": \"+d.error+\"</div>\";document.getElementById('kpis').innerHTML='';document.getElementById('cities').innerHTML='';if(CH){CH.destroy();CH=null;}return;}"+
-      "var cov=[];if(d.total&&d.withCity/d.total<0.5)cov.push('city found for only '+pct(100*d.withCity/d.total)+' of patients');if(d.total&&d.withAge/d.total<0.5)cov.push('date-of-birth found for only '+pct(100*d.withAge/d.total)+' of patients');"+
-      "document.getElementById('warn').innerHTML=cov.length?(\"<div class=warn>Heads up \u2014 \"+cov.join('; ')+\". PracticeHub may store these under a different field name. Open <a href='/demographics/data?clinic=\"+SEL+\"&debug=1'>/demographics/data?clinic=\"+SEL+\"&debug=1</a> and send me the field names and I\\u2019ll lock onto them exactly.</div>\"):'';"+
-      "document.getElementById('kpis').innerHTML="+
-        "\"<div class=kpi><b>\"+d.total.toLocaleString('en-US')+\"</b><span>patients on file</span></div>\"+"+
-        "\"<div class=kpi><b>\"+(d.avgAge==null?'\\u2014':d.avgAge)+\"</b><span>average age</span></div>\"+"+
-        "\"<div class=kpi><b>\"+d.distinctCities.toLocaleString('en-US')+\"</b><span>distinct cities</span></div>\"+"+
-        "\"<div class=kpi><b>\"+(d.topCities[0]?d.topCities[0].city:'\\u2014')+\"</b><span>top city</span></div>\";"+
-      "var max=d.topCities.length?d.topCities[0].pct:1;"+
-      "document.getElementById('cities').innerHTML=d.topCities.length?d.topCities.map(function(c){return \"<div class=rg><div class=nm>\"+c.city+\"</div><div class=bar><div style='width:\"+(max?100*c.pct/max:0)+\"%'></div></div><div class=vl>\"+pct(c.pct)+\" \u00b7 \"+c.n+\"</div></div>\";}).join(''):\"<div class=sub>No city data readable for this clinic.</div>\";"+
-      "document.getElementById('citiesNote').innerHTML=d.withCity?(\"Share of the \"+d.withCity.toLocaleString('en-US')+\" patients whose city we could read. \"+(d.otherCitiesCount?(\"The other \"+d.otherCitiesCount+\" cities hold \"+d.otherCitiesPatients+\" patients between them.\"):''):'');"+
-      "var labels=d.ageBuckets.map(function(b){return b.label;});var counts=d.ageBuckets.map(function(b){return b.n;});var pcts=d.ageBuckets.map(function(b){return b.pct;});"+
+    "<script>"+
+    "var CLINICS="+JSON.stringify(clinics)+";var SEL=CLINICS[0];var SEG='all';var CH=null;var CACHE={};"+
+    "function el(id){return document.getElementById(id);}"+
+    "function pctf(n){return (Math.round(n*10)/10)+'%';}"+
+    "function tabs(){el('tabs').innerHTML=CLINICS.map(function(c){return \"<div class='tab\"+(c===SEL?' on':'')+\"' data-c='\"+c+\"'>\"+c+\"</div>\";}).join('');Array.prototype.forEach.call(el('tabs').querySelectorAll('.tab'),function(b){b.onclick=function(){SEL=b.getAttribute('data-c');SEG='all';tabs();load();};});}"+
+    "function segs(){var S=[['all','All'],['active','Active'],['inactive','Inactive']];el('segs').innerHTML=S.map(function(s){return \"<button class='seg\"+(s[0]===SEG?' on':'')+\"' data-s='\"+s[0]+\"'>\"+s[1]+\"</button>\";}).join('');Array.prototype.forEach.call(el('segs').querySelectorAll('.seg'),function(b){b.onclick=function(){SEG=b.getAttribute('data-s');segs();renderCities();};});}"+
+    "function renderKpis(){var d=CACHE[SEL];if(!d)return;if(d.error){el('kpis').innerHTML=\"<div class='kpi' style='color:#dc2626'>Couldn\\u2019t load \"+SEL+\": \"+d.error+\"</div>\";return;}"+
+      "el('kpis').innerHTML=\"<div class='kpi'><b>\"+d.counts.total.toLocaleString('en-US')+\"</b><span>patients on file</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+d.counts.active.toLocaleString('en-US')+\"</b><span>active</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+d.counts.inactive.toLocaleString('en-US')+\"</b><span>inactive</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+(d.all.avgAge==null?'\\u2014':d.all.avgAge)+\"</b><span>average age</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+(d.all.topCities[0]?d.all.topCities[0].city:'\\u2014')+\"</b><span>top city</span></div>\";}"+
+    "function renderCities(){var d=CACHE[SEL];if(!d||d.error)return;var s=d[SEG]||d.all;var box=el('cities');"+
+      "if(!s.topCities.length){box.innerHTML=\"<div class='sub'>No city data readable for this segment.</div>\";el('citiesNote').innerHTML='';return;}"+
+      "var max=s.topCities[0].pct||1;"+
+      "box.innerHTML=s.topCities.map(function(c){var w=max?(100*c.pct/max):0;return \"<div class='rg'><div class='nm'>\"+c.city+\"</div><div class='bar'><div style='width:\"+w+\"%'></div></div><div class='vl'>\"+pctf(c.pct)+\" \u00b7 \"+c.n+\"</div></div>\";}).join('');"+
+      "var note=\"Share of the \"+s.withCity.toLocaleString('en-US')+\" \"+SEG+\" patients whose city we could read.\";"+
+      "if(s.otherCitiesCount){note=note+\" Another \"+s.otherCitiesCount+\" cities hold \"+s.otherCitiesPatients+\" between them.\";}"+
+      "el('citiesNote').innerHTML=note;}"+
+    "function renderAges(){var d=CACHE[SEL];if(!d||d.error)return;var labels=d.all.ageBuckets.map(function(b){return b.label;});"+
+      "var split=(d.counts.active>0||d.counts.inactive>0);var ds;"+
+      "if(split){ds=[{label:'Active',data:d.active.ageBuckets.map(function(b){return b.n;}),backgroundColor:'#2563eb',borderRadius:3},{label:'Inactive',data:d.inactive.ageBuckets.map(function(b){return b.n;}),backgroundColor:'#f59e0b',borderRadius:3}];}"+
+      "else{ds=[{label:'Patients',data:d.all.ageBuckets.map(function(b){return b.n;}),backgroundColor:'#2563eb',borderRadius:3}];}"+
       "if(CH){CH.destroy();CH=null;}"+
-      "if(typeof Chart!=='undefined'){CH=new Chart(document.getElementById('ageChart'),{type:'bar',data:{labels:labels,datasets:[{label:'Patients',data:counts,backgroundColor:'#2563eb',borderRadius:4}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.parsed.y+' patients \u00b7 '+pcts[ctx.dataIndex]+'%';}}}},scales:{y:{beginAtZero:true,title:{display:true,text:'patients'}},x:{title:{display:true,text:'age'}}}}});}"+
-      "document.getElementById('ageNote').textContent=d.withAge?('Based on the '+d.withAge.toLocaleString('en-US')+' patients with a date of birth on file. Average age '+d.avgAge+'.'):'No date-of-birth data readable for this clinic.';"+
-    "}"+
-    "function load(){var box=document.getElementById('kpis');box.innerHTML=\"<div class=kpi><b>\\u2026</b><span>reading PracticeHub\\u2026</span></div>\";if(CACHE[SEL]){render(CACHE[SEL]);return;}"+
-      "fetch('/demographics/data?clinic='+encodeURIComponent(SEL)).then(function(r){return r.json();}).then(function(d){CACHE[SEL]=d;render(d);}).catch(function(e){render({error:String(e)});});}"+
-    "tabs();load();</script></body></html>"
+      "if(typeof Chart!=='undefined'){CH=new Chart(el('ageChart'),{type:'bar',data:{labels:labels,datasets:ds},options:{responsive:true,plugins:{legend:{display:split}},scales:{x:{title:{display:true,text:'age'}},y:{beginAtZero:true,title:{display:true,text:'patients'}}}}});}"+
+      "var note=d.all.withAge?(\"Ages from the \"+d.all.withAge.toLocaleString('en-US')+\" patients with a date of birth on file. Average age \"+d.all.avgAge+\".\"):\"No date-of-birth data readable for this clinic.\";"+
+      "if(split){note=note+\" Blue = active, orange = inactive.\";}el('ageNote').textContent=note;}"+
+    "function renderDiag(){var d=CACHE[SEL];if(!d||d.error){el('warn').innerHTML='';return;}var total=d.counts.total||1;var msgs=[];"+
+      "if(d.all.withCity/total<0.5)msgs.push('city found for only '+pctf(100*d.all.withCity/total)+' of patients');"+
+      "if(d.all.withAge/total<0.5)msgs.push('date-of-birth found for only '+pctf(100*d.all.withAge/total)+' of patients');"+
+      "if(d.counts.unknown/total>0.5)msgs.push('active/inactive found for only '+pctf(100*(total-d.counts.unknown)/total)+' of patients');"+
+      "var f=d.fields||{};var matched=\"Matched fields \u2014 city: \"+(f.city||'none')+\" \u00b7 date of birth: \"+(f.dob||'none')+\" \u00b7 active flag: \"+(f.active||'none')+\".\";"+
+      "var link=\"<a href='/demographics/data?clinic=\"+SEL+\"&debug=1'>see raw fields</a>\";"+
+      "if(msgs.length){el('warn').innerHTML=\"<div class='warn'>Heads up \u2014 \"+msgs.join('; ')+\". \"+matched+\" If that looks wrong, open \"+link+\" and send me the field names \u2014 I\\u2019ll lock onto them.</div>\";}"+
+      "else{el('warn').innerHTML=\"<div class='diag'>\"+matched+\" \u00b7 \"+link+\"</div>\";}}"+
+    "function renderAll(){renderKpis();segs();renderCities();renderAges();renderDiag();}"+
+    "function load(){el('kpis').innerHTML=\"<div class='kpi'><b>\\u2026</b><span>reading PracticeHub\\u2026</span></div>\";el('cities').innerHTML='';el('citiesNote').innerHTML='';el('ageNote').innerHTML='';el('warn').innerHTML='';if(CH){CH.destroy();CH=null;}"+
+      "if(CACHE[SEL]){renderAll();return;}"+
+      "fetch('/demographics/data?clinic='+encodeURIComponent(SEL)).then(function(r){return r.json();}).then(function(d){CACHE[SEL]=d;renderAll();}).catch(function(e){CACHE[SEL]={error:String(e)};renderAll();});}"+
+    "tabs();segs();load();"+
+    "</script></body></html>"
   );
 });
 
