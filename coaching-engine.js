@@ -5280,19 +5280,40 @@ app.get("/cron/morning-briefing", async (req, res) => {
 //  /demographics — WHERE patients come from + HOW OLD they are, per clinic,
 //  split into ACTIVE vs INACTIVE clients.
 //    • Top 5 cities (share of patients) — switchable All / Active / Inactive.
-//    • Age distribution in 5-year bands (0-5, 6-10, 11-15 …) as a bar chart,
-//      shown as Active vs Inactive side by side, plus the average age.
-//  PracticeHub field names for city / date-of-birth / active-status aren't
-//  documented here, so every common English + Dutch variant is tried (flat and
-//  nested). The page shows which field it matched and its coverage; if that
-//  looks wrong, open /demographics/data?clinic=Amstelveen&debug=1 to see the raw
-//  field names and send them to me and I'll lock onto the exact ones.
-//  Cached 1h per clinic so it's snappy after the first pull.
+//    • Age distribution in 5-year bands (0-5 … 81+) as Active vs Inactive bars.
+//  PracticeHub's field names aren't documented, so every common English + Dutch
+//  variant is tried AND a deep recursive search scans nested objects (address,
+//  contact, etc.). The page reports which field it matched + coverage. If a
+//  field can't be found, open /demographics/fields?clinic=Amstelveen to see
+//  exactly what PracticeHub returns, and I'll lock onto the right one.
 // ============================================================================
 const _demoCache = {};
 const DEMO_BUCKETS = [[0,5],[6,10],[11,15],[16,20],[21,25],[26,30],[31,35],[36,40],[41,45],[46,50],[51,55],[56,60],[61,65],[66,70],[71,75],[76,80],[81,200]];
 function demoBucketLabel(lo,hi){ return hi>=200 ? (lo+"+") : (lo+"-"+hi); }
 function demoBucketIndex(age){ for(let i=0;i<DEMO_BUCKETS.length;i++){ if(age>=DEMO_BUCKETS[i][0] && age<=DEMO_BUCKETS[i][1]) return i; } return -1; }
+
+const DEMO_CITY_RE = /(^|[_\s])(city|town|plaats|woonplaats|residence|residentie|locality|gemeente|stad)([_\s]|$)/i;
+const DEMO_DOB_RE  = /(^|[_\s])(date_?of_?birth|dob|birth_?date|birthday|geboortedatum|geboorte|born)([_\s]|$)/i;
+const DEMO_STAT_RE = /(^|[_\s])(active|is_?active|actief|inactive|inactief|archived|discharged|status|patient_?status|state)([_\s]|$)/i;
+
+// Walk an object (max depth 4) and return the first string/number value whose KEY matches re.
+function demoDeepFind(obj, re, depth){
+  if(!obj || typeof obj!=="object" || depth>4) return null;
+  for(const k of Object.keys(obj)){ const v=obj[k]; if(re.test(k) && (typeof v==="string"||typeof v==="number") && String(v).trim()) return String(v).trim(); }
+  for(const k of Object.keys(obj)){ const v=obj[k]; if(v && typeof v==="object"){ const r=demoDeepFind(v, re, (depth||0)+1); if(r!=null) return r; } }
+  return null;
+}
+// Collect all leaf key-paths (max depth 4) with example values — for the inspector + candidate detection.
+function demoWalkPaths(obj, prefix, depth, acc){
+  if(!obj || typeof obj!=="object" || depth>4) return acc;
+  for(const k of Object.keys(obj)){
+    if(k.slice(0,2)==="__") continue;
+    const path = prefix ? (prefix+"."+k) : k, v = obj[k];
+    if(v!=null && typeof v!=="object"){ (acc[path] = acc[path] || []); const s=String(v); if(acc[path].length<3 && acc[path].indexOf(s)<0) acc[path].push(s); }
+    else if(v && typeof v==="object"){ demoWalkPaths(v, path, (depth||0)+1, acc); }
+  }
+  return acc;
+}
 
 function demoTitle(s){
   return String(s||"").trim().replace(/\s+/g," ").toLowerCase()
@@ -5300,9 +5321,11 @@ function demoTitle(s){
 }
 function demoCity(p){
   if(!p || typeof p!=="object") return null;
+  if(p.__city) return p.__city;
   let c = p.city||p.town||p.place||p.plaats||p.woonplaats||p.residence||p.city_name||p.cityName||p.locality;
   const nests = [p.address, p.contact, p.contact_details, p.contactDetails, p.details, p.demographics, p.person];
   for(const nb of nests){ if(!c && nb && typeof nb==="object"){ c = nb.city||nb.town||nb.place||nb.plaats||nb.woonplaats||nb.residence||nb.city_name||nb.cityName||nb.locality; } }
+  if(!c){ c = demoDeepFind(p, DEMO_CITY_RE, 0); }   // deep fallback anywhere in the record
   c = String(c||"").trim();
   return c ? demoTitle(c) : null;
 }
@@ -5310,7 +5333,7 @@ function demoParseDate(s){
   s = String(s==null?"":s).trim(); if(!s) return null;
   let m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
   if(m){ const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3])); return isNaN(d)?null:d; }
-  m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);            // DD-MM-YYYY (Dutch default)
+  m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);
   if(m){ const d=new Date(Date.UTC(+m[3],+m[2]-1,+m[1])); return isNaN(d)?null:d; }
   const t = Date.parse(s); return isNaN(t)?null:new Date(t);
 }
@@ -5319,6 +5342,7 @@ function demoDOB(p){
   let raw = p.date_of_birth||p.dob||p.birth_date||p.birthDate||p.birthdate||p.geboortedatum||p.born||p.dateOfBirth||p.birth;
   const nests = [p.details, p.demographics, p.person, p.profile];
   for(const nb of nests){ if(!raw && nb && typeof nb==="object"){ raw = nb.date_of_birth||nb.dob||nb.birth_date||nb.birthDate||nb.geboortedatum||nb.dateOfBirth; } }
+  if(!raw){ raw = demoDeepFind(p, DEMO_DOB_RE, 0); }
   return raw ? demoParseDate(raw) : null;
 }
 function demoAge(p, asOf){
@@ -5330,9 +5354,6 @@ function demoAge(p, asOf){
   if(mo<0 || (mo===0 && asOf.getUTCDate()<dob.getUTCDate())) a--;
   return (a>=0 && a<130) ? a : null;
 }
-
-// Active vs inactive. Returns true / false / null(unknown). Tries positive flags,
-// negative flags, then a status string (English + Dutch).
 function demoFlag(v){
   if(v===true) return true; if(v===false) return false;
   const s = String(v==null?"":v).toLowerCase().trim();
@@ -5346,27 +5367,26 @@ function demoActive(p){
   for(const k of ["inactive","is_inactive","archived","is_archived","deleted","discharged","inactief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return !t; } }
   const st = String(p.status||p.patient_status||p.state||(p.details&&p.details.status)||"").toLowerCase().trim();
   if(st){
-    if(/inactiv|inactief|archiv|discharg|uitgeschr|overled|deceased|former|closed|left|stopped/.test(st)) return false;
-    if(/activ|actief|current|ingeschr|enrolled|open/.test(st)) return true;
+    if(/inactiv|inactief|archiv|discharg|uitgeschr|overled|deceased|former|closed|left|stopped|dismiss/.test(st)) return false;
+    if(/activ|actief|current|ingeschr|enrolled|\bopen\b/.test(st)) return true;
   }
   return null;
 }
 
-// Which field name actually carried each value (for the on-page diagnostic).
+// Report which key actually carried each value + list city-like candidate paths.
 function demoDetectFields(patients){
-  const cityKeys=["city","town","place","plaats","woonplaats","residence","city_name","cityName","locality"];
-  const dobKeys=["date_of_birth","dob","birth_date","birthDate","birthdate","geboortedatum","born","dateOfBirth","birth"];
-  const actKeys=["active","is_active","isActive","actief","inactive","archived","status","patient_status","state"];
-  const out={ city:null, dob:null, active:null };
-  for(let i=0;i<patients.length && i<80;i++){ const p=patients[i]||{};
-    if(!out.city){ for(const k of cityKeys){ if(p[k]!=null && String(p[k]).trim()){ out.city=k; break; } if(p.address && p.address[k]!=null && String(p.address[k]).trim()){ out.city="address."+k; break; } } }
-    if(!out.dob){ for(const k of dobKeys){ if(p[k]!=null && String(p[k]).trim()){ out.dob=k; break; } } }
-    if(!out.active){ for(const k of actKeys){ if(p[k]!=null && String(p[k]).trim()!==""){ out.active=k; break; } } }
-  }
-  return out;
+  const acc = {}; for(let i=0;i<patients.length && i<60;i++){ demoWalkPaths(patients[i]||{}, "", 0, acc); }
+  const paths = Object.keys(acc);
+  const firstMatch = re => paths.find(p => re.test(p.split(".").pop()) && acc[p] && acc[p].length) || null;
+  const cityCandidates = paths.filter(p => DEMO_CITY_RE.test(p.split(".").pop()));
+  return {
+    city:   (patients.some(p=>demoCity(p)) ? (firstMatch(DEMO_CITY_RE) || "deep-search") : null),
+    dob:    firstMatch(DEMO_DOB_RE),
+    active: firstMatch(DEMO_STAT_RE),
+    cityCandidates: cityCandidates.slice(0,6),
+  };
 }
 
-// Aggregate ONE list of patients → top-5 cities (%), 5-year age bands, avg age.
 function demoAggregate(patients, asOf){
   asOf = asOf || new Date();
   const cityCount = {}; let withCity=0, withAge=0, ageSum=0;
@@ -5386,20 +5406,41 @@ function demoAggregate(patients, asOf){
     ageBuckets: buckets.map(b=>({ label:b.label, n:b.n, pct: withAge? Math.round(1000*b.n/withAge)/10 : 0 })),
   };
 }
-
-// Split into active / inactive / unknown, then aggregate each segment + the whole.
 function demoSegment(patients, asOf){
   const act=[], inact=[]; let unknown=0;
   for(const p of (patients||[])){ const s=demoActive(p); if(s===true) act.push(p); else if(s===false) inact.push(p); else unknown++; }
   return {
     counts:{ total:(patients||[]).length, active:act.length, inactive:inact.length, unknown },
-    all: demoAggregate(patients, asOf),
-    active: demoAggregate(act, asOf),
-    inactive: demoAggregate(inact, asOf),
+    all: demoAggregate(patients, asOf), active: demoAggregate(act, asOf), inactive: demoAggregate(inact, asOf),
   };
 }
 
-// JSON per clinic (?clinic=Amstelveen). ?debug=1 adds 3 raw sample rows.
+// Pull addresses in bulk from whichever related endpoint PracticeHub exposes,
+// and map patient id -> city. Each attempt fast-fails (404 on page 1) and moves on.
+async function demoFetchAddresses(clinic){
+  const eps = ["/addresses","/patient_addresses","/contact_addresses","/patients/addresses"];
+  const pidKeys = ["patient_id","patientId","contact_id","contactId","owner_id","client_id","relation_id"];
+  for(const ep of eps){
+    let rows=null;
+    try{ rows = await phubAll(clinic, ep, {}); }catch(e){ rows=null; }
+    if(rows && rows.length){
+      const m={}, prim={};
+      for(const a of rows){
+        let pid=null;
+        for(const k of pidKeys){ if(a[k]!=null){ pid = (a[k] && typeof a[k]==="object") ? (a[k].id!=null?a[k].id:null) : a[k]; if(pid!=null) break; } }
+        if(pid==null && a.patient && typeof a.patient==="object") pid=a.patient.id;
+        if(pid==null) continue;
+        const city = demoDeepFind(a, DEMO_CITY_RE, 0);
+        if(!city) continue;
+        const isPrim = !!(a.is_primary||a.primary||a.is_default||a.default|| String(a.type||a.address_type||a.kind||"").toLowerCase().match(/home|primary|postal|woon|default/));
+        if(m[pid]==null || (isPrim && !prim[pid])){ m[pid]=demoTitle(city); if(isPrim) prim[pid]=true; }
+      }
+      if(Object.keys(m).length) return { byPatient:m, source:ep, count:Object.keys(m).length };
+    }
+  }
+  return null;
+}
+
 app.get("/demographics/data", gate, async (req,res)=>{
   const clinic = req.query.clinic || "Amstelveen";
   if(!CLINICS[clinic]) return res.json({ error: "unknown clinic \u201c"+clinic+"\u201d" });
@@ -5408,16 +5449,85 @@ app.get("/demographics/data", gate, async (req,res)=>{
     const ck = "demo|"+clinic;
     if(!debug && _demoCache[ck] && Date.now()-_demoCache[ck].t < 3600000) return res.json(_demoCache[ck].v);
     const patients = await phubAll(clinic, "/patients", {});
+    // If the patient list barely carries a city, pull addresses in bulk and join by id.
+    let citySource = null;
+    const listWithCity = patients.reduce((n,p)=> n + (demoCity(p)?1:0), 0);
+    if(patients.length && listWithCity < patients.length*0.2){
+      try{
+        const enr = await demoFetchAddresses(clinic);
+        if(enr){
+          for(const p of patients){ const pid = (p.id!=null?p.id:(p.patient_id!=null?p.patient_id:null));
+            if(pid!=null && enr.byPatient[pid] && !demoCity(p)) p.__city = enr.byPatient[pid]; }
+          citySource = enr.source;
+        }
+      }catch(e){ /* keep going without city */ }
+    } else if(listWithCity){ citySource = "patient record"; }
     const seg = demoSegment(patients, new Date());
+    const det = demoDetectFields(patients);
+    det.citySource = (patients.some(p=>p.__city) ? citySource : (patients.some(p=>demoCity(p)) ? "patient record" : null));
     const out = { clinic, counts:seg.counts, all:seg.all, active:seg.active, inactive:seg.inactive,
-      fields: demoDetectFields(patients), sampleKeys: patients.length ? Object.keys(patients[0]) : [] };
+      fields: det, sampleKeys: patients.length ? Object.keys(patients[0]) : [] };
     if(debug){ out.sample = patients.slice(0,3); }
     else _demoCache[ck] = { t: Date.now(), v: out };
     res.json(out);
   }catch(e){ res.json({ error: e.message, clinic }); }
 });
 
-// The page — clinic tabs, top-5 city bars (All/Active/Inactive), age bars (active vs inactive).
+// Readable field inspector — every field PracticeHub returns for this clinic's
+// patients, with a few example values, so we can spot the city / status field.
+app.get("/demographics/fields", gate, async (req,res)=>{
+  const clinic = req.query.clinic || "Amstelveen";
+  if(!CLINICS[clinic]) return res.send("unknown clinic");
+  try{
+    const patients = await phubAll(clinic, "/patients", {});
+    const acc = {}; for(let i=0;i<patients.length && i<40;i++){ demoWalkPaths(patients[i]||{}, "", 0, acc); }
+    const paths = Object.keys(acc).sort();
+    const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    // Probe the likely address endpoints so we can confirm where the city lives.
+    const addrEps = ["/addresses","/patient_addresses","/contact_addresses"]; let addrHtml="";
+    for(const ep of addrEps){
+      let rows=null; try{ rows = await phub(clinic, ep, { page:1, page_size:5 }); rows = rows.data||rows||[]; }catch(e){ rows=null; }
+      if(rows && rows.length){
+        const aacc={}; rows.slice(0,5).forEach(r=>demoWalkPaths(r,"",0,aacc));
+        const arows = Object.keys(aacc).sort().map(p=>{
+          const leaf=p.split(".").pop(); let t="";
+          if(DEMO_CITY_RE.test(leaf)) t=" <b style='color:#16a34a'>\u2190 CITY</b>";
+          else if(/patient|contact|owner|client|relation/i.test(leaf) && /id/i.test(leaf)) t=" <b style='color:#7c3aed'>\u2190 patient link</b>";
+          const ex=(aacc[p]||[]).map(v=>v.length>28?v.slice(0,28)+"\u2026":v).map(esc).join("  |  ");
+          return "<tr><td style='padding:3px 12px 3px 0;font-family:monospace;white-space:nowrap;vertical-align:top'>"+esc(p)+t+"</td><td style='padding:3px 0;color:#475569'>"+ex+"</td></tr>";
+        }).join("");
+        addrHtml += "<h2 style='font-size:15px;margin:20px 0 6px'>Address endpoint found: <code>"+esc(ep)+"</code></h2>"+
+          "<p style='color:#64748b;font-size:12px;margin:0 0 6px'>Green = city, purple = the field that links an address back to a patient.</p>"+
+          "<table style='border-collapse:collapse;font-size:13px;width:100%'>"+arows+"</table>";
+        break;
+      }
+    }
+    if(!addrHtml) addrHtml="<p style='color:#92400e;font-size:12.5px;margin-top:16px'>No /addresses-style endpoint responded \u2014 the city may sit on the individual patient record (<code>/patients/{id}</code>). Tell me and I\u2019ll wire that path.</p>";
+    const tag = p => {
+      const leaf = p.split(".").pop();
+      if(DEMO_CITY_RE.test(leaf)) return " <b style='color:#16a34a'>\u2190 looks like CITY</b>";
+      if(DEMO_DOB_RE.test(leaf))  return " <b style='color:#2563eb'>\u2190 looks like DATE OF BIRTH</b>";
+      if(DEMO_STAT_RE.test(leaf)) return " <b style='color:#d97706'>\u2190 looks like STATUS</b>";
+      return "";
+    };
+    const rows = paths.map(p=>{
+      const ex = (acc[p]||[]).map(v=> v.length>28 ? v.slice(0,28)+"\u2026" : v).map(esc).join("  |  ");
+      return "<tr><td style='padding:4px 12px 4px 0;font-family:monospace;white-space:nowrap;vertical-align:top'>"+esc(p)+tag(p)+"</td><td style='padding:4px 0;color:#475569'>"+ex+"</td></tr>";
+    }).join("");
+    res.send(
+      "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"+
+      "<div style='font-family:-apple-system,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#16202E'>"+
+      "<h1 style='font-size:20px'>PracticeHub patient fields \u2014 "+esc(clinic)+"</h1>"+
+      "<p style='color:#64748b;font-size:13px'>Every field returned for this clinic\u2019s patients (up to 3 example values each), sampled from "+patients.length.toLocaleString('en-US')+" patients. Green = likely city, blue = likely date of birth, amber = likely status. Copy this page (or just the highlighted rows) back to me and I\u2019ll lock the demographics page onto the exact fields.</p>"+
+      "<table style='border-collapse:collapse;font-size:13px;width:100%'>"+
+      "<tr><th style='text-align:left;padding:4px 12px 8px 0;border-bottom:1px solid #e5e7eb'>field</th><th style='text-align:left;padding:4px 0 8px;border-bottom:1px solid #e5e7eb'>example values</th></tr>"+
+      rows+"</table>"+
+      addrHtml+
+      "<p style='margin-top:16px'><a href='/demographics' style='color:#2563EB'>\u2190 back to demographics</a></p></div>"
+    );
+  }catch(e){ res.send("error: "+e.message); }
+});
+
 app.get("/demographics", gate, (req,res)=>{
   const clinics = Object.keys(CLINICS);
   const CSS = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:940px;margin:24px auto;padding:0 16px;color:#16202E}"+
@@ -5431,8 +5541,7 @@ app.get("/demographics", gate, (req,res)=>{
     ".rg .bar{flex:1;background:#f1f5f9;border-radius:6px;height:20px;overflow:hidden}.rg .bar>div{height:100%;background:#2563eb;border-radius:6px}"+
     ".rg .vl{width:118px;text-align:right;font-size:12.5px;color:#475569}"+
     ".warn{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#92400e;margin-bottom:14px}"+
-    ".diag{color:#64748b;font-size:12px;margin-bottom:14px}"+
-    ".legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.5}a{color:#2563EB}";
+    ".diag{color:#64748b;font-size:12px;margin-bottom:14px}a{color:#2563EB}";
   res.send(
     "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Patient demographics \u2014 Posturefixx</title>"+
     "<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'></script><style>"+CSS+"</style></head><body>"+
@@ -5476,8 +5585,9 @@ app.get("/demographics", gate, (req,res)=>{
       "if(d.all.withAge/total<0.5)msgs.push('date-of-birth found for only '+pctf(100*d.all.withAge/total)+' of patients');"+
       "if(d.counts.unknown/total>0.5)msgs.push('active/inactive found for only '+pctf(100*(total-d.counts.unknown)/total)+' of patients');"+
       "var f=d.fields||{};var matched=\"Matched fields \u2014 city: \"+(f.city||'none')+\" \u00b7 date of birth: \"+(f.dob||'none')+\" \u00b7 active flag: \"+(f.active||'none')+\".\";"+
-      "var link=\"<a href='/demographics/data?clinic=\"+SEL+\"&debug=1'>see raw fields</a>\";"+
-      "if(msgs.length){el('warn').innerHTML=\"<div class='warn'>Heads up \u2014 \"+msgs.join('; ')+\". \"+matched+\" If that looks wrong, open \"+link+\" and send me the field names \u2014 I\\u2019ll lock onto them.</div>\";}"+
+      "if(f.citySource){matched=matched+\" Cities via \"+f.citySource+\".\";}"+"if(!f.city&&!f.citySource&&f.cityCandidates&&f.cityCandidates.length){matched=matched+\" Possible city fields seen: \"+f.cityCandidates.join(', ')+\".\";}"+
+      "var link=\"<a href='/demographics/fields?clinic=\"+SEL+\"'>see all PracticeHub fields</a>\";"+
+      "if(msgs.length){el('warn').innerHTML=\"<div class='warn'>Heads up \u2014 \"+msgs.join('; ')+\". \"+matched+\" Open \"+link+\" and send it back \u2014 I\\u2019ll lock onto the right fields.</div>\";}"+
       "else{el('warn').innerHTML=\"<div class='diag'>\"+matched+\" \u00b7 \"+link+\"</div>\";}}"+
     "function renderAll(){renderKpis();segs();renderCities();renderAges();renderDiag();}"+
     "function load(){el('kpis').innerHTML=\"<div class='kpi'><b>\\u2026</b><span>reading PracticeHub\\u2026</span></div>\";el('cities').innerHTML='';el('citiesNote').innerHTML='';el('ageNote').innerHTML='';el('warn').innerHTML='';if(CH){CH.destroy();CH=null;}"+
