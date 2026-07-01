@@ -5046,6 +5046,7 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   
   card("/coach","Coach the chiros","Drafts a warm SMS to each chiropractor toward your target. You review before it sends."),
   card("/pva","PVA / retention","Retention per chiropractor, month by month, with good/improve highlights for each."),
+  card("/plan-through","\ud83d\udd01 Plan-through","After a processed first intake, what % of patients book a next appointment \u2014 per month, per clinic, per practitioner \u2014 plus follow-ups planned vs attended."),
   card("/ca","CA dashboard (Renata)","Script-adherence tracker: doorplannen %, package conversion and avg appts per CA, with coaching drafts."),
   card("/ca-targets","CA doorplannen targets","Move the revenue slider \\u2014 the intakes &amp; care-starts each CA must book scale with it, against the 5 doorplannen KPIs."),
   card("/kpi-goal","Weekly KPI \\u2014 road to \\u20ac1M","All clinics combined: weekly paid visits &amp; PVA vs the \\u20ac1,000,000 pace, scored red/green weekly, with a Monday SMS summary.")
@@ -5594,6 +5595,153 @@ app.get("/demographics", gate, (req,res)=>{
       "if(CACHE[SEL]){renderAll();return;}"+
       "fetch('/demographics/data?clinic='+encodeURIComponent(SEL)).then(function(r){return r.json();}).then(function(d){CACHE[SEL]=d;renderAll();}).catch(function(e){CACHE[SEL]={error:String(e)};renderAll();});}"+
     "tabs();segs();load();"+
+    "</script></body></html>"
+  );
+});
+
+// ============================================================================
+//  /plan-through — after a patient's FIRST processed intake, did they book a
+//  next appointment? Per month, per clinic, and per practitioner.
+//    • Cohort  = each patient's first PROCESSED intake (status "processed", not
+//      cancelled, not a telephone intake — uses the same isIntake/isPhone rules
+//      as the rest of the dashboard).
+//    • Planned through = that patient has >=1 later appointment that is NOT
+//      cancelled and NOT an "afzegging" type.
+//    • Chart 2 = for the planned-through cohort, follow-ups PLANNED (booked, not
+//      cancelled/afzegging) vs PROCESSED (actually attended).
+//  Cached 1h per clinic+window. First load pages through the appointment history
+//  so it can take ~20-40s, then it's instant.
+// ============================================================================
+const _ptCache = {};
+const ptAfzeg = (n) => /afzeg/i.test(String(n||""));
+function ptNorm(s){ return String(s==null?"":s).slice(0,19).replace("T"," "); }
+function ptMonthLabel(key){ const a=String(key).split("-"); const nm=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return (nm[(+a[1])-1]||"?")+" "+a[0]; }
+function ptMonthsRange(back, fwd){
+  const now=new Date(); const s=new Date(now); s.setMonth(s.getMonth()-back); const e=new Date(now); e.setMonth(e.getMonth()+(fwd||0));
+  const f=d=>d.toISOString().slice(0,19).replace("T"," "); return "between:"+f(s)+","+f(e);
+}
+function ptPct(n,d){ return d ? Math.round(1000*n/d)/10 : 0; }
+
+async function computePlanThrough(clinic, monthsBack){
+  monthsBack = monthsBack || 6;
+  const names = await practitionerMap(clinic);
+  const types = await phubAll(clinic, "/appointment_types", {}).catch(()=>[]);
+  const intakeIds=new Set(), afzegIds=new Set();
+  for(const t of types){ if(isIntake(t.name||"")) intakeIds.add(t.id); if(ptAfzeg(t.name||"")) afzegIds.add(t.id); }
+  // Pull one buffer month extra (to spot a true first intake) and 4 months forward (future bookings).
+  const appts = await phubAll(clinic, "/appointments", { start: ptMonthsRange(monthsBack+1, 4) });
+  // de-dupe by id, keep the non-cancelled version
+  const byId=new Map();
+  for(const a of appts){ const prev=byId.get(a.id); const cancelled=a.status==="cancelled"||!!a.cancelDate; if(!prev||(prev.cancelled&&!cancelled)) byId.set(a.id,{...a,cancelled}); }
+  // group each patient's appointments
+  const byPatient={};
+  for(const a of byId.values()){ if(a.patient_id==null) continue;
+    (byPatient[a.patient_id]=byPatient[a.patient_id]||[]).push({
+      t: ptNorm(a.start), status:a.status, cancelled:a.cancelled, pid:a.practitioner_id,
+      isIntake:intakeIds.has(a.appointment_type_id), isAfzeg:afzegIds.has(a.appointment_type_id) });
+  }
+  const cutoff=(()=>{ const d=new Date(); d.setMonth(d.getMonth()-monthsBack); return d.toISOString().slice(0,7); })();
+  const clinicMonths={}, byPrac={}, monthSet=new Set();
+  for(const key of Object.keys(byPatient)){
+    const list=byPatient[key].sort((x,y)=> x.t<y.t?-1:(x.t>y.t?1:0));
+    const intake=list.find(a=> a.isIntake && a.status==="processed" && !a.cancelled);
+    if(!intake || !intake.t) continue;
+    const month=intake.t.slice(0,7);
+    if(month<cutoff) continue;                                   // buffer month only used to detect first intake
+    const subs=list.filter(a=> a.t>intake.t && !a.cancelled && !a.isAfzeg);
+    const plannedThrough=subs.length>=1, planned=subs.length, processed=subs.filter(a=>a.status==="processed").length;
+    monthSet.add(month);
+    const cm=(clinicMonths[month]=clinicMonths[month]||{intakes:0,plannedThrough:0,planned:0,processed:0});
+    cm.intakes++; if(plannedThrough) cm.plannedThrough++; cm.planned+=planned; cm.processed+=processed;
+    const pr=(byPrac[intake.pid]=byPrac[intake.pid]||{id:intake.pid,name:names[intake.pid]||("#"+intake.pid),intakes:0,plannedThrough:0,planned:0,processed:0,months:{}});
+    pr.intakes++; if(plannedThrough) pr.plannedThrough++; pr.planned+=planned; pr.processed+=processed;
+    const pm=(pr.months[month]=pr.months[month]||{intakes:0,plannedThrough:0,planned:0,processed:0});
+    pm.intakes++; if(plannedThrough) pm.plannedThrough++; pm.planned+=planned; pm.processed+=processed;
+  }
+  const monthKeys=[...monthSet].sort();
+  const months=monthKeys.map(k=>({ key:k, label:ptMonthLabel(k), intakes:clinicMonths[k].intakes, plannedThrough:clinicMonths[k].plannedThrough, planned:clinicMonths[k].planned, processed:clinicMonths[k].processed, pct:ptPct(clinicMonths[k].plannedThrough,clinicMonths[k].intakes) }));
+  const practitioners=Object.values(byPrac).map(p=>({ id:p.id, name:p.name, intakes:p.intakes, plannedThrough:p.plannedThrough, planned:p.planned, processed:p.processed, pct:ptPct(p.plannedThrough,p.intakes), months:p.months })).sort((a,b)=>b.intakes-a.intakes);
+  const tI=months.reduce((s,m)=>s+m.intakes,0), tP=months.reduce((s,m)=>s+m.plannedThrough,0), tPl=months.reduce((s,m)=>s+m.planned,0), tPr=months.reduce((s,m)=>s+m.processed,0);
+  return { clinic, monthsBack, monthKeys, months, practitioners,
+    totals:{ intakes:tI, plannedThrough:tP, notPlanned:tI-tP, pct:ptPct(tP,tI), planned:tPl, processed:tPr, keptPct:ptPct(tPr,tPl) } };
+}
+
+app.get("/plan-through/data", gate, async (req,res)=>{
+  const clinic = req.query.clinic || "Amstelveen";
+  if(!CLINICS[clinic]) return res.json({ error: "unknown clinic \u201c"+clinic+"\u201d" });
+  const monthsBack = Math.max(1, Math.min(18, parseInt(req.query.months)||6));
+  try{
+    const ck = "pt|"+clinic+"|"+monthsBack;
+    if(_ptCache[ck] && Date.now()-_ptCache[ck].t < 3600000) return res.json(_ptCache[ck].v);
+    const out = await computePlanThrough(clinic, monthsBack);
+    _ptCache[ck] = { t: Date.now(), v: out };
+    res.json(out);
+  }catch(e){ res.json({ error: e.message, clinic }); }
+});
+
+app.get("/plan-through", gate, (req,res)=>{
+  const clinics = Object.keys(CLINICS);
+  const CSS = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}"+
+    ".tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:600}.tab.on{background:#16202E;color:#fff}"+
+    ".kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi{flex:1;min-width:120px;border:1px solid #e5e7eb;border-radius:12px;padding:14px}.kpi b{font-size:22px;display:block}.kpi span{font-size:12px;color:#64748b}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}.card h3{margin:0 0 10px;font-size:15px}"+
+    ".sel{margin-bottom:12px}.sel label{font-size:12.5px;color:#64748b;margin-right:8px}select{font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid #d1d5db}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #f1f5f9}th{color:#64748b;font-weight:600}"+
+    "tr.prow{cursor:pointer}tr.prow:hover{background:#f8fafc}tr.prow.on{background:#eff6ff}"+
+    ".pill{display:inline-block;min-width:44px;text-align:center;padding:2px 8px;border-radius:999px;font-weight:600;font-size:12px}"+
+    ".legend{color:#64748b;font-size:12px;margin-top:10px;line-height:1.5}a{color:#2563EB}";
+  res.send(
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Plan-through \u2014 Posturefixx</title>"+
+    "<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'></script><style>"+CSS+"</style></head><body>"+
+    "<h1>Plan-through after intake</h1>"+
+    "<div class=sub>Of the patients whose <b>first intake was processed</b> (attended, not cancelled, not a telephone intake), how many booked at least one next appointment (not cancelled, not an afzegging)? Per month, per clinic, per practitioner. First load per clinic can take ~20\u201340s, then it\u2019s cached for an hour.</div>"+
+    "<div class=tabs id=tabs></div>"+
+    "<div id=warn></div>"+
+    "<div class=sel><label>Practitioner</label><select id=prac></select><span id=win style='font-size:12px;color:#94a3b8;margin-left:10px'></span></div>"+
+    "<div class=kpis id=kpis></div>"+
+    "<div class=card><h3>Plan-through rate by month</h3><canvas id=rateChart height=110></canvas><div class=legend id=rateNote></div></div>"+
+    "<div class=card><h3>Follow-ups planned vs processed (plan-through cohort)</h3><canvas id=ppChart height=110></canvas><div class=legend id=ppNote></div></div>"+
+    "<div class=card><h3>By practitioner</h3><div id=ptable></div></div>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/scorecard'>/scorecard</a> \u00b7 <a href='/pva'>/pva</a> \u00b7 <a href='/ca'>/ca</a></p>"+
+    "<script>"+
+    "var CLINICS="+JSON.stringify(clinics)+";var SEL=CLINICS[0];var PRAC='all';var CACHE={};var C1=null,C2=null;"+
+    "function el(id){return document.getElementById(id);}"+
+    "function ptLabel(k){var a=String(k).split('-');var nm=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return (nm[(+a[1])-1]||'?')+' '+a[0];}"+
+    "function tabs(){el('tabs').innerHTML=CLINICS.map(function(c){return \"<div class='tab\"+(c===SEL?' on':'')+\"' data-c='\"+c+\"'>\"+c+\"</div>\";}).join('');Array.prototype.forEach.call(el('tabs').querySelectorAll('.tab'),function(b){b.onclick=function(){SEL=b.getAttribute('data-c');PRAC='all';tabs();load();};});}"+
+    "function pracOptions(){var d=CACHE[SEL];if(!d||d.error){el('prac').innerHTML=\"<option value=all>All practitioners</option>\";return;}"+
+      "var o=\"<option value=all>All practitioners (clinic)</option>\";for(var i=0;i<d.practitioners.length;i++){var p=d.practitioners[i];o=o+\"<option value='\"+p.id+\"'\"+(String(p.id)===String(PRAC)?' selected':'')+\">\"+p.name+\" (\"+p.intakes+\" intakes)</option>\";}el('prac').innerHTML=o;"+
+      "el('prac').onchange=function(){PRAC=el('prac').value;draw();};}"+
+    "function scopeMonths(d){if(PRAC==='all')return d.months;var p=null;for(var i=0;i<d.practitioners.length;i++){if(String(d.practitioners[i].id)===String(PRAC))p=d.practitioners[i];}if(!p)return d.months;"+
+      "return d.monthKeys.map(function(k){var m=p.months[k]||{intakes:0,plannedThrough:0,planned:0,processed:0};return {key:k,label:ptLabel(k),intakes:m.intakes,plannedThrough:m.plannedThrough,planned:m.planned,processed:m.processed,pct:m.intakes?Math.round(1000*m.plannedThrough/m.intakes)/10:0};});}"+
+    "function sum(ms,f){var s=0;for(var i=0;i<ms.length;i++)s+=f(ms[i]);return s;}"+
+    "function renderKpis(){var d=CACHE[SEL];if(!d)return;if(d.error){el('kpis').innerHTML=\"<div class='kpi' style='color:#dc2626'>Couldn\\u2019t load \"+SEL+\": \"+d.error+\"</div>\";return;}"+
+      "var ms=scopeMonths(d);var I=sum(ms,function(m){return m.intakes;}),P=sum(ms,function(m){return m.plannedThrough;}),PL=sum(ms,function(m){return m.planned;}),PR=sum(ms,function(m){return m.processed;});"+
+      "el('kpis').innerHTML=\"<div class='kpi'><b>\"+I+\"</b><span>processed intakes</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+P+\"</b><span>planned through</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+(I-P)+\"</b><span>no next appt</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+(I?Math.round(1000*P/I)/10:0)+\"%</b><span>plan-through rate</span></div>\"+"+
+      "\"<div class='kpi'><b>\"+(PL?Math.round(1000*PR/PL)/10:0)+\"%</b><span>follow-ups kept</span></div>\";}"+
+    "function renderRate(){var d=CACHE[SEL];if(!d||d.error)return;var ms=scopeMonths(d);var labels=ms.map(function(m){return m.label;});var pct=ms.map(function(m){return m.pct;});var intk=ms.map(function(m){return m.intakes;});var pt=ms.map(function(m){return m.plannedThrough;});"+
+      "if(C1){C1.destroy();C1=null;}"+
+      "if(typeof Chart!=='undefined'){C1=new Chart(el('rateChart'),{type:'bar',data:{labels:labels,datasets:[{label:'Plan-through %',data:pct,backgroundColor:'#2563eb',borderRadius:4}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return pt[c.dataIndex]+' of '+intk[c.dataIndex]+' intakes \u00b7 '+c.parsed.y+'%';}}}},scales:{y:{beginAtZero:true,max:100,title:{display:true,text:'% planned through'}}}}});}"+
+      "el('rateNote').textContent='Each bar = share of that month\\u2019s processed intakes who booked at least one next appointment.';}"+
+    "function renderPP(){var d=CACHE[SEL];if(!d||d.error)return;var ms=scopeMonths(d);var labels=ms.map(function(m){return m.label;});var pl=ms.map(function(m){return m.planned;});var pr=ms.map(function(m){return m.processed;});"+
+      "if(C2){C2.destroy();C2=null;}"+
+      "if(typeof Chart!=='undefined'){C2=new Chart(el('ppChart'),{type:'bar',data:{labels:labels,datasets:[{label:'Planned (booked)',data:pl,backgroundColor:'#2563eb',borderRadius:3},{label:'Processed (attended)',data:pr,backgroundColor:'#10b981',borderRadius:3}]},options:{responsive:true,plugins:{legend:{display:true}},scales:{y:{beginAtZero:true,title:{display:true,text:'follow-up appointments'}}}}});}"+
+      "var PL=sum(ms,function(m){return m.planned;}),PR=sum(ms,function(m){return m.processed;});"+
+      "el('ppNote').textContent='For patients who planned through: '+PL+' follow-up appointments booked, '+PR+' attended so far ('+(PL?Math.round(1000*PR/PL)/10:0)+'% kept). Blue = planned, green = processed.';}"+
+    "function renderTable(){var d=CACHE[SEL];if(!d||d.error){el('ptable').innerHTML='';return;}"+
+      "var rows=d.practitioners.map(function(p){var on=(String(p.id)===String(PRAC))?' on':'';var col=p.pct>=70?'#16a34a':(p.pct>=50?'#d97706':'#dc2626');"+
+      "return \"<tr class='prow\"+on+\"' data-id='\"+p.id+\"'><td>\"+p.name+\"</td><td>\"+p.intakes+\"</td><td>\"+p.plannedThrough+\"</td><td>\"+(p.intakes-p.plannedThrough)+\"</td><td><span class=pill style='background:\"+col+\"22;color:\"+col+\"'>\"+p.pct+\"%</span></td></tr>\";}).join('');"+
+      "el('ptable').innerHTML=\"<table><tr><th>Practitioner</th><th>Intakes</th><th>Planned through</th><th>No next appt</th><th>Rate</th></tr>\"+rows+\"</table>\";"+
+      "Array.prototype.forEach.call(el('ptable').querySelectorAll('.prow'),function(r){r.onclick=function(){PRAC=r.getAttribute('data-id');pracOptions();draw();};});}"+
+    "function draw(){renderKpis();renderRate();renderPP();renderTable();"+
+      "el('win').textContent=(CACHE[SEL]&&!CACHE[SEL].error)?('last '+CACHE[SEL].monthsBack+' months'):'';}"+
+    "function load(){el('kpis').innerHTML=\"<div class='kpi'><b>\\u2026</b><span>reading PracticeHub\\u2026</span></div>\";el('warn').innerHTML='';if(C1){C1.destroy();C1=null;}if(C2){C2.destroy();C2=null;}el('ptable').innerHTML='';"+
+      "if(CACHE[SEL]){pracOptions();draw();return;}"+
+      "fetch('/plan-through/data?clinic='+encodeURIComponent(SEL)).then(function(r){return r.json();}).then(function(d){CACHE[SEL]=d;if(d.error){el('warn').innerHTML=\"<div style='background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:11px 13px;font-size:12.5px;color:#92400e'>Couldn\\u2019t load \"+SEL+\": \"+d.error+\"</div>\";}pracOptions();draw();}).catch(function(e){CACHE[SEL]={error:String(e)};pracOptions();draw();});}"+
+    "tabs();load();"+
     "</script></body></html>"
   );
 });
