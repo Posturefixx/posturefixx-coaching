@@ -5296,6 +5296,55 @@ function demoBucketIndex(age){ for(let i=0;i<DEMO_BUCKETS.length;i++){ if(age>=D
 const DEMO_CITY_RE = /(^|[_\s])(city|town|plaats|woonplaats|residence|residentie|locality|gemeente|stad)([_\s]|$)/i;
 const DEMO_DOB_RE  = /(^|[_\s])(date_?of_?birth|dob|birth_?date|birthday|geboortedatum|geboorte|born)([_\s]|$)/i;
 const DEMO_STAT_RE = /(^|[_\s])(active|is_?active|actief|inactive|inactief|archived|discharged|status|patient_?status|state)([_\s]|$)/i;
+const DEMO_PC_KEY_RE=/(^|[_\s])(postcode|post_code|postal_code|postalcode|zip|zipcode|zip_code|pc)([_\s]|$)/i;
+// PC4 (first 4 digits of the Dutch postcode) -> neighbourhood, per city. Ranges are
+// approximate stadsdeel/wijk groupings for Amsterdam, Rotterdam and Utrecht — edit
+// the names/ranges freely; anything outside a range shows as "Other <city>".
+const DEMO_NBH = {
+  "Amsterdam": [
+    {lo:1011,hi:1018,name:"Centrum"}, {lo:1019,hi:1019,name:"Oost \u2013 Zeeburg"},
+    {lo:1021,hi:1037,name:"Noord"}, {lo:1041,hi:1049,name:"Westpoort / Sloterdijk"},
+    {lo:1051,hi:1059,name:"West"}, {lo:1060,hi:1069,name:"Nieuw-West"},
+    {lo:1070,hi:1071,name:"Zuid \u2013 Oud-Zuid"}, {lo:1072,hi:1074,name:"Zuid \u2013 De Pijp"},
+    {lo:1075,hi:1077,name:"Zuid \u2013 Apollo/Stadion"}, {lo:1078,hi:1080,name:"Zuid \u2013 Rivierenbuurt"},
+    {lo:1081,hi:1083,name:"Zuid \u2013 Buitenveldert/Zuidas"}, {lo:1086,hi:1087,name:"Oost \u2013 IJburg"},
+    {lo:1090,hi:1099,name:"Oost"}, {lo:1100,hi:1109,name:"Zuidoost (Bijlmer)"}
+  ],
+  "Rotterdam": [
+    {lo:3011,hi:3016,name:"Centrum"}, {lo:3021,hi:3029,name:"Delfshaven"},
+    {lo:3031,hi:3039,name:"Noord"}, {lo:3041,hi:3047,name:"Overschie"},
+    {lo:3051,hi:3056,name:"Hillegersberg-Schiebroek"}, {lo:3061,hi:3065,name:"Kralingen-Crooswijk"},
+    {lo:3066,hi:3069,name:"Prins Alexander"}, {lo:3071,hi:3079,name:"Feijenoord / IJsselmonde"},
+    {lo:3081,hi:3089,name:"Charlois"}
+  ],
+  "Utrecht": [
+    {lo:3511,hi:3512,name:"Binnenstad"}, {lo:3513,hi:3515,name:"Noordoost"},
+    {lo:3521,hi:3526,name:"Zuidwest (Kanaleneiland)"}, {lo:3527,hi:3527,name:"Zuid (Hoograven)"},
+    {lo:3531,hi:3534,name:"West (Lombok/Oog in Al)"}, {lo:3541,hi:3546,name:"Leidsche Rijn"},
+    {lo:3551,hi:3555,name:"Noordwest (Zuilen)"}, {lo:3561,hi:3566,name:"Overvecht"},
+    {lo:3571,hi:3585,name:"Oost"}
+  ]
+};
+function demoDeepFindVal(obj, re, depth){
+  if(!obj || typeof obj!=="object" || depth>4) return null;
+  for(const k of Object.keys(obj)){ const v=obj[k]; if(typeof v==="string" && re.test(v)) return v; }
+  for(const k of Object.keys(obj)){ const v=obj[k]; if(v && typeof v==="object"){ const r=demoDeepFindVal(v, re, (depth||0)+1); if(r) return r; } }
+  return null;
+}
+function demoPC4(p){
+  if(!p || typeof p!=="object") return null;
+  let raw = demoDeepFind(p, DEMO_PC_KEY_RE, 0);
+  if(raw){ const m=String(raw).match(/(\d{4})/); if(m) return +m[1]; }
+  const v = demoDeepFindVal(p, /\b\d{4}\s?[A-Za-z]{2}\b/, 0);
+  if(v){ const m=String(v).match(/(\d{4})/); if(m) return +m[1]; }
+  return null;
+}
+function demoNeighborhood(city, pc4){
+  if(!pc4) return null;
+  const map = DEMO_NBH[city]; if(!map) return null;
+  for(const r of map){ if(pc4>=r.lo && pc4<=r.hi) return r.name; }
+  return "Other "+city;
+}
 
 // Walk an object (max depth 4) and return the first string/number value whose KEY matches re.
 function demoDeepFind(obj, re, depth){
@@ -5362,15 +5411,23 @@ function demoFlag(v){
   if(["0","false","no","n","inactive","inactief"].includes(s)) return false;
   return null;
 }
-function demoActive(p){
+const DEMO_NEXT_KEYS=["next_appt","next_appointment","nextAppointment","next_visit","volgende_afspraak"];
+const DEMO_LAST_KEYS=["last_appt","last_appointment","lastAppointment","last_visit","last_seen","laatste_afspraak"];
+function demoApptDate(p, keys){ if(!p||typeof p!=="object") return null; for(const k of keys){ if(p[k]!=null && String(p[k]).trim()){ const d=demoParseDate(p[k]); if(d) return d; } } return null; }
+// Active = an upcoming appointment, or seen within the recency window. This is the
+// clinical meaning of an active patient (recall_status/communication_status are
+// messaging fields, not activity).
+function demoActive(p, asOf, cutoff){
   if(!p || typeof p!=="object") return null;
-  for(const k of ["active","is_active","isActive","enabled","actief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return t; } }
-  for(const k of ["inactive","is_inactive","archived","is_archived","deleted","discharged","inactief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return !t; } }
-  const st = String(p.status||p.patient_status||p.state||(p.details&&p.details.status)||"").toLowerCase().trim();
-  if(st){
-    if(/inactiv|inactief|archiv|discharg|uitgeschr|overled|deceased|former|closed|left|stopped|dismiss/.test(st)) return false;
-    if(/activ|actief|current|ingeschr|enrolled|\bopen\b/.test(st)) return true;
-  }
+  asOf = asOf || new Date();
+  const next = demoApptDate(p, DEMO_NEXT_KEYS);
+  const last = demoApptDate(p, DEMO_LAST_KEYS);
+  if(next && next.getTime() >= asOf.getTime()) return true;     // upcoming booking
+  if(cutoff && last && last.getTime() >= cutoff.getTime()) return true;  // seen within window
+  if(next || last) return false;                                // has appt history but stale -> inactive
+  // no appointment dates on the record: fall back to an explicit boolean flag only
+  for(const k of ["active","is_active","isActive","actief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return t; } }
+  for(const k of ["inactive","is_inactive","archived","discharged","inactief"]){ if(p[k]!=null){ const t=demoFlag(p[k]); if(t!=null) return !t; } }
   return null;
 }
 
@@ -5392,24 +5449,32 @@ function demoAggregate(patients, asOf){
   asOf = asOf || new Date();
   const cityCount = {}; let withCity=0, withAge=0, ageSum=0;
   const buckets = DEMO_BUCKETS.map(b=>({ label:demoBucketLabel(b[0],b[1]), n:0 }));
+  const nbhByCity={}, nbhTot={};
   for(const p of (patients||[])){
-    const city = demoCity(p); if(city){ withCity++; cityCount[city]=(cityCount[city]||0)+1; }
+    const city = demoCity(p); if(city){ withCity++; cityCount[city]=(cityCount[city]||0)+1;
+      if(DEMO_NBH[city]){ const nb=demoNeighborhood(city, demoPC4(p)); if(nb){ (nbhByCity[city]=nbhByCity[city]||{})[nb]=(nbhByCity[city][nb]||0)+1; nbhTot[city]=(nbhTot[city]||0)+1; } } }
     const age = demoAge(p, asOf); if(age!=null){ withAge++; ageSum+=age; const bi=demoBucketIndex(age); if(bi>=0) buckets[bi].n++; }
   }
   const cities = Object.keys(cityCount)
     .map(c=>({ city:c, n:cityCount[c], pct: withCity? Math.round(1000*cityCount[c]/withCity)/10 : 0 }))
     .sort((a,b)=>b.n-a.n);
+  const nbh={};
+  for(const c of Object.keys(nbhByCity)){
+    const items=Object.keys(nbhByCity[c]).map(n=>({ name:n, n:nbhByCity[c][n], pct: nbhTot[c]?Math.round(1000*nbhByCity[c][n]/nbhTot[c])/10:0 })).sort((a,b)=>b.n-a.n);
+    nbh[c]={ total:nbhTot[c], items };
+  }
   return {
     total:(patients||[]).length, withCity, withAge,
     avgAge: withAge ? Math.round(10*ageSum/withAge)/10 : null,
     topCities: cities.slice(0,5), otherCitiesCount: Math.max(0, cities.length-5),
     otherCitiesPatients: cities.slice(5).reduce((s,c)=>s+c.n,0), distinctCities: cities.length,
     ageBuckets: buckets.map(b=>({ label:b.label, n:b.n, pct: withAge? Math.round(1000*b.n/withAge)/10 : 0 })),
+    nbh,
   };
 }
-function demoSegment(patients, asOf){
+function demoSegment(patients, asOf, cutoff){
   const act=[], inact=[]; let unknown=0;
-  for(const p of (patients||[])){ const s=demoActive(p); if(s===true) act.push(p); else if(s===false) inact.push(p); else unknown++; }
+  for(const p of (patients||[])){ const s=demoActive(p, asOf, cutoff); if(s===true) act.push(p); else if(s===false) inact.push(p); else unknown++; }
   return {
     counts:{ total:(patients||[]).length, active:act.length, inactive:inact.length, unknown },
     all: demoAggregate(patients, asOf), active: demoAggregate(act, asOf), inactive: demoAggregate(inact, asOf),
@@ -5447,7 +5512,8 @@ app.get("/demographics/data", gate, async (req,res)=>{
   if(!CLINICS[clinic]) return res.json({ error: "unknown clinic \u201c"+clinic+"\u201d" });
   const debug = req.query.debug==="1";
   try{
-    const ck = "demo|"+clinic;
+    const activeMonths = Math.max(1, Math.min(60, parseInt(req.query.activeMonths)||6));
+    const ck = "demo|"+clinic+"|"+activeMonths;
     if(!debug && _demoCache[ck] && Date.now()-_demoCache[ck].t < 3600000) return res.json(_demoCache[ck].v);
     const patients = await phubAll(clinic, "/patients", {});
     // If the patient list barely carries a city, pull addresses in bulk and join by id.
@@ -5463,9 +5529,12 @@ app.get("/demographics/data", gate, async (req,res)=>{
         }
       }catch(e){ /* keep going without city */ }
     } else if(listWithCity){ citySource = "patient record"; }
-    const seg = demoSegment(patients, new Date());
+    const asOf = new Date(); const cutoff = new Date(asOf); cutoff.setMonth(cutoff.getMonth()-activeMonths);
+    const seg = demoSegment(patients, asOf, cutoff);
     const det = demoDetectFields(patients);
     det.citySource = (patients.some(p=>p.__city) ? citySource : (patients.some(p=>demoCity(p)) ? "patient record" : null));
+    det.activeMonths = activeMonths;
+    det.activeBasis = (patients.some(p=>demoApptDate(p,DEMO_NEXT_KEYS)||demoApptDate(p,DEMO_LAST_KEYS)) ? ("upcoming appt or seen \u2264"+activeMonths+" mo") : (det.active||null));
     const out = { clinic, counts:seg.counts, all:seg.all, active:seg.active, inactive:seg.inactive,
       fields: det, sampleKeys: patients.length ? Object.keys(patients[0]) : [] };
     if(debug){ out.sample = patients.slice(0,3); }
@@ -5552,14 +5621,15 @@ app.get("/demographics", gate, (req,res)=>{
     "<div id=warn></div>"+
     "<div class=kpis id=kpis></div>"+
     "<div class=card><div class=chead><h3>Top 5 cities \u2014 share of patients</h3><div class=segrow id=segs></div></div><div id=cities></div><div class=legend id=citiesNote></div></div>"+
+    "<div class=card id=nbhwrap style='display:none'><div class=chead><h3>Neighbourhoods (by postcode)</h3><select id=nbhcity style='font-size:13px;padding:5px 9px;border-radius:8px;border:1px solid #d1d5db'></select></div><div id=nbh></div><div class=legend id=nbhNote></div></div>"+
     "<div class=card><h3>Age distribution \u2014 active vs inactive</h3><canvas id=ageChart height=120 style='margin-top:10px'></canvas><div class=legend id=ageNote></div></div>"+
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/marketing'>/marketing</a> \u00b7 <a href='/meta-leads'>/meta-leads</a> \u00b7 <a href='/scorecard'>/scorecard</a></p>"+
     "<script>"+
-    "var CLINICS="+JSON.stringify(clinics)+";var SEL=CLINICS[0];var SEG='all';var CH=null;var CACHE={};"+
+    "var CLINICS="+JSON.stringify(clinics)+";var SEL=CLINICS[0];var SEG='all';var NBHCITY=null;var CH=null;var CACHE={};"+
     "function el(id){return document.getElementById(id);}"+
     "function pctf(n){return (Math.round(n*10)/10)+'%';}"+
-    "function tabs(){el('tabs').innerHTML=CLINICS.map(function(c){return \"<div class='tab\"+(c===SEL?' on':'')+\"' data-c='\"+c+\"'>\"+c+\"</div>\";}).join('');Array.prototype.forEach.call(el('tabs').querySelectorAll('.tab'),function(b){b.onclick=function(){SEL=b.getAttribute('data-c');SEG='all';tabs();load();};});}"+
-    "function segs(){var S=[['all','All'],['active','Active'],['inactive','Inactive']];el('segs').innerHTML=S.map(function(s){return \"<button class='seg\"+(s[0]===SEG?' on':'')+\"' data-s='\"+s[0]+\"'>\"+s[1]+\"</button>\";}).join('');Array.prototype.forEach.call(el('segs').querySelectorAll('.seg'),function(b){b.onclick=function(){SEG=b.getAttribute('data-s');segs();renderCities();};});}"+
+    "function tabs(){el('tabs').innerHTML=CLINICS.map(function(c){return \"<div class='tab\"+(c===SEL?' on':'')+\"' data-c='\"+c+\"'>\"+c+\"</div>\";}).join('');Array.prototype.forEach.call(el('tabs').querySelectorAll('.tab'),function(b){b.onclick=function(){SEL=b.getAttribute('data-c');SEG='all';NBHCITY=null;tabs();load();};});}"+
+    "function segs(){var S=[['all','All'],['active','Active'],['inactive','Inactive']];el('segs').innerHTML=S.map(function(s){return \"<button class='seg\"+(s[0]===SEG?' on':'')+\"' data-s='\"+s[0]+\"'>\"+s[1]+\"</button>\";}).join('');Array.prototype.forEach.call(el('segs').querySelectorAll('.seg'),function(b){b.onclick=function(){SEG=b.getAttribute('data-s');segs();renderCities();renderNbh();};});}"+
     "function renderKpis(){var d=CACHE[SEL];if(!d)return;if(d.error){el('kpis').innerHTML=\"<div class='kpi' style='color:#dc2626'>Couldn\\u2019t load \"+SEL+\": \"+d.error+\"</div>\";return;}"+
       "el('kpis').innerHTML=\"<div class='kpi'><b>\"+d.counts.total.toLocaleString('en-US')+\"</b><span>patients on file</span></div>\"+"+
       "\"<div class='kpi'><b>\"+d.counts.active.toLocaleString('en-US')+\"</b><span>active</span></div>\"+"+
@@ -5581,16 +5651,10 @@ app.get("/demographics", gate, (req,res)=>{
       "if(typeof Chart!=='undefined'){CH=new Chart(el('ageChart'),{type:'bar',data:{labels:labels,datasets:ds},options:{responsive:true,plugins:{legend:{display:split}},scales:{x:{title:{display:true,text:'age'}},y:{beginAtZero:true,title:{display:true,text:'patients'}}}}});}"+
       "var note=d.all.withAge?(\"Ages from the \"+d.all.withAge.toLocaleString('en-US')+\" patients with a date of birth on file. Average age \"+d.all.avgAge+\".\"):\"No date-of-birth data readable for this clinic.\";"+
       "if(split){note=note+\" Blue = active, orange = inactive.\";}el('ageNote').textContent=note;}"+
-    "function renderDiag(){var d=CACHE[SEL];if(!d||d.error){el('warn').innerHTML='';return;}var total=d.counts.total||1;var msgs=[];"+
-      "if(d.all.withCity/total<0.5)msgs.push('city found for only '+pctf(100*d.all.withCity/total)+' of patients');"+
-      "if(d.all.withAge/total<0.5)msgs.push('date-of-birth found for only '+pctf(100*d.all.withAge/total)+' of patients');"+
-      "if(d.counts.unknown/total>0.5)msgs.push('active/inactive found for only '+pctf(100*(total-d.counts.unknown)/total)+' of patients');"+
-      "var f=d.fields||{};var matched=\"Matched fields \u2014 city: \"+(f.city||'none')+\" \u00b7 date of birth: \"+(f.dob||'none')+\" \u00b7 active flag: \"+(f.active||'none')+\".\";"+
-      "if(f.citySource){matched=matched+\" Cities via \"+f.citySource+\".\";}"+"if(!f.city&&!f.citySource&&f.cityCandidates&&f.cityCandidates.length){matched=matched+\" Possible city fields seen: \"+f.cityCandidates.join(', ')+\".\";}"+
-      "var link=\"<a href='/demographics/fields?clinic=\"+SEL+\"'>see all PracticeHub fields</a>\";"+
-      "if(msgs.length){el('warn').innerHTML=\"<div class='warn'>Heads up \u2014 \"+msgs.join('; ')+\". \"+matched+\" Open \"+link+\" and send it back \u2014 I\\u2019ll lock onto the right fields.</div>\";}"+
-      "else{el('warn').innerHTML=\"<div class='diag'>\"+matched+\" \u00b7 \"+link+\"</div>\";}}"+
-    "function renderAll(){renderKpis();segs();renderCities();renderAges();renderDiag();}"+
+    "function renderDiag(){var d=CACHE[SEL];if(!d||d.error){el('warn').innerHTML='';return;}var total=d.counts.total||1;var f=d.fields||{};var probs=[];if(!f.city&&!f.citySource)probs.push('city field not found');if(!f.dob)probs.push('date-of-birth field not found');if(d.counts.unknown/total>0.5)probs.push('activity undetermined for most patients');var info=\"Fields \u2014 city: \"+(f.citySource||f.city||'none')+\" \u00b7 date of birth: \"+(f.dob||'none')+\" \u00b7 activity: \"+(f.activeBasis||f.active||'none')+\".\";info=info+\" Date of birth on file for \"+pctf(100*d.all.withAge/total)+\" of patients.\";var link=\"<a href='/demographics/fields?clinic=\"+SEL+\"'>see all PracticeHub fields</a>\";if(probs.length){el('warn').innerHTML=\"<div class='warn'>Heads up \u2014 \"+probs.join('; ')+\". \"+info+\" Open \"+link+\" and send it back.</div>\";}else{el('warn').innerHTML=\"<div class='diag'>\"+info+\" \u00b7 \"+link+\"</div>\";}}"+
+    "function renderNbhSelect(){var d=CACHE[SEL];var s=(d&&!d.error)?d.all:null;var cities=s?Object.keys(s.nbh||{}):[];if(!cities.length){el('nbhwrap').style.display='none';return;}el('nbhwrap').style.display='';cities.sort(function(a,b){return (s.nbh[b].total||0)-(s.nbh[a].total||0);});if(!NBHCITY||cities.indexOf(NBHCITY)<0)NBHCITY=cities[0];el('nbhcity').innerHTML=cities.map(function(c){return \"<option\"+(c===NBHCITY?' selected':'')+\">\"+c+\"</option>\";}).join('');el('nbhcity').onchange=function(){NBHCITY=el('nbhcity').value;renderNbh();};}"+
+    "function renderNbh(){var d=CACHE[SEL];if(!d||d.error)return;var s=d[SEG]||d.all;var nb=(s.nbh||{})[NBHCITY];if(!nb||!nb.items.length){el('nbh').innerHTML=\"<div class='sub'>No postcode data readable for this segment.</div>\";el('nbhNote').innerHTML='';return;}var items=nb.items.slice(0,8);var max=items[0].pct||1;el('nbh').innerHTML=items.map(function(c){var w=max?(100*c.pct/max):0;return \"<div class='rg'><div class='nm' style='width:220px'>\"+c.name+\"</div><div class='bar'><div style='width:\"+w+\"%'></div></div><div class='vl'>\"+pctf(c.pct)+\" \u00b7 \"+c.n+\"</div></div>\";}).join('');el('nbhNote').textContent=\"Share of \"+NBHCITY+\" patients with a known postcode (\"+nb.total+\"). Neighbourhoods derived from postcode \u2014 tell me any you\\u2019d like relabelled.\";}"+
+    "function renderAll(){renderKpis();segs();renderCities();renderNbhSelect();renderNbh();renderAges();renderDiag();}"+
     "function load(){el('kpis').innerHTML=\"<div class='kpi'><b>\\u2026</b><span>reading PracticeHub\\u2026</span></div>\";el('cities').innerHTML='';el('citiesNote').innerHTML='';el('ageNote').innerHTML='';el('warn').innerHTML='';if(CH){CH.destroy();CH=null;}"+
       "if(CACHE[SEL]){renderAll();return;}"+
       "fetch('/demographics/data?clinic='+encodeURIComponent(SEL)).then(function(r){return r.json();}).then(function(d){CACHE[SEL]=d;renderAll();}).catch(function(e){CACHE[SEL]={error:String(e)};renderAll();});}"+
