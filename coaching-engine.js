@@ -832,12 +832,20 @@ async function computeWeeklyCombined(){
   const cumEur = Math.round(doneV*KPI_PRICE);
   const remainWeeks = Math.max(0, 52-doneWeeks);
   const projEur = Math.round((doneV + remainWeeks*refWkVisits)*KPI_PRICE);
+  // Coach levers: what's still needed for the 1M from HERE, holding one variable.
+  const remainEur   = Math.max(0, 1e6 - cumEur);
+  const remainVisits= Math.ceil(remainEur / KPI_PRICE);
+  const needWkVisits    = remainWeeks ? Math.ceil(remainVisits/remainWeeks) : 0;                 // catch-up pace
+  const needIntakesTotal= refPva ? Math.ceil(remainVisits/refPva) : 0;                           // lever 2 (hold PVA)
+  const needIntakesWk   = (refPva && remainWeeks) ? Math.ceil(remainVisits/remainWeeks/refPva) : 0;
+  const needPva         = (refWkIntakes && remainWeeks) ? +(remainVisits/remainWeeks/refWkIntakes).toFixed(1) : 0; // lever 3 (hold intakes)
   return {
     rows, perClinic, live,
     price: KPI_PRICE,
     ref: { wkVisits:refWkVisits, wkIntakes:refWkIntakes, pva:refPva, weeksDone:doneWeeks },
     target: { wkVisits:Math.round(targetWkVisits), wkIntakes:targetWkIntakes },
-    progress: { cumEur, pct: Math.min(100, Math.round(cumEur/1e6*100)), projEur, remainWeeks }
+    progress: { cumEur, pct: Math.min(100, Math.round(cumEur/1e6*100)), projEur, remainWeeks },
+    coach: { remainEur, remainVisits, needWkVisits, needIntakesTotal, needIntakesWk, needPva }
   };
 }
 
@@ -875,6 +883,14 @@ app.get("/kpi-goal", gate, async (req,res)=>{
       "<div class=card><div class=cl>Reference weekly intakes</div><div class=cv>"+d.ref.wkIntakes+"</div><div class=cs>avg/wk so far</div></div>"+
       "<div class=card><div class=cl>Reference weekly visits</div><div class=cv>"+d.ref.wkVisits+"</div><div class=cs>avg/wk so far</div></div>"+
       "<div class=card style='border-color:#2563EB'><div class=cl>Needed/wk for \u20ac1M</div><div class=cv>"+d.target.wkVisits+"</div><div class=cs>visits \u00b7 ~"+d.target.wkIntakes+" intakes</div></div>"+
+    "</div>"+
+    "<div class=panel><b>Coach targets \u2014 the three levers</b>"+
+      "<div class=cards style='margin:10px 0 0'>"+
+      "<div class=card><div class=cl>1 \u00b7 Weekly visits goal</div><div class=cv>"+d.target.wkVisits+"</div><div class=cs>processed visits, every week, all clinics"+((d.coach.needWkVisits>d.target.wkVisits)?(" \u00b7 catch-up pace from now: "+d.coach.needWkVisits+"/wk"):"")+"</div></div>"+
+      "<div class=card><div class=cl>2 \u00b7 Intakes still needed for \u20ac1M</div><div class=cv>"+d.coach.needIntakesTotal.toLocaleString('en-US')+"</div><div class=cs>\u2248 "+d.coach.needIntakesWk+"/wk at your current PVA of "+d.ref.pva+"</div></div>"+
+      "<div class=card><div class=cl>3 \u00b7 Required PVA from now</div><div class=cv>"+d.coach.needPva+"</div><div class=cs>at "+d.ref.wkIntakes+" intakes/wk (your average to date)</div></div>"+
+      "</div>"+
+      "<div class=sub style='margin-top:8px'>\u20ac"+d.coach.remainEur.toLocaleString('en-US')+" to go = "+d.coach.remainVisits.toLocaleString('en-US')+" more processed visits in "+d.progress.remainWeeks+" weeks. Lever 2 holds PVA steady and asks how many intakes; lever 3 holds intakes steady and asks what PVA. Telephone intakes, afzeggingen, ROF and evaluaties never count.</div>"+
     "</div>"+
     "<div class=panel><div style='display:flex;justify-content:space-between'><b>Progress to \u20ac1,000,000</b><span>\u20ac"+d.progress.cumEur.toLocaleString('en-US')+" ("+d.progress.pct+"%)</span></div>"+
       "<div class=bar><i style='width:"+d.progress.pct+"%'></i></div>"+
