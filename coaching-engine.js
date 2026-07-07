@@ -1232,7 +1232,8 @@ function parseCSV(text) {
 function parseIntakesCSV(csvText, clinic) {
   const rows = parseCSV(csvText);
   const intakes = [];
-  let cols = null, currentWeek = null;
+  let cols = null, currentWeek = null; let skippedNoCA = 0;
+  parseIntakesCSV._last = parseIntakesCSV._last || {};
   for (const r of rows) {
     if (!r || !r.length) continue;
     const cells = r.map(c => (c || "").trim());
@@ -1255,24 +1256,33 @@ function parseIntakesCSV(csvText, clinic) {
     if (obj.Name && obj.CA && obj.Name !== "Name") {
       obj.CA = normalizeCA(obj.CA);
       intakes.push(obj);
-    }
+    } else if (obj.Name && obj.Name !== "Name" && !obj.CA) { skippedNoCA++; }
   }
+  parseIntakesCSV._last[clinic] = { skippedNoCA };
   return intakes;
 }
 
 async function loadAllIntakes() {
   const all = [];
   const errors = [];
+  const meta = {};
   for (const [clinic, tab] of Object.entries(INTAKE_TABS)) {
     try {
       const csv = await fetchSheetCSV(DOORPLANNEN_SHEET, tab);
       const items = parseIntakesCSV(csv, clinic);
+      const weeks = [...new Set(items.map(i => i._week || "Unlabelled"))];
+      const wnums = weeks.map(w => (String(w).match(/(\d+)/)||[])[1]).filter(Boolean).map(Number);
+      meta[clinic] = { rows: items.length,
+        weeks: wnums.length ? ("Week "+Math.min(...wnums)+"\u2013"+Math.max(...wnums)) : (weeks.length? weeks.join(", ") : "none"),
+        unlabelled: items.filter(i => (i._week||"Unlabelled")==="Unlabelled").length,
+        skippedNoCA: (parseIntakesCSV._last[clinic]||{}).skippedNoCA || 0 };
       all.push(...items);
     } catch (e) {
       errors.push(`${clinic}: ${e.message}`);
+      meta[clinic] = { rows: 0, weeks: "fetch failed", unlabelled: 0, skippedNoCA: 0, error: e.message };
     }
   }
-  return { intakes: all, errors };
+  return { intakes: all, errors, meta };
 }
 
 // ---------- Per-CA stats ----------
@@ -1383,7 +1393,7 @@ app.get("/ca/data", gate, async (_req, res) => {
 app.get("/ca", gate, async (_req, res) => {
   let data;
   try {
-    const { intakes, errors } = await loadAllIntakes();
+    const { intakes, errors, meta } = await loadAllIntakes();
     const slim = intakes
       .filter(i => i.Name)
       .map(i => ({
@@ -1399,6 +1409,7 @@ app.get("/ca", gate, async (_req, res) => {
       intakes: slim,
       roster: CAS.map(c => c.name),
       errors,
+      meta,
     };
   } catch (e) {
     data = { ok: false, error: e.message, perCA: [], totalIntakes: 0, errors: [] };
@@ -1679,6 +1690,18 @@ function renderCAPage(data){
     phones: (data.roster||[]).reduce(function(o,n){o[n]=!!caPhone(n);return o;},{})
   };
   var errBlock = (data.errors && data.errors.length) ? ("<div style='background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#92400e'>Some sheets could not load: "+data.errors.join(" \u00b7 ")+"</div>") : "";
+  var metaStrip = "";
+  if (data.meta) {
+    metaStrip = "<div style='background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:9px 14px;margin-bottom:14px;font-size:12px;color:#475569'><b style='color:#16202E'>Sheet status</b> \u2014 " +
+      Object.keys(data.meta).map(function(cl){ var m=data.meta[cl];
+        if(m.error) return "<span style='color:#b91c1c'><b>"+cl+"</b>: could not load tab</span>";
+        var bits=cl+": "+m.rows+" rows \u00b7 "+m.weeks;
+        if(m.unlabelled) bits+=" \u00b7 "+m.unlabelled+" unlabelled";
+        if(m.skippedNoCA) bits+=" \u00b7 <span style='color:#b45309'>"+m.skippedNoCA+" skipped (no CA filled in)</span>";
+        return (m.rows===0? "<span style='color:#b91c1c'><b>"+bits+"</b></span>" : bits);
+      }).join(" &nbsp;\u00b7&nbsp; ") +
+      ". Rows only count when <b>Name and CA are both filled</b>; a row is tagged to a week by the \u201cWeek N\u201d divider above it, else it lands in Unlabelled.</div>";
+  }
   var CA_CSS = "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1200px;margin:24px auto;padding:0 16px;color:#16202E}"
     + "h1{margin:0 0 4px;font-size:22px}.sub{color:#666;font-size:13px;margin-bottom:14px}"
     + ".legend{display:flex;gap:16px;flex-wrap:wrap;background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:#475569}"
@@ -1703,7 +1726,7 @@ function renderCAPage(data){
     + "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script>"
     + "<style>"+CA_CSS+"</style></head><body>"
     + "<h1>CA Performance</h1><div class='sub'>From the \u201cimplementing the new script\u201d doorplannen sheet. Filter by clinic and week; switch table / chart.</div>"
-    + errBlock
+    + errBlock + metaStrip
     + "<div class='legend'>"
     + "<span><b>Doorplannen %</b> \u2014 share of this CA\u2019s intakes that booked <b>3+ appointments</b> (planned the full first month)</span>"
     + "<span><b>Package %</b> \u2014 share of intakes that <b>took a care package</b></span>"
