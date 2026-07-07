@@ -1238,13 +1238,16 @@ function parseIntakesCSV(csvText, clinic) {
     if (!r || !r.length) continue;
     const cells = r.map(c => (c || "").trim());
     const nonEmpty = cells.filter(Boolean);
-    // Week divider row, e.g. "Week 24" sitting above that week's intakes
+    // Week label, e.g. "Week 24" — either on its own divider row ABOVE the block,
+    // or (Rotterdam layout) in column A of the SAME row as the headers.
     const wk = cells.find(c => /^week\s*\d+/i.test(c));
-    if (wk && nonEmpty.length <= 2) { currentWeek = wk.replace(/\s+/g, " ").trim(); continue; }
-    // Detect header row
     const hasName = cells.some(c => c === "Name");
     const hasCA = cells.some(c => c === "CA");
     const hasAppt = cells.some(c => c === "Appointments");
+    if (wk && hasName && hasCA && hasAppt) {           // combined week+header row
+      currentWeek = wk.replace(/\s+/g, " ").trim(); cols = cells; continue;
+    }
+    if (wk && nonEmpty.length <= 2) { currentWeek = wk.replace(/\s+/g, " ").trim(); continue; }
     if (hasName && hasCA && hasAppt) { cols = cells; continue; }
     if (!cols) continue;
     // Build the row object
