@@ -5180,6 +5180,7 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
   card("/chiro-costs","\ud83d\udcb6 Cost per chiro","What each chiropractor costs (matched from the bank per counterparty) next to what they bring in \u2014 ZZP full cost, employees grossed up, with a built-in wiring check."),
   card("/card-spend","\ud83d\udcb3 Card spend","All five Businesscards by vendor and month \u2014 GHL, PracticeHub, Meta-on-card, subscriptions, and a \u2018worth a look\u2019 list \u2014 reconciled to every statement total."),
+  card("/chiro-monthly","\ud83d\udcc6 Chiro monthly","Per chiro, per month since 2025: visits and clean intakes, what they bring in (PracticeHub) and what the bank pays them \u2014 with cost as % of revenue."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
 ], "#10b981")}
@@ -6321,6 +6322,115 @@ app.get("/card-spend", gate, (req,res)=>{ try{
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/profit'>/profit</a> \u00b7 <a href='/chiro-costs'>/chiro-costs</a> \u00b7 <a href='/bank'>/bank</a></p>"+
     "</body></html>");
 }catch(e){ res.status(500).send("card-spend error: "+e.message); } });
+
+// ============================================================================
+//  /chiro-monthly — one chiro, one row per month (2025 → now):
+//    Visits    = processed appointments, NOT cancelled, and not a telephone /
+//                afzegging / gemiste / evaluatie / ROF / progress type
+//                (the same notAVisit rule as the whole dashboard); intakes
+//                counted separately, not inside visits.
+//    Intakes   = processed regular intakes (telephone intakes never count).
+//    Revenue   = what they brought in that month per PracticeHub (€, gross).
+//    Cost      = what the bank actually paid them that month (MT940 match,
+//                same rules as /chiro-costs; employees grossed up ×factor).
+//  First load pulls the full 2025→now appointment history per clinic, so it
+//  can take a minute; cached 1h afterwards.
+// ============================================================================
+const _cmCache = { t:0, v:null };
+function cmRange(){
+  const f=d=>d.toISOString().slice(0,19).replace("T"," ");
+  return "between:2025-01-01 00:00:00,"+f(new Date());
+}
+function cmRuleFor(name, clinic){
+  const n=String(name||"").toLowerCase();
+  if(/alexandra/.test(n)) return "Alexandra";
+  if(/matthew|horgan/.test(n)) return "Matthew";
+  if(/myles|drakes/.test(n)) return "Myles";
+  if(/\blara\b|evolve/.test(n)) return clinic==="Bussum" ? "LaraBus" : "LaraAms";
+  if(/csab/.test(n)) return "Csabi";
+  return null;
+}
+async function computeChiroActivity(){
+  // key -> { ym -> {v,i} }
+  const act={};
+  for(const clinic of Object.keys(CLINICS)){
+    let types=[], names={}, appts=[];
+    try{
+      types = await phubAll(clinic, "/appointment_types", {});
+      names = await practitionerMap(clinic);
+      appts = await phubAll(clinic, "/appointments", { start: cmRange() });
+    }catch(e){ continue; }
+    const tname={}; for(const t of types) tname[t.id]=t.name||"";
+    const byId=new Map();
+    for(const a of appts){ const prev=byId.get(a.id); const cancelled=a.status==="cancelled"||!!a.cancelDate;
+      if(!prev||(prev.cancelled&&!cancelled)) byId.set(a.id,{...a,cancelled}); }
+    for(const a of byId.values()){
+      if(a.cancelled || a.status!=="processed") continue;
+      const tn=tname[a.appointment_type_id]||"";
+      const who=cmRuleFor(names[a.practitioner_id]||"", clinic);
+      if(!who) continue;
+      const ym=String(a.start||"").slice(0,7); if(!/^20\d\d-\d\d$/.test(ym)) continue;
+      const slot=((act[who]=act[who]||{})[ym]=act[who][ym]||{v:0,i:0});
+      if(isIntake(tn)) slot.i++;
+      else if(!notAVisit(tn)) slot.v++;
+    }
+  }
+  return act;
+}
+async function computeChiroMonthly(){
+  if(_cmCache.v && Date.now()-_cmCache.t < 3600e3) return _cmCache.v;
+  const [act, costs] = await Promise.all([computeChiroActivity(), computeChiroCosts()]);
+  let monthlyRev={}; try{ const p=await loadPvaData(); monthlyRev=(p&&p.monthlyRev)||{}; }catch(e){}
+  const costRow={}; for(const r of costs.rows) costRow[r.key]=r;
+  const months=[]; { const now=new Date(); let y=2025,m=1;
+    while(y<now.getUTCFullYear() || (y===now.getUTCFullYear() && m<=now.getUTCMonth()+1)){
+      months.push(y+"-"+String(m).padStart(2,"0")); m++; if(m>12){m=1;y++;} } }
+  const chiros=CHIRO_BANK_RULES.map(r=>{
+    const a=act[r.key]||{}; const c=(costRow[r.key]||{}).byM||{};
+    const rows=months.map(ym=>{
+      const aa=a[ym]; const cc=c[ym];
+      const rev=(r.rev && monthlyRev[ym] && monthlyRev[ym][r.rev]!=null)? monthlyRev[ym][r.rev] : null;
+      const cost=cc? cc.cost : null;
+      return { ym, v: aa?aa.v:null, i: aa?aa.i:null, rev, cost,
+               pct: (rev&&cost)? Math.round(1000*cost/rev)/10 : null };
+    }).filter(row=> row.v!=null || row.i!=null || row.rev!=null || row.cost!=null);
+    return { key:r.key, label:r.label+(r.key==="LaraAms"?" (Amstelveen)":(r.key==="LaraBus"?" (Bussum)":"")),
+             clinic:r.clinic, type:r.type, rows };
+  }).filter(c=>c.rows.length);
+  const v={ chiros, factor: costs.factor };
+  _cmCache.t=Date.now(); _cmCache.v=v; return v;
+}
+app.get("/chiro-monthly", gate, async (req,res)=>{ try{
+  const d=await computeChiroMonthly();
+  if(!d.chiros.length) return res.send("No chiro data yet \u2014 check PracticeHub and the bank statement files.");
+  const sel=d.chiros.some(c=>c.key===req.query.chiro)? req.query.chiro : d.chiros[0].key;
+  const c=d.chiros.find(x=>x.key===sel);
+  const eur=n=> n==null?"\u2014":("\u20ac"+Math.round(n).toLocaleString("en-US"));
+  const tabs=d.chiros.map(x=>"<a class='tab"+(x.key===sel?" on":"")+"' href='/chiro-monthly?chiro="+x.key+"'>"+x.label+"</a>").join("");
+  const rows=c.rows.map(r=>{
+    const col=r.pct==null?"":( "color:"+(r.pct<=45?"#16a34a":(r.pct<=55?"#d97706":"#dc2626")) );
+    return "<tr><td>"+r.ym+"</td><td class=num>"+(r.v==null?"\u2014":r.v)+"</td><td class=num>"+(r.i==null?"\u2014":r.i)+"</td>"+
+      "<td class=num>"+eur(r.rev)+"</td><td class=num>"+eur(r.cost)+"</td><td class=num style='font-weight:600;"+col+"'>"+(r.pct==null?"\u2014":r.pct+"%")+"</td></tr>";
+  }).join("");
+  const T=c.rows.reduce((s,r)=>({v:s.v+(r.v||0),i:s.i+(r.i||0),rev:s.rev+(r.rev||0),cost:s.cost+(r.cost||0)}),{v:0,i:0,rev:0,cost:0});
+  const tpct=T.rev? Math.round(1000*T.cost/T.rev)/10 : null;
+  res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Chiro monthly \u2014 Posturefixx</title>"+
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}"+
+    ".tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;font-size:13px;font-weight:600;text-decoration:none;color:#16202E}.tab.on{background:#16202E;color:#fff}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:8px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap}"+
+    "th{color:#64748b;font-size:11px;text-transform:uppercase;text-align:left}.num{text-align:right;font-variant-numeric:tabular-nums}"+
+    "tr.tot td{font-weight:700;border-top:2px solid #e5e7eb}a{color:#2563EB}</style></head><body>"+
+    "<h1>Per-chiro monthly summary</h1>"+
+    "<div class=sub>Visits = processed appointments only \u2014 telephone, afzeggingen, gemiste, evaluaties, ROF, progress exams and anything cancelled never count; intakes are counted separately (regular processed intakes only). Revenue = PracticeHub gross for that chiro\u2019s clinic column. Cost = what the bank actually paid them (same matching as <a href='/chiro-costs'>/chiro-costs</a>; employees grossed up \u00d7"+d.factor+"). Bank costs run as far back as the statement files on Drive \u2014 currently from Jan 2026; earlier months show \u2014.</div>"+
+    "<div class=tabs>"+tabs+"</div>"+
+    "<div class=card><table><thead><tr><th>Month</th><th class=num>Visits</th><th class=num>Intakes</th><th class=num>Revenue</th><th class=num>Cost</th><th class=num>Cost %</th></tr></thead><tbody>"+rows+
+    "<tr class=tot><td>Total</td><td class=num>"+T.v+"</td><td class=num>"+T.i+"</td><td class=num>"+eur(T.rev)+"</td><td class=num>"+eur(T.cost)+"</td><td class=num>"+(tpct==null?"\u2014":tpct+"%")+"</td></tr>"+
+    "</tbody></table></div>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/chiro-costs'>/chiro-costs</a> \u00b7 <a href='/plan-through'>/plan-through</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a></p>"+
+    "</body></html>");
+}catch(e){ res.status(500).send("chiro-monthly error: "+e.message); } });
 
 // Safety net: a single bad request should never take the whole site down (502).
 // Log it and keep serving every other page.
