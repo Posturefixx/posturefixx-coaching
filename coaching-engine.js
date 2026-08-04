@@ -4643,6 +4643,83 @@ show("All");
 //  Myles/Matthew base salary + threshold commission). Slider = profit target
 //  on top of paying everyone and your draw.
 // ============================================================================
+// ---------------------------------------------------------------------------
+// Monthly cost auto-fill for /profit. Source order per bucket:
+//   yuki (live GL query, when YUKI_LIVE=1 + YUKI_GL_<BUCKET> codes are set)
+//   -> bank (MT940-categorised booked months)
+//   -> carried (latest earlier month with data, for months not booked yet)
+//   -> manual (leave the editable default alone).
+// "Contractor chiros" and "Intercompany/Owner" are EXCLUDED from "other":
+// chiro pay is already computed from contracts on this page, and the intercompany
+// management fee / owner draw must never double-count (see PROJECT_RULES).
+const _profitCostCache = {};
+const PROFIT_GL = {
+  rent:  process.env.YUKI_GL_RENT      || "",
+  ca:    process.env.YUKI_GL_PERSONNEL || "",
+  mkt:   process.env.YUKI_GL_MARKETING || "",
+  sw:    process.env.YUKI_GL_SOFTWARE  || "",
+  other: process.env.YUKI_GL_OTHER     || "",
+};
+function bankMonthCosts(ym){
+  const y = ym.slice(0,4), idx = parseInt(ym.slice(5,7),10)-1;
+  const Y = (WASTE_FULL.All||{})[y]; if(!Y) return null;
+  const val = (cat)=>{ const a=Y[cat]; const v=a?a[idx]:null; return (v==null?null:v); };
+  const skip = ["Rent","Personnel","Marketing","Software/SaaS","Contractor chiros","Intercompany/Owner"];
+  const rent=val("Rent"), ca=val("Personnel"), mkt=val("Marketing"), sw=val("Software/SaaS");
+  let other=0, any=false;
+  for(const cat of Object.keys(Y)){ if(skip.indexOf(cat)>=0) continue;
+    const v=val(cat); if(v!=null){ other+=v; any=true; } }
+  if(rent==null && ca==null && mkt==null && sw==null && !any) return null;
+  return { rent, ca, mkt, sw, other: any?Math.round(other):null };
+}
+app.get("/profit/costs.json", gate, async (req,res)=>{
+  try{
+    const ym = /^\d{4}-\d{2}$/.test(String(req.query.month||"")) ? req.query.month : new Date().toISOString().slice(0,7);
+    const ck="pc|"+ym;
+    if(_profitCostCache[ck] && Date.now()-_profitCostCache[ck].t < 6*3600e3) return res.json(_profitCostCache[ck].v);
+    const out={ month: ym, buckets:{} };
+    // 1) Yuki live, per configured bucket (summed across the 4 clinic administrations)
+    if(process.env.YUKI_LIVE==="1" && Object.values(PROFIT_GL).some(Boolean) && (YUKI.key || Object.values(YUKI.keyByClinic).some(Boolean))){
+      try{
+        const clinics=["Amstelveen","Bussum","Utrecht","Rotterdam"];
+        const start=ym+"-01";
+        const endDay=new Date(Date.UTC(+ym.slice(0,4), +ym.slice(5,7), 0)).getUTCDate();
+        const end=ym+"-"+String(endDay).padStart(2,"0");
+        const sessionByKey={};
+        const sessionFor=async(c)=>{ const key=YUKI.keyByClinic[c]||YUKI.key; if(!key) return null;
+          if(!(key in sessionByKey)) sessionByKey[key]=await yukiSession(key); return sessionByKey[key]; };
+        const adminFor=async(c,se)=>{ if(YUKI.admin[c]) return YUKI.admin[c]; return se?await yukiAdminId(se, YUKI.adminName[c]):null; };
+        for(const b of Object.keys(PROFIT_GL)){ if(!PROFIT_GL[b]) continue;
+          let tot=null;
+          for(const c of clinics){
+            const se=await sessionFor(c); const ad=se?await adminFor(c,se):null; if(!se||!ad) continue;
+            for(const code of PROFIT_GL[b].split(",").map(x=>x.trim()).filter(Boolean)){
+              const v=await yukiGLSpend(se, ad, code, start, end); if(v!=null) tot=(tot||0)+Math.abs(v);
+            }
+          }
+          if(tot!=null) out.buckets[b]={ value: Math.round(tot), src:"yuki" };
+        }
+      }catch(e){ /* fall through to bank */ }
+    }
+    // 2) bank for anything Yuki didn't fill; 3) carry back up to 12 months for gaps
+    const bank=bankMonthCosts(ym);
+    let carried=null, carriedYm=null;
+    let by=+ym.slice(0,4), bm=+ym.slice(5,7);
+    for(let i=0;i<12 && !carried;i++){ bm--; if(bm===0){ bm=12; by--; }
+      const back=by+"-"+String(bm).padStart(2,"0"); const bc=bankMonthCosts(back);
+      if(bc && [bc.rent,bc.ca,bc.mkt,bc.sw,bc.other].some(v=>v!=null)){ carried=bc; carriedYm=back; } }
+    for(const b of ["rent","ca","mkt","sw","other"]){
+      if(out.buckets[b]) continue;
+      const v=bank?bank[b]:null;
+      if(v!=null) out.buckets[b]={ value: Math.round(v), src:"bank" };
+      else if(carried && carried[b]!=null) out.buckets[b]={ value: Math.round(carried[b]), src:"carried", from: carriedYm };
+      else out.buckets[b]={ value:null, src:"manual" };
+    }
+    _profitCostCache[ck]={ t:Date.now(), v:out };
+    res.json(out);
+  }catch(e){ res.json({ month:String(req.query.month||""), error:e.message, buckets:{} }); }
+});
+
 app.get("/profit", gate, (_req,res)=>{ try {
   const DEF=[
     {id:"Alex", revs:[["all clinics",23220]], base:0, note:"Owner \u2014 draws via the holding, no wage taken here."},
@@ -4681,7 +4758,7 @@ th{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.02em;te
   <div class="controls">
     <div><label>Month (recorded)</label><select id="monthSel" style="padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;min-width:130px"></select></div>
     <div><label>Employer costs (gross \u2192 total, \u00d7)</label><input type="number" step="0.01" id="factor" value="1.27"></div>
-    <div style="flex:1;min-width:330px"><label>Other running costs \u20ac/mo \u2014 <b id="ohTot">\u20ac38,000</b> <span style="color:#94a3b8;font-weight:400">(editable; from your expense sheets)</span></label>
+    <div style="flex:1;min-width:330px"><label>Other running costs \u20ac/mo \u2014 <b id="ohTot">\u20ac38,000</b> <span style="color:#94a3b8;font-weight:400">(editable)</span> <span id="costSrc" style="color:#16a34a;font-weight:400"></span></label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:3px">
         <span style="font-size:11px;color:#64748b">Rent<br><input type="number" id="costRent" value="9600" style="width:78px"></span>
         <span style="font-size:11px;color:#64748b">CA wages<br><input type="number" id="costCA" value="8000" style="width:78px"></span>
@@ -4797,7 +4874,8 @@ function recompute(){
 var PROFIT_REV={"2026-01":{"Alex":33658,"LaraA":8370,"LaraB":5405,"Myles":7685,"Annefloor":2765,"Matthew":5335},"2026-02":{"Alex":23765,"LaraA":6625,"LaraB":2860,"Myles":10065,"Annefloor":0,"Matthew":14895},"2026-03":{"Alex":30875,"LaraA":9425,"LaraB":7265,"Myles":10845,"Annefloor":2005,"Matthew":20413},"2026-04":{"Alex":13660,"LaraA":8385,"LaraB":7210,"Myles":18430,"Annefloor":1465,"Matthew":15830},"2026-05":{"Alex":14140,"LaraA":6405,"LaraB":5400,"Myles":18295,"Annefloor":2160,"Matthew":17888}};
 function monthLabel(k){var p=k.split("-");var mn=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return (mn[+p[1]]||p[1])+" "+p[0];}
 function buildMonths(){var sel=document.getElementById("monthSel");if(!sel)return;var keys=Object.keys(PROFIT_REV).sort().reverse();sel.innerHTML=keys.map(function(k){return "<option value='"+k+"'>"+monthLabel(k)+"</option>";}).join("");}
-function loadMonth(k){var r=PROFIT_REV[k];if(!r)return;var map={"rev-Alex-0":r.Alex,"rev-Lara-0":r.LaraA,"rev-Lara-1":r.LaraB,"rev-Myles-0":r.Myles,"rev-Matthew-0":r.Matthew,"rev-Annefloor-0":r.Annefloor};Object.keys(map).forEach(function(id){var e=document.getElementById(id);if(e&&map[id]!=null)e.value=map[id];});recompute();}
+function loadMonth(k){var r=PROFIT_REV[k];if(!r)return;var map={"rev-Alex-0":r.Alex,"rev-Lara-0":r.LaraA,"rev-Lara-1":r.LaraB,"rev-Myles-0":r.Myles,"rev-Matthew-0":r.Matthew,"rev-Annefloor-0":r.Annefloor};Object.keys(map).forEach(function(id){var e=document.getElementById(id);if(e&&map[id]!=null)e.value=map[id];});recompute();loadCosts(k);}
+function loadCosts(k){fetch('/profit/costs.json?month='+k).then(function(r){return r.json();}).then(function(d){if(!d||!d.buckets)return;var map={rent:'costRent',ca:'costCA',mkt:'costMkt',sw:'costSw',other:'costOther'};var srcs={};var carriedFrom='';Object.keys(map).forEach(function(b){var bk=d.buckets[b];if(!bk)return;srcs[bk.src]=(srcs[bk.src]||0)+1;if(bk.src==='carried'&&bk.from)carriedFrom=bk.from;if(bk.value!=null){var e=document.getElementById(map[b]);if(e)e.value=bk.value;}});var t=[];if(srcs.yuki)t.push('auto: Yuki (booked)');if(srcs.bank)t.push('auto: bank data for '+k);if(srcs.carried)t.push('carried from '+carriedFrom+' — '+k+' not booked yet');if(d.buckets.ca&&d.buckets.ca.src==='manual')t.push('CA wages: manual');var el=document.getElementById('costSrc');if(el)el.textContent=t.length?('· '+t.join(' · ')):'';recompute();}).catch(function(){});}
 document.querySelectorAll("input").forEach(function(el){el.addEventListener("input",recompute);});
 buildMonths();
 var msel=document.getElementById("monthSel");
@@ -5100,6 +5178,8 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/profit","\u2b50 Profit per chiro","What each chiro brings in vs pay, costs and your draw \u2014 with a target slider and the \u20ac6k floor."),
   card("/pl","P&amp;L \u2014 Yuki vs MT940","Booked accounting (Yuki) side by side with the bank (MT940), variance shown, management fee netted out \u2014 watch them reconcile before Yuki takes over."),
   card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
+  card("/chiro-costs","\ud83d\udcb6 Cost per chiro","What each chiropractor costs (matched from the bank per counterparty) next to what they bring in \u2014 ZZP full cost, employees grossed up, with a built-in wiring check."),
+  card("/card-spend","\ud83d\udcb3 Card spend","All five Businesscards by vendor and month \u2014 GHL, PracticeHub, Meta-on-card, subscriptions, and a \u2018worth a look\u2019 list \u2014 reconciled to every statement total."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
 ], "#10b981")}
@@ -5853,6 +5933,394 @@ app.get("/plan-through", gate, (req,res)=>{
     "</script></body></html>"
   );
 });
+
+// ============================================================================
+//  /chiro-costs — what each chiropractor actually COSTS, read from the bank
+//  (MT940), joined with what they BRING IN (PracticeHub revenue per chiro).
+//  Matching rules (verified against the Jan–Jul 2026 statements):
+//    Matthew   = "Matthew Horgan"      on NL46 Utrecht      — ZZP
+//    Myles     = "Myles/M Drakes"      on NL69 Amstelveen   — ZZP
+//    Lara      = "Evolve Chiropractic" on NL69 → Amstelveen, on NL18 → Bussum — ZZP
+//    Csabi     = "Csaba Farkas"        on NL18 Bussum       — ZZP
+//    AB chiro  = "AB Chiropractie"     on NL46 Utrecht      — ZZP
+//    Alexandra = "Alexandra Farkas"    on NL46 Utrecht      — EMPLOYEE
+//  ZZP: the bank debit IS the full cost. EMPLOYEE: the bank debit is NET pay —
+//  grossed up by EMPLOYER_FACTOR (env, default 1.32; replace with the exact
+//  figure from Bamboek's loonjournaalposten). Debits summed per calendar month.
+// ============================================================================
+const CHIRO_BANK_RULES = [
+  { key:"Matthew",   label:"Matthew",          clinic:"Utrecht",    re:/matthew\s*horgan/i,              type:"zzp",      rev:"Matthew" },
+  { key:"Myles",     label:"Myles",            clinic:"Amstelveen", re:/(myles|\bm\.?)\s*drakes/i,       type:"zzp",      rev:"Myles"   },
+  { key:"LaraAms",   label:"Lara",             clinic:"Amstelveen", re:/evolve\s*chiropractic/i,         type:"zzp",      rev:"LaraA"   },
+  { key:"LaraBus",   label:"Lara",             clinic:"Bussum",     re:/evolve\s*chiropractic/i,         type:"zzp",      rev:"LaraB"   },
+  { key:"Csabi",     label:"Csabi",            clinic:"Bussum",     re:/csaba\s*farkas/i,                type:"zzp",      rev:null      },
+  { key:"AB",        label:"AB Chiropractie",  clinic:"Utrecht",    re:/ab\s*chiropractie/i,             type:"zzp",      rev:null      },
+  { key:"Alexandra", label:"Alexandra",        clinic:"Utrecht",    re:/alexandra\s*farkas/i,            type:"employee", rev:null      },
+];
+const CHIRO_SANITY_2026_07 = { Matthew:5340.76, Myles:6615.44, LaraAms:2707.00, LaraBus:2493.00, Csabi:2295.11, Alexandra:2442.56, AB:472.90 };
+
+// Transaction-level MT940 parse: pairs each :61: with its :86: description
+// (which carries the counterparty). Returns [{date, ym, amount, outflow, desc}].
+function parseMT940Tx(text){
+  const txs = [];
+  if(!text || text.indexOf(":61:") < 0) return txs;
+  const lines = String(text).split(/\r?\n/);
+  let cur = null;
+  const flush = () => { if(cur){ txs.push(cur); cur = null; } };
+  for(const line of lines){
+    const m61 = line.match(/^:61:(\d{6})(\d{4})?(RC|RD|C|D)([A-Z]?)([\d.,]+)/);
+    if(m61){
+      flush();
+      const yy=m61[1].slice(0,2), mm=m61[1].slice(2,4), dd=m61[1].slice(4,6);
+      const amt = parseFloat(m61[5].replace(/\./g,"").replace(",","."));
+      if(!isFinite(amt)) { cur=null; continue; }
+      const mark = m61[3];
+      cur = { date:"20"+yy+"-"+mm+"-"+dd, ym:"20"+yy+"-"+mm, amount:amt,
+              outflow:(mark==="D"||mark==="RC"), desc:"" };
+      continue;
+    }
+    if(/^:\d{2}[A-Z]?:/.test(line)){                 // any other tag
+      if(line.indexOf(":86:")===0 && cur){ cur.desc += " " + line.slice(4); }
+      else if(cur && line.indexOf(":86:")!==0){ /* tag ends the tx desc */ if(!/^:86:/.test(line)) flush(); }
+      continue;
+    }
+    if(cur) cur.desc += " " + line;                  // :86: continuation lines
+  }
+  flush();
+  return txs;
+}
+
+// Sum matched outflows per rule per month across the three clinic accounts.
+const _chiroCostCache = { t:0, v:null };
+async function computeChiroCosts(){
+  if(_chiroCostCache.v && Date.now()-_chiroCostCache.t < 3600e3) return _chiroCostCache.v;
+  const factor = parseFloat(process.env.EMPLOYER_FACTOR || "1.32") || 1.32;
+  const perKey = {};                                  // key -> { ym -> {net, n} }
+  const acctInfo = {};                                // clinic -> { ok, latest, txs }
+  for(const clinic of ["Amstelveen","Utrecht","Bussum"]){
+    const acc = MT940_ACCOUNTS[clinic];
+    let txs = [];
+    try{ const text = await fetchMT940(acc.fileId); txs = parseMT940Tx(text); }catch(e){}
+    acctInfo[clinic] = { ok: txs.length>0, latest: txs.reduce((m,t)=> t.date>m?t.date:m, ""), n: txs.length };
+    for(const t of txs){
+      if(!t.outflow) continue;
+      for(const r of CHIRO_BANK_RULES){
+        if(r.clinic!==clinic) continue;
+        if(!r.re.test(t.desc)) continue;
+        const slot = (perKey[r.key] = perKey[r.key] || {});
+        const b = (slot[t.ym] = slot[t.ym] || { net:0, n:0 });
+        b.net += t.amount; b.n++;
+        break;                                        // one rule per transaction
+      }
+    }
+  }
+  const months = [...new Set([].concat(...Object.values(perKey).map(o=>Object.keys(o))))].sort();
+  // revenue join (PracticeHub monthly revenue per chiro, same source as /profit)
+  let monthlyRev = {};
+  try{ const p = await loadPvaData(); monthlyRev = p && p.monthlyRev ? p.monthlyRev : {}; }catch(e){}
+  const rows = CHIRO_BANK_RULES.map(r=>{
+    const byM = {};
+    for(const ym of months){
+      const b = (perKey[r.key]||{})[ym];
+      if(!b){ byM[ym]=null; continue; }
+      const net = Math.round(b.net*100)/100;
+      const cost = r.type==="employee" ? Math.round(b.net*factor*100)/100 : net;
+      const rev = (r.rev && monthlyRev[ym] && monthlyRev[ym][r.rev]!=null) ? monthlyRev[ym][r.rev] : null;
+      byM[ym] = { net, cost, n:b.n, rev, pct: (rev? Math.round(1000*cost/rev)/10 : null) };
+    }
+    return { key:r.key, label:r.label, clinic:r.clinic, type:r.type, byM };
+  });
+  // July-2026 sanity: computed NET vs the verified statement totals
+  const sanity = Object.keys(CHIRO_SANITY_2026_07).map(k=>{
+    const b = (perKey[k]||{})["2026-07"];
+    const got = b ? Math.round(b.net*100)/100 : null;
+    const want = CHIRO_SANITY_2026_07[k];
+    return { key:k, want, got, ok: got!=null && Math.abs(got-want)<=0.02 };
+  });
+  const v = { months, rows, factor, acctInfo, sanity, sanityAll: sanity.every(s=>s.ok) };
+  _chiroCostCache.t = Date.now(); _chiroCostCache.v = v;
+  return v;
+}
+
+app.get("/chiro-costs", gate, async (req,res)=>{ try{
+  if(req.query.refresh==="1"){ _chiroCostCache.t=0; _chiroCostCache.v=null; }
+  const d = await computeChiroCosts();
+  const eur = n => n==null ? "\u2014" : ("\u20ac"+Math.round(n).toLocaleString("en-US"));
+  const show = d.months.filter(m=>m>="2026-01");
+  const head = "<tr><th style='text-align:left'>Chiro</th><th style='text-align:left'>Clinic</th><th style='text-align:left'>Deal</th>"+
+    show.map(m=>"<th class=num>"+m.slice(5)+"-"+m.slice(2,4)+"</th>").join("")+"</tr>";
+  const body = d.rows.map(r=>{
+    const cells = show.map(m=>{ const b=r.byM[m];
+      if(!b) return "<td class=num style='color:#cbd5e1'>\u2014</td>";
+      let cell = "<b>"+eur(b.cost)+"</b>";
+      if(r.type==="employee") cell += "<div style='color:#94a3b8;font-size:10.5px'>"+eur(b.net)+" net \u00d7"+d.factor+"</div>";
+      if(b.rev!=null) cell += "<div style='color:"+(b.pct<=45?"#16a34a":(b.pct<=55?"#d97706":"#dc2626"))+";font-size:10.5px'>"+b.pct+"% of "+eur(b.rev)+"</div>";
+      return "<td class=num>"+cell+"</td>";
+    }).join("");
+    return "<tr><td style='font-weight:600'>"+r.label+"</td><td>"+r.clinic+"</td><td><span style='font-size:11px;padding:1px 8px;border-radius:999px;background:"+(r.type==="employee"?"#fef3c7":"#eff6ff")+";color:"+(r.type==="employee"?"#92400e":"#1d4ed8")+"'>"+(r.type==="employee"?"employee":"zzp")+"</span></td>"+cells+"</tr>";
+  }).join("");
+  const sanRows = d.sanity.map(s=>"<tr><td>"+s.key+"</td><td class=num>"+s.want.toFixed(2)+"</td><td class=num>"+(s.got==null?"\u2014":s.got.toFixed(2))+"</td><td>"+(s.ok?"<span style='color:#16a34a;font-weight:700'>\u2713</span>":"<span style='color:#dc2626;font-weight:700'>\u2717"+(s.got!=null?(" ("+(s.got-s.want>=0?"+":"")+(s.got-s.want).toFixed(2)+")"):"")+"</span>")+"</td></tr>").join("");
+  const acct = Object.keys(d.acctInfo).map(c=>{ const a=d.acctInfo[c];
+    return c+": "+(a.ok?(a.n+" tx \u00b7 latest "+a.latest):"<span style='color:#dc2626'>could not read statement file</span>"); }).join(" \u00b7 ");
+  res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Cost per chiropractor \u2014 Posturefixx</title>"+
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1020px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:8px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap}"+
+    "th{color:#64748b;font-size:11px;text-transform:uppercase}.num{text-align:right;font-variant-numeric:tabular-nums}"+
+    "a{color:#2563EB}</style></head><body>"+
+    "<h1>Cost per chiropractor \u2014 from the bank</h1>"+
+    "<div class=sub>Debits matched per counterparty on each clinic account (NL69 Amstelveen \u00b7 NL46 Utrecht \u00b7 NL18 Bussum), summed per calendar month, joined with each chiro's PracticeHub revenue. ZZP = the bank amount is the full cost. Employee = the bank amount is NET pay, grossed up \u00d7"+d.factor+" (set EMPLOYER_FACTOR in Render to Bamboek's exact figure). Cached 1h \u00b7 <a href='/chiro-costs?refresh=1'>refresh now</a></div>"+
+    "<div class=card><table><thead>"+head+"</thead><tbody>"+body+"</tbody></table>"+
+    "<div style='color:#64748b;font-size:12px;margin-top:8px'>Green % = cost \u226445% of that chiro's revenue \u00b7 amber \u226455% \u00b7 red above. \u201c\u2014\u201d = no matching bank debit that month. Statement files: "+acct+"</div></div>"+
+    "<div class=card><b>Wiring check \u2014 July 2026 vs verified statement totals</b>"+
+    "<div style='color:#64748b;font-size:12px;margin:4px 0 8px'>Net amounts, straight from the bank match (before the employer factor). All green = the matching rules are reading the statements correctly.</div>"+
+    "<table><thead><tr><th style='text-align:left'>Chiro</th><th class=num>Expected</th><th class=num>Computed</th><th>Match</th></tr></thead><tbody>"+sanRows+"</tbody></table>"+
+    (d.sanityAll?"<div style='color:#16a34a;font-weight:600;margin-top:8px'>\u2713 All seven match \u2014 the wiring is right.</div>":"<div style='color:#b45309;margin-top:8px'>Mismatches above \u2014 most likely the July statement file on Drive doesn\u2019t cover the full month yet, or a counterparty is spelled differently. Send me what this table shows and I\u2019ll adjust the rule.</div>")+"</div>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/profit'>/profit</a> \u00b7 <a href='/bank'>/bank</a> \u00b7 <a href='/pl'>/pl</a></p>"+
+    "</body></html>");
+}catch(e){ res.status(500).send("chiro-costs error: "+e.message); } });
+
+// ============================================================================
+//  /card-spend — what the five ING Businesscards actually pay for, per vendor,
+//  per month, per entity. Snapshot transcribed from the card statements
+//  (Nov 2025 – 8 Jul 2026); every statement's transactions are verified to sum
+//  to the printed "Totale uitgaven". Card spend reaches the bank only as one
+//  monthly settlement, so this vendor detail exists ONLY here — it feeds the
+//  Software/Marketing buckets on /profit and flags spend worth reviewing.
+//  Entities: A=Amstelveen (***7104)  B=Bussum/Top Chiropractie (***4762)
+//            U=Utrecht/Posturefixx B.V. (***7516)  R=Rotterdam (***3222)
+//            H=Holding/Notable (***9491)
+// ============================================================================
+const CARD_ENTITY = { A:"Amstelveen", B:"Bussum", U:"Utrecht", R:"Rotterdam", H:"Holding" };
+// [entity, date, vendor, amount]  (negative = refund)
+const CARD_TX = [
+// --- Amstelveen ***7104 · statement 22 (09-12-2025, €1.233,82) ---
+["A","2025-11-07","HIGHLEVEL",11.35,0],["A","2025-11-09","Google Nest",18.00,0],["A","2025-11-10","PRACTICEHUB",133.04,0],
+["A","2025-11-13","HIGHLEVEL",88.65,0],["A","2025-11-15","HIGHLEVEL",6.18,0],["A","2025-11-16","Amazon",75.62,0],
+["A","2025-11-20","Amazon",17.98,0],["A","2025-11-20","Amazon",145.31,0],["A","2025-11-21","Amazon",85.94,0],
+["A","2025-11-26","HIGHLEVEL AGENCY",533.87,0],["A","2025-11-29","HIGHLEVEL",10.73,0],
+["A","2025-11-27","Amazon",-18.91,0],["A","2025-11-28","Amazon",-18.91,0],["A","2025-11-28","Amazon",-18.90,0],["A","2025-11-28","Amazon",-18.90,0],
+["A","2025-12-01","Google Workspace",12.66,0],["A","2025-12-02","HIGHLEVEL",88.45,0],["A","2025-12-03","CapCut",11.99,0],
+["A","2025-12-03","hostinger",2.13,0],["A","2025-12-05","THECHIROCLUB",19.40,0],["A","2025-12-05","HIGHLEVEL",18.47,0],
+["A","2025-12-05","HIGHLEVEL",18.47,0],["A","2025-12-07","HIGHLEVEL",11.20,0],
+// --- Amstelveen · 23 (09-01-2026, €1.089,59) ---
+["A","2025-12-09","Google Nest",18.00,1],["A","2025-12-10","Cirque du Soleil",130.00,1],["A","2025-12-10","PRACTICEHUB",134.05,1],
+["A","2025-12-15","HIGHLEVEL",6.11,1],["A","2025-12-16","HIGHLEVEL",87.43,1],["A","2025-12-26","HIGHLEVEL AGENCY",524.11,1],
+["A","2025-12-29","HIGHLEVEL",10.54,1],["A","2026-01-01","Google Workspace",12.66,1],["A","2026-01-03","HIGHLEVEL",87.51,1],
+["A","2026-01-03","CapCut",11.99,1],["A","2026-01-05","THECHIROCLUB",19.30,1],["A","2026-01-05","HIGHLEVEL",18.37,1],
+["A","2026-01-05","HIGHLEVEL",18.37,1],["A","2026-01-07","HIGHLEVEL",11.15,1],
+// --- Amstelveen · 24 (09-02-2026, €1.519,75) ---
+["A","2026-01-09","HIGHLEVEL",87.96,2],["A","2026-01-09","Google Nest",18.00,2],["A","2026-01-10","PRACTICEHUB",134.84,2],
+["A","2026-01-14","hostinger",1.05,2],["A","2026-01-15","HIGHLEVEL",6.17,2],["A","2026-01-15","hostinger",10.64,2],
+["A","2026-01-22","ONESTEPHOST",181.80,2],["A","2026-01-23","HIGHLEVEL",87.84,2],["A","2026-01-26","HIGHLEVEL AGENCY",521.00,2],
+["A","2026-01-29","HIGHLEVEL",10.40,2],["A","2026-02-01","Google Workspace",12.66,2],["A","2026-02-03","CapCut",11.99,2],
+["A","2026-02-04","HIGHLEVEL",110.41,2],["A","2026-02-05","THECHIROCLUB",19.16,2],["A","2026-02-05","HIGHLEVEL",22.08,2],
+["A","2026-02-05","HIGHLEVEL",22.08,2],["A","2026-02-07","HIGHLEVEL",11.07,2],["A","2026-02-07","SP BELLOOST",250.60,2],
+// --- Amstelveen · 25 (09-03-2026, €1.389,63) ---
+["A","2026-03-09","Kaartbijdrage",39.95,3],["A","2026-02-09","Google Nest",18.00,3],["A","2026-02-10","PRACTICEHUB",155.28,3],
+["A","2026-02-13","Sports Specialist Reha",95.48,3],["A","2026-02-15","HIGHLEVEL",7.32,3],["A","2026-02-15","Starbucks Toronto",35.83,3],
+["A","2026-02-17","HIGHLEVEL",86.53,3],["A","2026-02-26","HIGHLEVEL AGENCY",523.26,3],["A","2026-02-27","HIGHLEVEL",87.01,3],
+["A","2026-02-28","HIGHLEVEL",10.53,3],["A","2026-03-01","Google Workspace",12.66,3],["A","2026-03-03","CapCut",11.99,3],
+["A","2026-03-05","HIGHLEVEL",88.57,3],["A","2026-03-05","THECHIROCLUB",19.52,3],["A","2026-03-05","HIGHLEVEL",22.50,3],
+["A","2026-03-05","HIGHLEVEL",22.50,3],["A","2026-03-06","Amazon",141.42,3],["A","2026-03-07","HIGHLEVEL",11.28,3],
+// --- Amstelveen · 26 (09-04-2026, €1.075,46) ---
+["A","2026-03-09","Google Nest",18.00,4],["A","2026-03-10","PRACTICEHUB",135.19,4],["A","2026-03-15","HIGHLEVEL",7.59,4],
+["A","2026-03-18","HIGHLEVEL",89.40,4],["A","2026-03-26","HIGHLEVEL AGENCY",535.02,4],["A","2026-03-29","HIGHLEVEL",10.78,4],
+["A","2026-03-31","HIGHLEVEL",89.58,4],["A","2026-04-01","Google Workspace",12.66,4],["A","2026-04-03","CapCut",11.99,4],
+["A","2026-04-05","THECHIROCLUB",19.61,4],["A","2026-04-05","HIGHLEVEL",22.61,4],["A","2026-04-05","HIGHLEVEL",22.61,4],
+["A","2026-04-07","HIGHLEVEL",11.32,4],["A","2026-04-07","HIGHLEVEL",89.10,4],
+// --- Amstelveen · 27 (09-05-2026, €1.268,73) ---
+["A","2026-04-09","Google Nest",18.00,5],["A","2026-04-10","PRACTICEHUB",134.39,5],["A","2026-04-15","OpenAI ChatGPT",23.00,5],
+["A","2026-04-15","HIGHLEVEL",7.42,5],["A","2026-04-16","Rugvista",149.00,5],["A","2026-04-16","Hello Klean",72.00,5],
+["A","2026-04-19","HIGHLEVEL",87.10,5],["A","2026-04-26","HIGHLEVEL AGENCY",528.28,5],["A","2026-04-29","HIGHLEVEL",10.61,5],
+["A","2026-05-01","Google Workspace",12.66,5],["A","2026-05-02","HIGHLEVEL",87.48,5],["A","2026-05-03","CapCut",11.99,5],
+["A","2026-05-05","THECHIROCLUB",19.34,5],["A","2026-05-05","HIGHLEVEL",22.28,5],["A","2026-05-05","HIGHLEVEL",22.28,5],
+["A","2026-05-06","THECHIROCLUB",9.67,5],["A","2026-05-06","THECHIROCLUB",19.33,5],["A","2026-05-06","HIGHLEVEL",22.28,5],
+["A","2026-05-07","HIGHLEVEL",11.62,5],
+// --- Amstelveen · 28 (09-06-2026, €1.148,66) ---
+["A","2026-05-09","Google Nest",18.00,6],["A","2026-05-10","PRACTICEHUB",135.31,6],["A","2026-05-11","HIGHLEVEL",87.45,6],
+["A","2026-05-15","OpenAI ChatGPT",23.00,6],["A","2026-05-15","HIGHLEVEL",7.44,6],["A","2026-05-26","HIGHLEVEL",88.15,6],
+["A","2026-05-26","HIGHLEVEL AGENCY",530.69,6],["A","2026-06-01","Google Workspace",12.66,6],["A","2026-06-02","HIGHLEVEL",90.16,6],
+["A","2026-06-03","CapCut",11.99,6],["A","2026-06-06","THECHIROCLUB",19.59,6],["A","2026-06-06","HIGHLEVEL",112.93,6],
+["A","2026-06-07","HIGHLEVEL",11.29,6],
+// --- Amstelveen · 29 (09-07-2026, €1.120,45) ---
+["A","2026-06-09","Google Nest",18.00,7],["A","2026-06-10","PRACTICEHUB",135.47,7],["A","2026-06-13","HIGHLEVEL",89.11,7],
+["A","2026-06-15","OpenAI ChatGPT",23.00,7],["A","2026-06-15","HIGHLEVEL",7.54,7],["A","2026-06-26","HIGHLEVEL AGENCY",542.94,7],
+["A","2026-06-27","HIGHLEVEL",90.28,7],["A","2026-07-01","Google Workspace",12.66,7],["A","2026-07-03","CapCut",11.99,7],
+["A","2026-07-05","HIGHLEVEL",89.75,7],["A","2026-07-06","THECHIROCLUB",19.81,7],["A","2026-07-06","HIGHLEVEL",68.49,7],
+["A","2026-07-07","HIGHLEVEL",11.41,7],
+// --- Bussum ***4762 · 70 (09-12-2025, €944,80) ---
+["B","2025-11-08","PRACTICEHUB",112.06,8],["B","2025-11-12","PRACTICEHUB",116.33,8],["B","2025-11-14","FACEBK ads",339.00,8],
+["B","2025-11-14","WAGHL",25.48,8],["B","2025-11-22","FACEBK ads",108.86,8],["B","2025-11-26","WAGHL",25.70,8],
+["B","2025-11-26","YouTube Premium",13.99,8],["B","2025-12-03","Deputy",53.23,8],["B","2025-12-04","Google Nest",18.00,8],
+["B","2025-12-05","THECHIROCLUB",19.30,8],["B","2025-12-08","PRACTICEHUB",112.85,8],
+// --- Bussum · 71 (09-01-2026, €680,62) ---
+["B","2025-12-12","PRACTICEHUB",116.85,9],["B","2025-12-14","WAGHL",25.24,9],["B","2025-12-22","FACEBK ads",300.54,9],
+["B","2025-12-26","WAGHL",25.13,9],["B","2025-12-26","YouTube Premium",13.99,9],["B","2026-01-04","Google Nest",18.00,9],
+["B","2026-01-05","Deputy",47.89,9],["B","2026-01-05","THECHIROCLUB",19.20,9],["B","2026-01-08","PRACTICEHUB",113.78,9],
+// --- Bussum · 72 (09-02-2026, €729,59) ---
+["B","2026-01-12","PRACTICEHUB",117.71,10],["B","2026-01-13","GOGHL",77.24,10],["B","2026-01-22","FACEBK ads",92.40,10],
+["B","2026-01-26","YouTube Premium",13.99,10],["B","2026-02-02","FACEBK ads",200.00,10],["B","2026-02-03","Deputy",57.09,10],
+["B","2026-02-04","Google Nest",18.00,10],["B","2026-02-05","THECHIROCLUB",19.07,10],["B","2026-02-08","PRACTICEHUB",134.09,10],
+// --- Bussum · 73 (09-03-2026, €441,49) ---
+["B","2026-02-12","PRACTICEHUB",117.49,11],["B","2026-02-13","GOGHL",75.74,11],["B","2026-02-26","YouTube Premium",13.99,11],
+["B","2026-03-03","Deputy",62.48,11],["B","2026-03-04","Google Nest",18.00,11],["B","2026-03-05","THECHIROCLUB",19.43,11],
+["B","2026-03-08","PRACTICEHUB",134.36,11],
+// --- Bussum · 74 (09-04-2026, €655,74) ---
+["B","2026-03-12","PRACTICEHUB",118.25,12],["B","2026-03-13","GOGHL",77.98,12],["B","2026-03-22","FACEBK ads",220.87,12],
+["B","2026-03-26","YouTube Premium",13.99,12],["B","2026-04-04","Google Nest",18.00,12],["B","2026-04-05","THECHIROCLUB",19.52,12],
+["B","2026-04-07","Deputy",53.64,12],["B","2026-04-08","PRACTICEHUB",133.49,12],
+// --- Bussum · 75 (09-05-2026, €794,56) ---
+["B","2026-04-12","PRACTICEHUB",117.22,13],["B","2026-04-13","GOGHL",76.87,13],["B","2026-04-15","FACEBK ads",364.00,13],
+["B","2026-04-22","FACEBK ads",103.73,13],["B","2026-04-26","YouTube Premium",13.99,13],["B","2026-05-04","Deputy",52.66,13],
+["B","2026-05-04","Google Nest",18.00,13],["B","2026-05-05","THECHIROCLUB",19.24,13],["B","2026-05-06","THECHIROCLUB",9.62,13],
+["B","2026-05-06","THECHIROCLUB",19.23,13],
+// --- Bussum · 76 (09-06-2026, €902,48) ---
+["B","2026-05-08","PRACTICEHUB",134.68,14],["B","2026-05-13","GOGHL",76.58,14],["B","2026-05-16","FACEBK ads",364.00,14],
+["B","2026-05-22","FACEBK ads",87.76,14],["B","2026-05-26","YouTube Premium",13.99,14],["B","2026-06-04","Deputy",53.22,14],
+["B","2026-06-04","Google Nest",18.00,14],["B","2026-06-06","THECHIROCLUB",19.50,14],["B","2026-06-08","PRACTICEHUB",134.75,14],
+// --- Bussum · 77 (09-07-2026, €781,67) ---
+["B","2026-06-13","GOGHL",78.04,15],["B","2026-06-15","FACEBK ads",364.00,15],["B","2026-06-22","FACEBK ads",97.60,15],
+["B","2026-06-26","YouTube Premium",13.99,15],["B","2026-07-04","Google Nest",18.00,15],["B","2026-07-06","Deputy",54.03,15],
+["B","2026-07-06","THECHIROCLUB",19.71,15],["B","2026-07-08","PRACTICEHUB",136.30,15],
+// --- Utrecht ***7516 · 52 (09-12-2025, €1.018,31) ---
+["U","2025-11-08","Apple",2.99,16],["U","2025-11-10","PRACTICEHUB",153.70,16],["U","2025-11-11","Netflix",17.15,16],
+["U","2025-11-10","Google One",1.98,16],["U","2025-11-12","Apple",9.99,16],["U","2025-11-12","WAGHL",25.70,16],
+["U","2025-11-15","Squarespace",22.07,16],["U","2025-11-15","THECHIROCLUB",19.47,16],["U","2025-11-21","Apple",29.99,16],
+["U","2025-11-21","WAGHL",25.87,16],["U","2025-11-25","Canva",11.99,16],["U","2025-11-26","FACEBK ads",508.67,16],
+["U","2025-11-27","Google Nest",18.00,16],["U","2025-11-27","WAGHL",25.67,16],["U","2025-11-28","Elementor",71.39,16],
+["U","2025-11-28","YouTube Premium",13.99,16],["U","2025-12-01","Google Workspace",56.70,16],["U","2025-12-08","Apple",2.99,16],
+// --- Utrecht · 53 (09-01-2026, €874,49) ---
+["U","2025-12-10","PRACTICEHUB",154.46,17],["U","2025-12-11","Netflix",17.28,17],["U","2025-12-10","Google One",2.00,17],
+["U","2025-12-12","Apple",9.99,17],["U","2025-12-12","WAGHL",25.36,17],["U","2025-12-15","Squarespace",21.86,17],
+["U","2025-12-15","THECHIROCLUB",19.29,17],["U","2025-12-21","Apple",29.99,17],["U","2025-12-21","WAGHL",25.39,17],
+["U","2025-12-25","Canva",11.99,17],["U","2025-12-26","FACEBK ads",439.93,17],["U","2025-12-27","Google Nest",18.00,17],
+["U","2025-12-27","WAGHL",25.27,17],["U","2025-12-28","YouTube Premium",13.99,17],["U","2026-01-01","Google Workspace",56.70,17],
+["U","2026-01-08","Apple",2.99,17],
+// --- Utrecht · 54 (09-02-2026, €901,51) ---
+["U","2026-01-11","Netflix",17.22,18],["U","2026-01-10","PRACTICEHUB",155.55,18],["U","2026-01-10","Google One",1.99,18],
+["U","2026-01-12","Apple",9.99,18],["U","2026-01-11","Uber Eats",30.70,18],["U","2026-01-12","WAGHL",25.58,18],
+["U","2026-01-15","Squarespace",22.02,18],["U","2026-01-15","THECHIROCLUB",19.42,18],["U","2026-01-21","Apple",29.99,18],
+["U","2026-01-25","Canva",11.99,18],["U","2026-01-26","FACEBK ads",455.87,18],["U","2026-01-27","Google Nest",18.00,18],
+["U","2026-01-27","WAGHL",25.08,18],["U","2026-01-28","YouTube Premium",13.99,18],["U","2026-02-01","Google Workspace",61.13,18],
+["U","2026-02-08","Apple",2.99,18],
+// --- Utrecht · 55 (09-03-2026, €1.035,79) ---
+["U","2026-02-10","PRACTICEHUB",175.86,19],["U","2026-02-11","Netflix",17.26,19],["U","2026-02-10","Google One",1.99,19],
+["U","2026-02-12","Uber",10.99,19],["U","2026-02-12","Apple",9.99,19],["U","2026-02-13","Uber",5.12,19],
+["U","2026-02-15","Squarespace",21.63,19],["U","2026-02-15","THECHIROCLUB",19.08,19],["U","2026-02-15","Uber",9.66,19],
+["U","2026-02-21","Apple",29.99,19],["U","2026-02-25","Canva",11.99,19],["U","2026-02-27","FACEBK ads",481.05,19],
+["U","2026-02-27","WAGHL",25.24,19],["U","2026-02-28","Google Nest",18.00,19],["U","2026-02-28","YouTube Premium",13.99,19],
+["U","2026-03-01","Google Workspace",64.80,19],["U","2026-03-02","QR-Code-Generator",116.16,19],["U","2026-03-08","Apple",2.99,19],
+// --- Utrecht · 56 (09-04-2026, €928,18) ---
+["U","2026-03-10","PRACTICEHUB",176.76,20],["U","2026-03-11","Netflix",17.68,20],["U","2026-03-10","Google One",2.07,20],
+["U","2026-03-12","Apple",9.99,20],["U","2026-03-15","Squarespace",22.41,20],["U","2026-03-15","THECHIROCLUB",19.77,20],
+["U","2026-03-20","Apple",29.99,20],["U","2026-03-25","Canva",11.99,20],["U","2026-03-25","Vimeo",129.26,20],
+["U","2026-03-26","FACEBK ads",408.48,20],["U","2026-03-27","Google Nest",18.00,20],["U","2026-03-28","YouTube Premium",13.99,20],
+["U","2026-04-01","Google Workspace",64.80,20],["U","2026-04-08","Apple",2.99,20],
+// --- Utrecht · 57 (09-05-2026, €1.118,89) ---
+["U","2026-04-10","PRACTICEHUB",134.29,21],["U","2026-04-11","Netflix",17.20,21],["U","2026-04-10","Google One",1.99,21],
+["U","2026-04-12","Apple",9.99,21],["U","2026-04-13","Race Result",267.94,21],["U","2026-04-15","Squarespace",21.89,21],
+["U","2026-04-15","THECHIROCLUB",19.31,21],["U","2026-04-15","Namecheap",16.42,21],["U","2026-04-20","Apple",29.99,21],
+["U","2026-04-25","Canva",11.99,21],["U","2026-04-26","FACEBK ads",426.83,21],["U","2026-04-27","Google Nest",18.00,21],
+["U","2026-04-28","YouTube Premium",13.99,21],["U","2026-05-01","Google Workspace",64.80,21],["U","2026-05-02","Twilio",35.26,21],
+["U","2026-05-06","THECHIROCLUB",9.67,21],["U","2026-05-06","THECHIROCLUB",19.33,21],
+// --- Utrecht · 58 (09-06-2026, €1.552,91) ---
+["U","2026-05-08","Apple",2.99,22],["U","2026-05-10","PRACTICEHUB",135.31,22],["U","2026-05-11","Netflix",17.36,22],
+["U","2026-05-10","Google One",2.01,22],["U","2026-05-12","Apple",9.99,22],["U","2026-05-15","Squarespace",21.95,22],
+["U","2026-05-15","THECHIROCLUB",19.36,22],["U","2026-05-20","Apple",29.99,22],["U","2026-05-25","Canva",11.99,22],
+["U","2026-05-26","FACEBK ads",407.61,22],["U","2026-05-27","Google Nest",18.00,22],["U","2026-05-28","YouTube Premium",13.99,22],
+["U","2026-06-01","Google Workspace",60.61,22],["U","2026-06-03","IM Spain Valencia",687.87,22],["U","2026-06-05","Klarna/Bershka",91.30,22],
+["U","2026-06-06","THECHIROCLUB",19.59,22],["U","2026-06-08","Apple",2.99,22],
+// --- Utrecht · 59 (09-07-2026, €727,37) ---
+["U","2026-06-10","PRACTICEHUB",177.21,23],["U","2026-06-11","AI Chat App",26.99,23],["U","2026-06-10","Google One",2.00,23],
+["U","2026-06-11","Klarna/Bershka",-51.31,23],["U","2026-06-12","Apple",9.99,23],["U","2026-06-13","Klarna/Bershka",-39.99,23],
+["U","2026-06-15","Squarespace",22.28,23],["U","2026-06-15","THECHIROCLUB",19.64,23],["U","2026-06-20","Apple",29.99,23],
+["U","2026-06-25","Canva",11.99,23],["U","2026-06-26","FACEBK ads",389.13,23],["U","2026-06-27","Google Nest",18.00,23],
+["U","2026-06-28","YouTube Premium",13.99,23],["U","2026-07-01","Google Workspace",56.70,23],["U","2026-07-05","Klarna/Meller",17.96,23],
+["U","2026-07-06","THECHIROCLUB",19.81,23],["U","2026-07-08","Apple",2.99,23],
+// --- Rotterdam ***3222 · 1 (09-04-2026, €39,95) ---
+["R","2026-04-09","Kaartbijdrage",39.95,24],
+// --- Rotterdam · 2 (09-06-2026, €118,81) ---
+["R","2026-05-12","PRACTICEHUB",118.81,25],
+// --- Rotterdam · 3 (09-07-2026, €314,21) ---
+["R","2026-06-12","PRACTICEHUB",118.87,26],["R","2026-07-06","Ticketmaster",97.67,26],["R","2026-07-06","Ticketmaster",97.67,26],
+// --- Holding ***9491 · 20 (09-01-2026, €140,35) ---
+["H","2026-01-09","Kaartbijdrage",39.95,27],["H","2025-12-20","NS Internationaal",100.40,27],
+// --- Holding · 21 (09-07-2026, €200,51) ---
+["H","2026-06-13","Anthropic Claude",18.00,28],["H","2026-06-13","Anthropic API",5.39,28],["H","2026-06-13","Anthropic API",48.52,28],
+["H","2026-06-20","Anthropic Claude",76.23,28],["H","2026-06-20","Anthropic API",38.25,28],["H","2026-06-22","Anthropic API",10.01,28],
+["H","2026-07-04","Render.com",4.11,28],
+];
+// printed "Totale uitgaven" per statement, for the wiring check
+const CARD_STMT_TOTALS = [
+ ["A","2025-12-09",1233.82,28],["A","2026-01-09",1089.59,28],["A","2026-02-09",1519.75,28],["A","2026-03-09",1389.63,28],
+ ["A","2026-04-09",1075.46,28],["A","2026-05-09",1268.73,28],["A","2026-06-09",1148.66,28],["A","2026-07-09",1120.45,28],
+ ["B","2025-12-09",944.80,28],["B","2026-01-09",680.62,28],["B","2026-02-09",729.59,28],["B","2026-03-09",441.49,28],
+ ["B","2026-04-09",655.74,28],["B","2026-05-09",794.56,28],["B","2026-06-09",902.48,28],["B","2026-07-09",781.67,28],
+ ["U","2025-12-09",1018.31,28],["U","2026-01-09",874.49,28],["U","2026-02-09",901.51,28],["U","2026-03-09",1035.79,28],
+ ["U","2026-04-09",928.18,28],["U","2026-05-09",1118.89,28],["U","2026-06-09",1552.91,28],["U","2026-07-09",727.37,28],
+ ["R","2026-04-09",39.95,28],["R","2026-06-09",118.81,28],["R","2026-07-09",314.21,28],
+ ["H","2026-01-09",140.35,28],["H","2026-07-09",200.51,28],
+];
+// each tx carries its statement index (5th element) matching CARD_STMT_TOTALS order
+function cardGroup(vendor){
+  const v=String(vendor).toLowerCase();
+  if(/highlevel|waghl|goghl/.test(v)) return "GHL (HighLevel)";
+  if(/practicehub/.test(v)) return "PracticeHub";
+  if(/facebk/.test(v)) return "Meta ads (card)";
+  if(/workspace|gsuite/.test(v)) return "Google Workspace";
+  if(/chiroclub|deputy|squarespace|hostinger|onestephost|elementor|namecheap|qr-code|vimeo|canva|capcut|twilio|render|anthropic|openai|ai chat|google one|google nest|kaartbijdrage/.test(v)) return "Software & tools";
+  return "Review (non-core)";
+}
+function computeCardSpend(){
+  const months=[...new Set(CARD_TX.map(t=>t[1].slice(0,7)))].sort();
+  const byGroup={}, byEnt={}, review=[];
+  for(const t of CARD_TX){
+    const ym=t[1].slice(0,7), g=cardGroup(t[2]);
+    ((byGroup[g]=byGroup[g]||{})[ym]=(byGroup[g][ym]||0)+t[3]);
+    ((byEnt[t[0]]=byEnt[t[0]]||{})[ym]=(byEnt[t[0]][ym]||0)+t[3]);
+    if(g==="Review (non-core)") review.push(t);
+  }
+  const sanity=CARD_STMT_TOTALS.map(([ent,sd,want],i)=>{
+    const got=Math.round(CARD_TX.filter(t=>t[4]===i).reduce((s,t)=>s+t[3],0)*100)/100;
+    return { ent, sd, want, got, ok: Math.abs(got-want)<=0.02 };
+  });
+  return { months, byGroup, byEnt, review: review.sort((a,b)=> a[1]<b[1]?1:-1), sanity, sanityAll: sanity.every(s=>s.ok) };
+}
+app.get("/card-spend", gate, (req,res)=>{ try{
+  const d=computeCardSpend();
+  const eur=n=> (n<0?"\u2212":"")+"\u20ac"+Math.abs(Math.round(n)).toLocaleString("en-US");
+  const show=d.months.filter(m=>m>="2025-11");
+  const groups=["GHL (HighLevel)","PracticeHub","Meta ads (card)","Google Workspace","Software & tools","Review (non-core)"];
+  const head="<tr><th style='text-align:left'>Vendor group</th>"+show.map(m=>"<th class=num>"+m.slice(5)+"-"+m.slice(2,4)+"</th>").join("")+"<th class=num>Total</th></tr>";
+  const rows=groups.map(g=>{ const o=d.byGroup[g]||{}; let tot=0;
+    const cells=show.map(m=>{ const v=o[m]; if(v!=null) tot+=v; return "<td class=num>"+(v==null?"\u2014":eur(v))+"</td>"; }).join("");
+    return "<tr><td style='font-weight:600'>"+g+"</td>"+cells+"<td class=num style='font-weight:700'>"+eur(tot)+"</td></tr>"; }).join("");
+  const entRows=Object.keys(CARD_ENTITY).map(e=>{ const o=d.byEnt[e]||{}; let tot=0;
+    const cells=show.map(m=>{ const v=o[m]; if(v!=null) tot+=v; return "<td class=num>"+(v==null?"\u2014":eur(v))+"</td>"; }).join("");
+    return "<tr><td>"+CARD_ENTITY[e]+"</td>"+cells+"<td class=num style='font-weight:700'>"+eur(tot)+"</td></tr>"; }).join("");
+  const revRows=d.review.map(t=>"<tr><td>"+t[1]+"</td><td>"+CARD_ENTITY[t[0]]+"</td><td>"+t[2]+"</td><td class=num>"+(t[3]<0?"\u2212":"")+"\u20ac"+Math.abs(t[3]).toFixed(2)+"</td></tr>").join("");
+  const failed=d.sanity.filter(s=>!s.ok);
+  res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Card spend \u2014 Posturefixx</title>"+
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1040px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}.card b.t{font-size:15px}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}td,th{padding:7px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap}"+
+    "th{color:#64748b;font-size:11px;text-transform:uppercase}.num{text-align:right;font-variant-numeric:tabular-nums}a{color:#2563EB}</style></head><body>"+
+    "<h1>Businesscard spend \u2014 all five cards</h1>"+
+    "<div class=sub>Vendor-level card spend per month, transcribed from the ING Businesscard statements (Nov 2025 \u2013 8 Jul 2026) and verified against every statement\u2019s printed total"+(d.sanityAll?" \u2014 <span style='color:#16a34a;font-weight:600'>all "+d.sanity.length+" statements reconcile \u2713</span>":" \u2014 <span style='color:#dc2626'>"+failed.length+" statement(s) off: "+failed.map(f=>CARD_ENTITY[f.ent]+" "+f.sd+" ("+f.got+" vs "+f.want+")").join(", ")+"</span>")+". Card spend hits the bank as one monthly settlement, so this vendor detail lives only here. To refresh: send the next month\u2019s statements and I\u2019ll extend the snapshot.</div>"+
+    "<div class=card><b class=t>By vendor group</b>"+
+    "<table><thead>"+head+"</thead><tbody>"+rows+"</tbody></table>"+
+    "<div style='color:#64748b;font-size:12px;margin-top:8px'>GHL runs on the Amstelveen card for the whole group (\u2248\u20ac1,000/mo incl. the \u20ac520\u2013540 Agency sub). \u201cMeta ads (card)\u201d is real ad spend paid by card on the Bussum + Utrecht cards \u2014 on top of whatever runs through the invoiced ad accounts, so include it when judging total acquisition cost.</div></div>"+
+    "<div class=card><b class=t>By entity (card)</b>"+
+    "<table><thead><tr><th style='text-align:left'>Card</th>"+show.map(m=>"<th class=num>"+m.slice(5)+"-"+m.slice(2,4)+"</th>").join("")+"<th class=num>Total</th></tr></thead><tbody>"+entRows+"</tbody></table></div>"+
+    "<div class=card><b class=t>Worth a look \u2014 non-core spend on business cards</b>"+
+    "<div style='color:#64748b;font-size:12px;margin:4px 0 2px'>Netflix, Apple, YouTube, Uber, retail, events \u2026 possibly fine, possibly private spend on a business card \u2014 your accountant will ask about these.</div>"+
+    "<table><thead><tr><th style='text-align:left'>Date</th><th style='text-align:left'>Card</th><th style='text-align:left'>Vendor</th><th class=num>Amount</th></tr></thead><tbody>"+revRows+"</tbody></table></div>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/profit'>/profit</a> \u00b7 <a href='/chiro-costs'>/chiro-costs</a> \u00b7 <a href='/bank'>/bank</a></p>"+
+    "</body></html>");
+}catch(e){ res.status(500).send("card-spend error: "+e.message); } });
 
 // Safety net: a single bad request should never take the whole site down (502).
 // Log it and keep serving every other page.
