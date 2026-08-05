@@ -877,7 +877,7 @@ app.get("/kpi-goal", gate, async (req,res)=>{
     "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Weekly KPI \u2014 road to \u20ac1M</title>"+
     "<script src='https://cdn.jsdelivr.net/npm/chart.js@4'></script><style>"+CSS+"</style></head><body>"+
     "<h1>Weekly KPI \u2014 road to \u20ac1,000,000</h1>"+
-    "<p class=sub>All four clinics combined \u00b7 paid visits = every processed treatment except telephone, evaluatie, gemiste afspraak &amp; ROF \u00b7 week = Mon\u2192Sat 18:00. <a href='/'>\u2190 home</a></p>"+
+    "<p class=sub>All four clinics combined \u00b7 paid visits = every processed treatment except telephone, evaluatie, gemiste afspraak &amp; ROF \u00b7 week = Mon\u2192Sat 18:00. LTV tables: <a href='/ltv'>/ltv</a>. <a href='/'>\u2190 home</a></p>"+
     "<div class=cards>"+
       "<div class=card><div class=cl>Reference weekly PVA</div><div class=cv>"+d.ref.pva+"</div><div class=cs>Jan 1\u2192now, "+d.ref.weeksDone+" wks</div></div>"+
       "<div class=card><div class=cl>Reference weekly intakes</div><div class=cv>"+d.ref.wkIntakes+"</div><div class=cs>avg/wk so far</div></div>"+
@@ -5181,6 +5181,7 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/chiro-costs","\ud83d\udcb6 Cost per chiro","What each chiropractor costs (matched from the bank per counterparty) next to what they bring in \u2014 ZZP full cost, employees grossed up, with a built-in wiring check."),
   card("/card-spend","\ud83d\udcb3 Card spend","All five Businesscards by vendor and month \u2014 GHL, PracticeHub, Meta-on-card, subscriptions, and a \u2018worth a look\u2019 list \u2014 reconciled to every statement total."),
   card("/chiro-monthly","\ud83d\udcc6 Chiro monthly","Per chiro, per month since 2025: visits and clean intakes, what they bring in (PracticeHub) and what the bank pays them \u2014 with cost as % of revenue."),
+  card("/ltv","\ud83d\udc8e Lifetime value","LTV per patient cohort \u2014 by month of first intake, per clinic and per chiro, as clean tables. The value lens on top of the volume levers."),
   card("/revenue","Revenue by clinic","Per-clinic revenue, pick a year for a clean read + auto summary, or overlay all years."),
   card("/waste","Spend drill-down","Every category by month, per location and year, click a line for cut/hold/move advice.")
 ], "#10b981")}
@@ -6379,6 +6380,7 @@ async function computeChiroActivity(){
 }
 async function computeChiroMonthly(){
   if(_cmCache.v && Date.now()-_cmCache.t < 3600e3) return _cmCache.v;
+  if(_cmCache.p) return _cmCache.p;            // a build is already running — share it
   const [act, costs] = await Promise.all([computeChiroActivity(), computeChiroCosts()]);
   let monthlyRev={}; try{ const p=await loadPvaData(); monthlyRev=(p&&p.monthlyRev)||{}; }catch(e){}
   const costRow={}; for(const r of costs.rows) costRow[r.key]=r;
@@ -6398,10 +6400,28 @@ async function computeChiroMonthly(){
              clinic:r.clinic, type:r.type, rows };
   }).filter(c=>c.rows.length);
   const v={ chiros, factor: costs.factor };
-  _cmCache.t=Date.now(); _cmCache.v=v; return v;
+  _cmCache.t=Date.now(); _cmCache.v=v; _cmCache.p=null; return v;
 }
 app.get("/chiro-monthly", gate, async (req,res)=>{ try{
-  const d=await computeChiroMonthly();
+  // Never hold the request open for the heavy first build (2025\u2192now history);
+  // start it in the background and show a self-refreshing holding page instead,
+  // so Render\u2019s proxy timeout can\u2019t make the page look broken.
+  const fresh = _cmCache.v && Date.now()-_cmCache.t < 3600e3;
+  if(!fresh){
+    if(!_cmCache.p){
+      _cmCache.p = computeChiroMonthly().catch(e=>{ _cmCache.err=e.message; _cmCache.p=null; });
+    }
+    if(_cmCache.err && !_cmCache.v){
+      const em=_cmCache.err; _cmCache.err=null;
+      return res.send("<!doctype html><meta charset=utf-8><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px;color:#16202E'><h2>Couldn\u2019t build the summary</h2><p style='color:#64748b'>"+em+"</p><p><a href='/chiro-monthly' style='color:#2563EB'>try again</a></p></div>");
+    }
+    return res.send("<!doctype html><meta charset=utf-8><meta http-equiv='refresh' content='8'>"+
+      "<div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px;color:#16202E;text-align:center'>"+
+      "<h2 style='margin-bottom:6px'>Building the per-chiro summary\u2026</h2>"+
+      "<p style='color:#64748b;font-size:14px'>First load reads the full 2025\u2192now appointment history for all four clinics \u2014 up to a minute. This page refreshes itself every few seconds and will show the table the moment it\u2019s ready. After that it\u2019s cached for an hour and opens instantly.</p>"+
+      "<div style='margin-top:18px;color:#94a3b8;font-size:13px'>\u23f3 working\u2026</div></div>");
+  }
+  const d=_cmCache.v;
   if(!d.chiros.length) return res.send("No chiro data yet \u2014 check PracticeHub and the bank statement files.");
   const sel=d.chiros.some(c=>c.key===req.query.chiro)? req.query.chiro : d.chiros[0].key;
   const c=d.chiros.find(x=>x.key===sel);
@@ -6431,6 +6451,100 @@ app.get("/chiro-monthly", gate, async (req,res)=>{ try{
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/chiro-costs'>/chiro-costs</a> \u00b7 <a href='/plan-through'>/plan-through</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a></p>"+
     "</body></html>");
 }catch(e){ res.status(500).send("chiro-monthly error: "+e.message); } });
+
+// ============================================================================
+//  /ltv — lifetime value per patient, cohorted by the month of their FIRST
+//  processed intake (telephone intakes, afzeggingen, evaluaties, ROF, gemiste
+//  and cancelled appointments never count — the house rules).
+//    LTV = (lifetime processed paid visits of the cohort \u00d7 \u20acKPI_PRICE) \u00f7 cohort size
+//  Shown per cohort month \u00d7 clinic, and per chiro (whoever did the first
+//  intake). Recent cohorts are still maturing, so their LTV is naturally lower.
+//  Heavy build (full 2025\u2192now history) \u2192 background build + holding page.
+// ============================================================================
+const _ltvCache = { t:0, v:null, p:null, err:null };
+async function computeLTV(){
+  if(_ltvCache.v && Date.now()-_ltvCache.t < 3600e3) return _ltvCache.v;
+  const clinicCell={}, chiroCell={}, monthSet=new Set();
+  for(const clinic of Object.keys(CLINICS)){
+    let types=[], names={}, appts=[];
+    try{
+      types = await phubAll(clinic, "/appointment_types", {});
+      names = await practitionerMap(clinic);
+      appts = await phubAll(clinic, "/appointments", { start: cmRange() });
+    }catch(e){ continue; }
+    const tname={}; for(const t of types) tname[t.id]=t.name||"";
+    const byId=new Map();
+    for(const a of appts){ const prev=byId.get(a.id); const cancelled=a.status==="cancelled"||!!a.cancelDate;
+      if(!prev||(prev.cancelled&&!cancelled)) byId.set(a.id,{...a,cancelled}); }
+    const byPatient={};
+    for(const a of byId.values()){
+      if(a.cancelled || a.status!=="processed" || a.patient_id==null) continue;
+      (byPatient[a.patient_id]=byPatient[a.patient_id]||[]).push(a);
+    }
+    for(const pid of Object.keys(byPatient)){
+      const list=byPatient[pid].sort((x,y)=> String(x.start)<String(y.start)?-1:1);
+      const intake=list.find(a=> isIntake(tname[a.appointment_type_id]||""));
+      if(!intake) continue;
+      const ym=String(intake.start||"").slice(0,7); if(!/^20\d\d-\d\d$/.test(ym)) continue;
+      const visits=list.filter(a=>{ const tn=tname[a.appointment_type_id]||""; return !isIntake(tn) && !notAVisit(tn); }).length;
+      monthSet.add(ym);
+      const cc=((clinicCell[ym]=clinicCell[ym]||{})[clinic]=clinicCell[ym][clinic]||{n:0,v:0});
+      cc.n++; cc.v+=visits;
+      const who=(names[intake.practitioner_id]||("#"+intake.practitioner_id)).trim()||"?";
+      const hc=((chiroCell[who]=chiroCell[who]||{})[ym]=chiroCell[who][ym]||{n:0,v:0});
+      hc.n++; hc.v+=visits;
+    }
+  }
+  const months=[...monthSet].sort();
+  const v={ months, clinicCell, chiroCell, price: KPI_PRICE };
+  _ltvCache.t=Date.now(); _ltvCache.v=v; _ltvCache.p=null; return v;
+}
+app.get("/ltv", gate, async (req,res)=>{ try{
+  const fresh = _ltvCache.v && Date.now()-_ltvCache.t < 3600e3;
+  if(!fresh){
+    if(!_ltvCache.p){ _ltvCache.p = computeLTV().catch(e=>{ _ltvCache.err=e.message; _ltvCache.p=null; }); }
+    if(_ltvCache.err && !_ltvCache.v){ const em=_ltvCache.err; _ltvCache.err=null;
+      return res.send("<!doctype html><meta charset=utf-8><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px'><h2>Couldn\u2019t build LTV</h2><p style='color:#64748b'>"+em+"</p><a href='/ltv' style='color:#2563EB'>try again</a></div>");
+    }
+    return res.send("<!doctype html><meta charset=utf-8><meta http-equiv='refresh' content='8'>"+
+      "<div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px;color:#16202E;text-align:center'>"+
+      "<h2 style='margin-bottom:6px'>Building lifetime value\u2026</h2>"+
+      "<p style='color:#64748b;font-size:14px'>Reading the full 2025\u2192now history for all four clinics \u2014 up to a minute. This page refreshes itself and shows the tables the moment they\u2019re ready; afterwards it\u2019s cached for an hour.</p>"+
+      "<div style='margin-top:18px;color:#94a3b8;font-size:13px'>\u23f3 working\u2026</div></div>");
+  }
+  const d=_ltvCache.v;
+  const clinics=Object.keys(CLINICS);
+  const ltv=(c)=> c&&c.n? Math.round(c.v*d.price/c.n) : null;
+  const cell=(c)=> c&&c.n? ("<td class=num><b>\u20ac"+ltv(c).toLocaleString("en-US")+"</b><div class=n>"+c.n+" pts \u00b7 "+(Math.round(10*c.v/c.n)/10)+" visits</div></td>") : "<td class=num style='color:#cbd5e1'>\u2014</td>";
+  // clinic table: rows = cohort months, cols = clinics + all
+  const rows1=d.months.map(ym=>{
+    const all=clinics.reduce((s,cl)=>{ const c=(d.clinicCell[ym]||{})[cl]; if(c){s.n+=c.n;s.v+=c.v;} return s; },{n:0,v:0});
+    return "<tr><td>"+ym+"</td>"+clinics.map(cl=>cell((d.clinicCell[ym]||{})[cl])).join("")+cell(all)+"</tr>";
+  }).join("");
+  const totAll={}; for(const cl of clinics){ totAll[cl]={n:0,v:0};
+    for(const ym of d.months){ const c=(d.clinicCell[ym]||{})[cl]; if(c){ totAll[cl].n+=c.n; totAll[cl].v+=c.v; } } }
+  const grand=clinics.reduce((s,cl)=>({n:s.n+totAll[cl].n,v:s.v+totAll[cl].v}),{n:0,v:0});
+  const totRow="<tr class=tot><td>All cohorts</td>"+clinics.map(cl=>cell(totAll[cl])).join("")+cell(grand)+"</tr>";
+  // chiro table: rows = chiros (by cohort size), cols = months + all
+  const chiros=Object.keys(d.chiroCell).map(w=>{ const all=Object.values(d.chiroCell[w]).reduce((s,c)=>({n:s.n+c.n,v:s.v+c.v}),{n:0,v:0}); return {w,all}; })
+    .sort((a,b)=>b.all.n-a.all.n);
+  const rows2=chiros.map(({w,all})=> "<tr><td style='font-weight:600'>"+w+"</td>"+d.months.map(ym=>cell(d.chiroCell[w][ym])).join("")+cell(all)+"</tr>").join("");
+  res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>LTV \u2014 Posturefixx</title>"+
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1060px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}"+
+    ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}.card b.t{font-size:15px}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}td,th{padding:7px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;vertical-align:top}"+
+    "th{color:#64748b;font-size:11px;text-transform:uppercase;text-align:left}.num{text-align:right;font-variant-numeric:tabular-nums}"+
+    ".n{color:#94a3b8;font-size:10.5px;font-weight:400}tr.tot td{font-weight:700;border-top:2px solid #e5e7eb}a{color:#2563EB}</style></head><body>"+
+    "<h1>Lifetime value per patient</h1>"+
+    "<div class=sub>LTV = lifetime processed paid visits \u00d7 \u20ac"+d.price+", per cohort = the month of the patient\u2019s <b>first processed intake</b>. Telephone intakes, afzeggingen, evaluaties, ROF, gemiste and cancelled appointments never count, and intakes themselves aren\u2019t counted as paid visits. <b>Recent cohorts are still maturing</b> \u2014 a patient who started last month has only had weeks to build value, so read the older cohorts as your true benchmark. Cached 1h.</div>"+
+    "<div class=card><b class=t>Per clinic \u2014 by cohort month</b>"+
+    "<table><thead><tr><th>Cohort</th>"+clinics.map(c=>"<th class=num>"+c+"</th>").join("")+"<th class=num>All clinics</th></tr></thead><tbody>"+rows1+totRow+"</tbody></table></div>"+
+    "<div class=card><b class=t>Per chiro \u2014 by cohort month (who did the first intake)</b>"+
+    "<table><thead><tr><th>Chiro</th>"+d.months.map(m=>"<th class=num>"+m.slice(5)+"-"+m.slice(2,4)+"</th>").join("")+"<th class=num>All</th></tr></thead><tbody>"+rows2+"</tbody></table></div>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a> \u00b7 <a href='/chiro-monthly'>/chiro-monthly</a> \u00b7 <a href='/plan-through'>/plan-through</a></p>"+
+    "</body></html>");
+}catch(e){ res.status(500).send("ltv error: "+e.message); } });
 
 // Safety net: a single bad request should never take the whole site down (502).
 // Log it and keep serving every other page.
