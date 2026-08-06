@@ -6577,7 +6577,9 @@ async function computeWeeklyCoach(){
   // scopes: "All", "clinic:<name>", "chiro:<name>"
   const act={};                                    // scope -> wk -> {i,v}
   const coh={};                                    // scope -> wk -> {n, lv}   (cohort size, lifetime visits)
+  const sub={};                                    // scope -> subkey -> wk -> {i,v}  (chiro scope: per clinic; clinic/All: per chiro)
   const bump=(o,scope,wk,f,by)=>{ const s=(o[scope]=o[scope]||{}); const c=(s[wk]=s[wk]||{i:0,v:0,n:0,lv:0}); c[f]+=by; };
+  const bumpS=(scope,key,wk,f)=>{ const a=(sub[scope]=sub[scope]||{}); const b=(a[key]=a[key]||{}); const c=(b[wk]=b[wk]||{i:0,v:0}); c[f]++; };
   const chiroSet=new Set();
   for(const clinic of Object.keys(CLINICS)){
     let types=[], names={}, appts=[];
@@ -6598,8 +6600,10 @@ async function computeWeeklyCoach(){
       const who=(names[a.practitioner_id]||("#"+a.practitioner_id)).trim()||"?";
       chiroSet.add(who);
       const isI=isIntake(tn), isV=!isI && !notAVisit(tn);
-      if(isI){ bump(act,"All",wk,"i",1); bump(act,"clinic:"+clinic,wk,"i",1); bump(act,"chiro:"+who,wk,"i",1); }
-      if(isV){ bump(act,"All",wk,"v",1); bump(act,"clinic:"+clinic,wk,"v",1); bump(act,"chiro:"+who,wk,"v",1); }
+      if(isI){ bump(act,"All",wk,"i",1); bump(act,"clinic:"+clinic,wk,"i",1); bump(act,"chiro:"+who,wk,"i",1);
+               bumpS("chiro:"+who,clinic,wk,"i"); bumpS("clinic:"+clinic,who,wk,"i"); bumpS("All",clinic,wk,"i"); }
+      if(isV){ bump(act,"All",wk,"v",1); bump(act,"clinic:"+clinic,wk,"v",1); bump(act,"chiro:"+who,wk,"v",1);
+               bumpS("chiro:"+who,clinic,wk,"v"); bumpS("clinic:"+clinic,who,wk,"v"); bumpS("All",clinic,wk,"v"); }
       if(a.patient_id!=null) (byPatient[a.patient_id]=byPatient[a.patient_id]||[]).push({start:String(a.start),tn,who});
     }
     for(const pid of Object.keys(byPatient)){
@@ -6613,7 +6617,7 @@ async function computeWeeklyCoach(){
       }
     }
   }
-  const v={ act, coh, chiros:[...chiroSet].sort(), price:KPI_PRICE };
+  const v={ act, coh, sub, chiros:[...chiroSet].sort(), price:KPI_PRICE };
   _wcCache.t=Date.now(); _wcCache.v=v; _wcCache.p=null; return v;
 }
 app.get("/weekly-coach", gate, async (req,res)=>{ try{
@@ -6646,12 +6650,17 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
   const sum4=(arr)=>{ let i=0,v=0,n=0,lv=0; for(const wk of arr){ const x=a[wk]||{i:0,v:0}; i+=x.i; v+=x.v; const cc=(d.coh[sel]||{})[wk]; if(cc){n+=cc.n;lv+=cc.lv;} } return {i,v,pva:(i? Math.round(10*v/i)/10:null), ltv:(n? Math.round(lv*d.price/n):null)}; };
   const last4=sum4(allWeeks.slice(0,4)), prev4=sum4(allWeeks.slice(4,8));
   const delta=(nw,ol)=>{ if(nw==null||ol==null||!ol) return ""; const p=Math.round(100*(nw-ol)/ol); const up=p>=0; return " <span style='color:"+(up?"#16a34a":"#dc2626")+";font-size:12px'>"+(up?"\u25b2":"\u25bc")+Math.abs(p)+"%</span>"; };
+  const S=d.sub[sel]||{};
   const rows=weeks.map(wk=>{
     const aa=a[wk]||{i:0,v:0}; const cc=c[wk];
     const pva = aa.i? Math.round(10*aa.v/aa.i)/10 : null;
     const ltv = (cc&&cc.n)? Math.round(cc.lv*d.price/cc.n) : null;
-    return "<tr><td>"+wk+"</td><td class=num>"+aa.i+"</td><td class=num>"+aa.v+"</td>"+
-      "<td class=num style='font-weight:600;"+(pva==null?"":("color:"+(avgAll.pva&&pva>=avgAll.pva?"#16a34a":(avgAll.pva&&pva<0.8*avgAll.pva?"#dc2626":"#d97706"))))+"'>"+(pva==null?"\u2014":pva)+"</td>"+
+    const lines=Object.keys(S).map(k=>{ const x=S[k][wk]; return (x&&(x.i||x.v))? {k, i:x.i, v:x.v, pva:(x.i? Math.round(10*x.v/x.i)/10 : null)} : null; })
+      .filter(Boolean).sort((p,q)=>q.v-p.v);
+    const subRows = lines.length>1 ? lines.map(l=>"<tr class=ln><td class=cl>\u21b3 "+l.k+"</td><td class=num>"+l.i+"</td><td class=num>"+l.v+"</td><td class=num>"+(l.pva==null?"\u2014":l.pva)+"</td><td class=num></td></tr>").join("") : "";
+    const lbl = lines.length===1 ? " <span class=cl2>\u00b7 "+lines[0].k+"</span>" : "";
+    return subRows+"<tr class=wt><td><b>"+wk+"</b>"+lbl+"</td><td class=num><b>"+aa.i+"</b></td><td class=num><b>"+aa.v+"</b></td>"+
+      "<td class=num style='font-weight:700;"+(pva==null?"":("color:"+(avgAll.pva&&pva>=avgAll.pva?"#16a34a":(avgAll.pva&&pva<0.8*avgAll.pva?"#dc2626":"#d97706"))))+"'>"+(pva==null?"\u2014":pva)+"</td>"+
       "<td class=num>"+(ltv==null?"\u2014":("<b>\u20ac"+ltv.toLocaleString('en-US')+"</b><div class=n>"+cc.n+" pts \u00b7 "+(Math.round(10*cc.lv/cc.n)/10)+" visits</div>"))+"</td></tr>";
   }).join("");
   const T=weeks.reduce((s,wk)=>{ const aa=a[wk]||{i:0,v:0}; const cc=c[wk]||{n:0,lv:0}; return {i:s.i+aa.i,v:s.v+aa.v,n:s.n+cc.n,lv:s.lv+cc.lv}; },{i:0,v:0,n:0,lv:0});
@@ -6664,9 +6673,11 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     ".kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px}.kpi b{font-size:21px;display:block}.kpi span{font-size:11.5px;color:#64748b}"+
     "table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:7px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;vertical-align:top}"+
     "th{color:#64748b;font-size:11px;text-transform:uppercase;text-align:left}.num{text-align:right;font-variant-numeric:tabular-nums}"+
-    ".n{color:#94a3b8;font-size:10.5px;font-weight:400}tr.tot td{font-weight:700;border-top:2px solid #e5e7eb}a{color:#2563EB}</style></head><body>"+
+    ".n{color:#94a3b8;font-size:10.5px;font-weight:400}tr.tot td{font-weight:700;border-top:2px solid #e5e7eb}"+
+    "tr.ln td{color:#475569;border-bottom:0;padding-top:6px;padding-bottom:2px}.cl{padding-left:14px;color:#64748b}.cl2{color:#94a3b8;font-weight:400;font-size:12px}"+
+    "tr.wt td{border-bottom:1px solid #eef2f7;padding-bottom:9px}a{color:#2563EB}</style></head><body>"+
     "<h1>Weekly coaching sheet \u2014 "+selLabel+"</h1>"+
-    "<div class=sub>One row per week (Monday date) since 2025. Intakes = processed regular intakes (telephone never counts). Visits = processed paid visits \u2014 afzeggingen, gemiste, evaluaties, ROF, progress, telephone and cancelled never count, intakes not included. PVA = visits \u00f7 intakes that week. Cohort LTV = what the patients whose <b>first intake fell in that week</b> are worth to date (lifetime paid visits \u00d7 \u20ac"+d.price+" per patient) \u2014 recent weeks are still maturing, so judge young weeks against older weeks at the same age.</div>"+
+    "<div class=sub>One row per week (Monday date) since 2025. Intakes = processed regular intakes (telephone never counts). Visits = processed paid visits \u2014 afzeggingen, gemiste, evaluaties, ROF, progress, telephone and cancelled never count, intakes not included. PVA = visits \u00f7 intakes that week. Cohort LTV = what the patients whose <b>first intake fell in that week</b> are worth to date (lifetime paid visits \u00d7 \u20ac"+d.price+" per patient) \u2014 recent weeks are still maturing, so judge young weeks against older weeks at the same age. On a chiro\u2019s view each week splits per clinic (coverage shifts credited where they happened); on a clinic\u2019s view each week splits per chiro.</div>"+
     "<div class=tabs>"+tabs+
     "<select onchange=\"if(this.value)location.href='/weekly-coach?scope='+this.value\">"+
     "<option value=''"+(sel.indexOf("chiro:")===0?"":" selected")+">\u2026 or pick a chiro</option>"+copt+"</select></div>"+
