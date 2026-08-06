@@ -6326,19 +6326,17 @@ app.get("/card-spend", gate, (req,res)=>{ try{
 }catch(e){ res.status(500).send("card-spend error: "+e.message); } });
 
 // ============================================================================
-//  /chiro-monthly — one chiro, one row per month (2025 → now):
-//    Visits    = processed appointments, NOT cancelled, and not a telephone /
-//                afzegging / gemiste / evaluatie / ROF / progress type
-//                (the same notAVisit rule as the whole dashboard); intakes
-//                counted separately, not inside visits.
-//    Intakes   = processed regular intakes (telephone intakes never count).
-//    Revenue   = what they brought in that month per PracticeHub (€, gross).
-//    Cost      = what the bank actually paid them that month (MT940 match,
-//                same rules as /chiro-costs; employees grossed up ×factor).
-//  First load pulls the full 2025→now appointment history per clinic, so it
-//  can take a minute; cached 1h afterwards.
+//  /chiro-monthly — one chiro, one block per month (2025 → now), SPLIT PER
+//  CLINIC because chiros cover at other locations:
+//    per clinic line: Visits (processed paid only — telephone/afzeg/gemiste/
+//    evaluatie/ROF/progress/cancelled never count), Intakes (regular processed
+//    only), PVA (visits÷intakes), Revenue for that location = visits × €price.
+//    Month total adds Cost = what the bank actually paid them that month
+//    (same matching as /chiro-costs; employees grossed up ×EMPLOYER_FACTOR so
+//    wage taxes are included), and Cost as % of the month's revenue.
+//  Heavy first build (full 2025→now history) → background build + holding page.
 // ============================================================================
-const _cmCache = { t:0, v:null };
+const _cmCache = { t:0, v:null, p:null, err:null };
 function cmRange(){
   const f=d=>d.toISOString().slice(0,19).replace("T"," ");
   return "between:2025-01-01 00:00:00,"+f(new Date());
@@ -6353,7 +6351,7 @@ function cmRuleFor(name, clinic){
   return null;
 }
 async function computeChiroActivity(){
-  // key -> { ym -> {v,i} }
+  // key -> clinic -> ym -> {v,i}
   const act={};
   for(const clinic of Object.keys(CLINICS)){
     let types=[], names={}, appts=[];
@@ -6372,7 +6370,7 @@ async function computeChiroActivity(){
       const who=cmRuleFor(names[a.practitioner_id]||"", clinic);
       if(!who) continue;
       const ym=String(a.start||"").slice(0,7); if(!/^20\d\d-\d\d$/.test(ym)) continue;
-      const slot=((act[who]=act[who]||{})[ym]=act[who][ym]||{v:0,i:0});
+      const slot=(((act[who]=act[who]||{})[clinic]=act[who][clinic]||{})[ym]=act[who][clinic][ym]||{v:0,i:0});
       if(isIntake(tn)) slot.i++;
       else if(!notAVisit(tn)) slot.v++;
     }
@@ -6381,45 +6379,44 @@ async function computeChiroActivity(){
 }
 async function computeChiroMonthly(){
   if(_cmCache.v && Date.now()-_cmCache.t < 3600e3) return _cmCache.v;
-  if(_cmCache.p) return _cmCache.p;            // a build is already running — share it
+  if(_cmCache.p) return _cmCache.p;
   const [act, costs] = await Promise.all([computeChiroActivity(), computeChiroCosts()]);
-  let monthlyRev={}; try{ const p=await loadPvaData(); monthlyRev=(p&&p.monthlyRev)||{}; }catch(e){}
   const costRow={}; for(const r of costs.rows) costRow[r.key]=r;
   const months=[]; { const now=new Date(); let y=2025,m=1;
     while(y<now.getUTCFullYear() || (y===now.getUTCFullYear() && m<=now.getUTCMonth()+1)){
       months.push(y+"-"+String(m).padStart(2,"0")); m++; if(m>12){m=1;y++;} } }
   const chiros=CHIRO_BANK_RULES.map(r=>{
-    const a=act[r.key]||{}; const c=(costRow[r.key]||{}).byM||{};
+    const byClinic=act[r.key]||{}; const c=(costRow[r.key]||{}).byM||{};
     const rows=months.map(ym=>{
-      const aa=a[ym]; const cc=c[ym];
-      const rev=(r.rev && monthlyRev[ym] && monthlyRev[ym][r.rev]!=null)? monthlyRev[ym][r.rev] : null;
+      const lines=Object.keys(byClinic).map(cl=>{
+        const a=byClinic[cl][ym]; if(!a || (!a.v && !a.i)) return null;
+        return { clinic:cl, v:a.v, i:a.i, pva:(a.i? Math.round(10*a.v/a.i)/10 : null), rev:a.v*KPI_PRICE };
+      }).filter(Boolean).sort((x,y)=>y.v-x.v);
+      const cc=c[ym];
+      if(!lines.length && !cc) return null;
+      const tv=lines.reduce((s,l)=>s+l.v,0), ti=lines.reduce((s,l)=>s+l.i,0), trev=lines.reduce((s,l)=>s+l.rev,0);
       const cost=cc? cc.cost : null;
-      return { ym, v: aa?aa.v:null, i: aa?aa.i:null, rev, cost,
-               pct: (rev&&cost)? Math.round(1000*cost/rev)/10 : null };
-    }).filter(row=> row.v!=null || row.i!=null || row.rev!=null || row.cost!=null);
+      return { ym, lines,
+        tot:{ v:tv, i:ti, pva:(ti? Math.round(10*tv/ti)/10 : null), rev:trev, cost,
+              net:(cc? cc.net : null), pct:(cost&&trev? Math.round(1000*cost/trev)/10 : null) } };
+    }).filter(Boolean);
     return { key:r.key, label:r.label+(r.key==="LaraAms"?" (Amstelveen)":(r.key==="LaraBus"?" (Bussum)":"")),
-             clinic:r.clinic, type:r.type, rows };
+             type:r.type, rows };
   }).filter(c=>c.rows.length);
-  const v={ chiros, factor: costs.factor };
+  const v={ chiros, factor: costs.factor, price: KPI_PRICE };
   _cmCache.t=Date.now(); _cmCache.v=v; _cmCache.p=null; return v;
 }
 app.get("/chiro-monthly", gate, async (req,res)=>{ try{
-  // Never hold the request open for the heavy first build (2025\u2192now history);
-  // start it in the background and show a self-refreshing holding page instead,
-  // so Render\u2019s proxy timeout can\u2019t make the page look broken.
   const fresh = _cmCache.v && Date.now()-_cmCache.t < 3600e3;
   if(!fresh){
-    if(!_cmCache.p){
-      _cmCache.p = computeChiroMonthly().catch(e=>{ _cmCache.err=e.message; _cmCache.p=null; });
-    }
-    if(_cmCache.err && !_cmCache.v){
-      const em=_cmCache.err; _cmCache.err=null;
-      return res.send("<!doctype html><meta charset=utf-8><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px;color:#16202E'><h2>Couldn\u2019t build the summary</h2><p style='color:#64748b'>"+em+"</p><p><a href='/chiro-monthly' style='color:#2563EB'>try again</a></p></div>");
+    if(!_cmCache.p){ _cmCache.p = computeChiroMonthly().catch(e=>{ _cmCache.err=e.message; _cmCache.p=null; }); }
+    if(_cmCache.err && !_cmCache.v){ const em=_cmCache.err; _cmCache.err=null;
+      return res.send("<!doctype html><meta charset=utf-8><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px'><h2>Couldn\u2019t build the summary</h2><p style='color:#64748b'>"+em+"</p><a href='/chiro-monthly' style='color:#2563EB'>try again</a></div>");
     }
     return res.send("<!doctype html><meta charset=utf-8><meta http-equiv='refresh' content='8'>"+
       "<div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px;color:#16202E;text-align:center'>"+
       "<h2 style='margin-bottom:6px'>Building the per-chiro summary\u2026</h2>"+
-      "<p style='color:#64748b;font-size:14px'>First load reads the full 2025\u2192now appointment history for all four clinics \u2014 up to a minute. This page refreshes itself every few seconds and will show the table the moment it\u2019s ready. After that it\u2019s cached for an hour and opens instantly.</p>"+
+      "<p style='color:#64748b;font-size:14px'>First load reads the full 2025\u2192now appointment history for all four clinics \u2014 up to a minute, then cached for an hour.</p>"+
       "<div style='margin-top:18px;color:#94a3b8;font-size:13px'>\u23f3 working\u2026</div></div>");
   }
   const d=_cmCache.v;
@@ -6428,28 +6425,36 @@ app.get("/chiro-monthly", gate, async (req,res)=>{ try{
   const c=d.chiros.find(x=>x.key===sel);
   const eur=n=> n==null?"\u2014":("\u20ac"+Math.round(n).toLocaleString("en-US"));
   const tabs=d.chiros.map(x=>"<a class='tab"+(x.key===sel?" on":"")+"' href='/chiro-monthly?chiro="+x.key+"'>"+x.label+"</a>").join("");
-  const rows=c.rows.map(r=>{
-    const col=r.pct==null?"":( "color:"+(r.pct<=45?"#16a34a":(r.pct<=55?"#d97706":"#dc2626")) );
-    return "<tr><td>"+r.ym+"</td><td class=num>"+(r.v==null?"\u2014":r.v)+"</td><td class=num>"+(r.i==null?"\u2014":r.i)+"</td>"+
-      "<td class=num>"+eur(r.rev)+"</td><td class=num>"+eur(r.cost)+"</td><td class=num style='font-weight:600;"+col+"'>"+(r.pct==null?"\u2014":r.pct+"%")+"</td></tr>";
+  const body=c.rows.map(r=>{
+    const multi=r.lines.length>1;
+    const lineRows=r.lines.map(l=>
+      "<tr class=ln><td class=cl>"+(multi?"\u21b3 ":"")+l.clinic+"</td><td class=num>"+l.v+"</td><td class=num>"+l.i+"</td><td class=num>"+(l.pva==null?"\u2014":l.pva)+"</td><td class=num>"+eur(l.rev)+"</td><td class=num></td><td class=num></td></tr>").join("");
+    const col=r.tot.pct==null?"":("color:"+(r.tot.pct<=45?"#16a34a":(r.tot.pct<=55?"#d97706":"#dc2626")));
+    const costCell = r.tot.cost==null ? "\u2014" :
+      (eur(r.tot.cost)+(c.type==="employee"&&r.tot.net!=null?"<div class=sn>"+eur(r.tot.net)+" net \u00d7"+d.factor+" incl. wage taxes</div>":""));
+    const monthRow="<tr class=mo><td><b>"+r.ym+"</b>"+(multi?"":"")+"</td><td class=num><b>"+r.tot.v+"</b></td><td class=num><b>"+r.tot.i+"</b></td><td class=num><b>"+(r.tot.pva==null?"\u2014":r.tot.pva)+"</b></td><td class=num><b>"+eur(r.tot.rev)+"</b></td><td class=num><b>"+costCell+"</b></td><td class=num style='font-weight:700;"+col+"'>"+(r.tot.pct==null?"\u2014":r.tot.pct+"%")+"</td></tr>";
+    return (multi? lineRows+monthRow : monthRow.replace("<b>"+r.ym+"</b>","<b>"+r.ym+"</b> <span class=cl2>"+(r.lines[0]?r.lines[0].clinic:"")+"</span>"));
   }).join("");
-  const T=c.rows.reduce((s,r)=>({v:s.v+(r.v||0),i:s.i+(r.i||0),rev:s.rev+(r.rev||0),cost:s.cost+(r.cost||0)}),{v:0,i:0,rev:0,cost:0});
+  const T=c.rows.reduce((s,r)=>({v:s.v+r.tot.v,i:s.i+r.tot.i,rev:s.rev+r.tot.rev,cost:s.cost+(r.tot.cost||0)}),{v:0,i:0,rev:0,cost:0});
+  const tp=T.i? Math.round(10*T.v/T.i)/10 : null;
   const tpct=T.rev? Math.round(1000*T.cost/T.rev)/10 : null;
   res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Chiro monthly \u2014 Posturefixx</title>"+
-    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#16202E}"+
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#16202E}"+
     "h1{font-size:23px;margin:0 0 2px}.sub{color:#64748b;font-size:13px;margin:0 0 14px}"+
     ".tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;font-size:13px;font-weight:600;text-decoration:none;color:#16202E}.tab.on{background:#16202E;color:#fff}"+
     ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}"+
-    "table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:8px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap}"+
-    "th{color:#64748b;font-size:11px;text-transform:uppercase;text-align:left}.num{text-align:right;font-variant-numeric:tabular-nums}"+
+    "table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:7px 8px;white-space:nowrap;vertical-align:top}"+
+    "th{color:#64748b;font-size:11px;text-transform:uppercase;text-align:left;border-bottom:1px solid #f1f5f9}.num{text-align:right;font-variant-numeric:tabular-nums}"+
+    "tr.ln td{color:#475569;border-bottom:0;padding-top:6px;padding-bottom:2px}.cl{padding-left:14px;color:#64748b}.cl2{color:#94a3b8;font-weight:400;font-size:12px}"+
+    "tr.mo td{border-bottom:1px solid #eef2f7;padding-bottom:9px}.sn{color:#94a3b8;font-size:10.5px;font-weight:400}"+
     "tr.tot td{font-weight:700;border-top:2px solid #e5e7eb}a{color:#2563EB}</style></head><body>"+
-    "<h1>Per-chiro monthly summary</h1>"+
-    "<div class=sub>Visits = processed appointments only \u2014 telephone, afzeggingen, gemiste, evaluaties, ROF, progress exams and anything cancelled never count; intakes are counted separately (regular processed intakes only). Revenue = PracticeHub gross for that chiro\u2019s clinic column. Cost = what the bank actually paid them (same matching as <a href='/chiro-costs'>/chiro-costs</a>; employees grossed up \u00d7"+d.factor+"). Bank costs run as far back as the statement files on Drive \u2014 currently from Jan 2026; earlier months show \u2014.</div>"+
+    "<h1>Per-chiro monthly summary \u2014 split per location</h1>"+
+    "<div class=sub>Each month splits per clinic because chiros cover at other locations. Visits = processed paid only (telephone, afzeggingen, gemiste, evaluaties, ROF, progress, cancelled never count); intakes separate (regular processed only). PVA = visits \u00f7 intakes. Revenue per location = visits \u00d7 \u20ac"+d.price+" \u2014 so covered shifts are credited to the clinic where they happened. Cost = what the bank actually paid them that month (one payment covers all locations); for employees this is the net payout \u00d7"+d.factor+" so <b>wage taxes and employer charges are included</b> \u2014 set EMPLOYER_FACTOR to Bamboek\u2019s exact figure when you have it. Bank costs run as far back as the statement files \u2014 currently Jan 2026.</div>"+
     "<div class=tabs>"+tabs+"</div>"+
-    "<div class=card><table><thead><tr><th>Month</th><th class=num>Visits</th><th class=num>Intakes</th><th class=num>Revenue</th><th class=num>Cost</th><th class=num>Cost %</th></tr></thead><tbody>"+rows+
-    "<tr class=tot><td>Total</td><td class=num>"+T.v+"</td><td class=num>"+T.i+"</td><td class=num>"+eur(T.rev)+"</td><td class=num>"+eur(T.cost)+"</td><td class=num>"+(tpct==null?"\u2014":tpct+"%")+"</td></tr>"+
+    "<div class=card><table><thead><tr><th>Month \u00b7 clinic</th><th class=num>Visits</th><th class=num>Intakes</th><th class=num>PVA</th><th class=num>Revenue (\u20ac"+d.price+"\u00d7v)</th><th class=num>Cost</th><th class=num>Cost %</th></tr></thead><tbody>"+body+
+    "<tr class=tot><td>Total</td><td class=num>"+T.v+"</td><td class=num>"+T.i+"</td><td class=num>"+(tp==null?"\u2014":tp)+"</td><td class=num>"+eur(T.rev)+"</td><td class=num>"+eur(T.cost)+"</td><td class=num>"+(tpct==null?"\u2014":tpct+"%")+"</td></tr>"+
     "</tbody></table></div>"+
-    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/chiro-costs'>/chiro-costs</a> \u00b7 <a href='/plan-through'>/plan-through</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a></p>"+
+    "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/weekly-coach'>/weekly-coach</a> \u00b7 <a href='/chiro-costs'>/chiro-costs</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a></p>"+
     "</body></html>");
 }catch(e){ res.status(500).send("chiro-monthly error: "+e.message); } });
 
@@ -6632,13 +6637,21 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
   const tabs=scopes.map(([k,l])=>"<a class='tab"+(k===sel?" on":"")+"' href='/weekly-coach?scope="+encodeURIComponent(k)+"'>"+l+"</a>").join("");
   const copt=d.chiros.map(w=>{ const k="chiro:"+w; return "<option value='"+encodeURIComponent(k)+"'"+(k===sel?" selected":"")+">"+w+"</option>"; }).join("");
   const a=d.act[sel]||{}, c=d.coh[sel]||{};
-  const weeks=[...new Set(Object.keys(a).concat(Object.keys(c)))].sort().reverse();
+  const allWeeks=[...new Set(Object.keys(a).concat(Object.keys(c)))].sort().reverse();
+  const showAll = req.query.all==="1";
+  const weeks = showAll ? allWeeks : allWeeks.slice(0,12);
+  // scope averages + 4-week trend
+  const pvaOf=(wk)=>{ const x=a[wk]; return (x&&x.i)? x.v/x.i : null; };
+  const avgAll=(()=>{ let i=0,v=0; for(const wk of allWeeks){ const x=a[wk]; if(x){i+=x.i;v+=x.v;} } return { i:i/(allWeeks.length||1), v:v/(allWeeks.length||1), pva:(i? v/i : null) }; })();
+  const sum4=(arr)=>{ let i=0,v=0,n=0,lv=0; for(const wk of arr){ const x=a[wk]||{i:0,v:0}; i+=x.i; v+=x.v; const cc=(d.coh[sel]||{})[wk]; if(cc){n+=cc.n;lv+=cc.lv;} } return {i,v,pva:(i? Math.round(10*v/i)/10:null), ltv:(n? Math.round(lv*d.price/n):null)}; };
+  const last4=sum4(allWeeks.slice(0,4)), prev4=sum4(allWeeks.slice(4,8));
+  const delta=(nw,ol)=>{ if(nw==null||ol==null||!ol) return ""; const p=Math.round(100*(nw-ol)/ol); const up=p>=0; return " <span style='color:"+(up?"#16a34a":"#dc2626")+";font-size:12px'>"+(up?"\u25b2":"\u25bc")+Math.abs(p)+"%</span>"; };
   const rows=weeks.map(wk=>{
     const aa=a[wk]||{i:0,v:0}; const cc=c[wk];
     const pva = aa.i? Math.round(10*aa.v/aa.i)/10 : null;
     const ltv = (cc&&cc.n)? Math.round(cc.lv*d.price/cc.n) : null;
     return "<tr><td>"+wk+"</td><td class=num>"+aa.i+"</td><td class=num>"+aa.v+"</td>"+
-      "<td class=num style='font-weight:600'>"+(pva==null?"\u2014":pva)+"</td>"+
+      "<td class=num style='font-weight:600;"+(pva==null?"":("color:"+(avgAll.pva&&pva>=avgAll.pva?"#16a34a":(avgAll.pva&&pva<0.8*avgAll.pva?"#dc2626":"#d97706"))))+"'>"+(pva==null?"\u2014":pva)+"</td>"+
       "<td class=num>"+(ltv==null?"\u2014":("<b>\u20ac"+ltv.toLocaleString('en-US')+"</b><div class=n>"+cc.n+" pts \u00b7 "+(Math.round(10*cc.lv/cc.n)/10)+" visits</div>"))+"</td></tr>";
   }).join("");
   const T=weeks.reduce((s,wk)=>{ const aa=a[wk]||{i:0,v:0}; const cc=c[wk]||{n:0,lv:0}; return {i:s.i+aa.i,v:s.v+aa.v,n:s.n+cc.n,lv:s.lv+cc.lv}; },{i:0,v:0,n:0,lv:0});
@@ -6648,6 +6661,7 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     ".tabs{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center}.tab{padding:8px 14px;border-radius:8px;background:#f1f5f9;font-size:13px;font-weight:600;text-decoration:none;color:#16202E}.tab.on{background:#16202E;color:#fff}"+
     "select{font-size:13px;padding:7px 10px;border-radius:8px;border:1px solid #d1d5db}"+
     ".card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px;overflow-x:auto}"+
+    ".kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi{flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px}.kpi b{font-size:21px;display:block}.kpi span{font-size:11.5px;color:#64748b}"+
     "table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:7px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;vertical-align:top}"+
     "th{color:#64748b;font-size:11px;text-transform:uppercase;text-align:left}.num{text-align:right;font-variant-numeric:tabular-nums}"+
     ".n{color:#94a3b8;font-size:10.5px;font-weight:400}tr.tot td{font-weight:700;border-top:2px solid #e5e7eb}a{color:#2563EB}</style></head><body>"+
@@ -6656,9 +6670,18 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     "<div class=tabs>"+tabs+
     "<select onchange=\"if(this.value)location.href='/weekly-coach?scope='+this.value\">"+
     "<option value=''"+(sel.indexOf("chiro:")===0?"":" selected")+">\u2026 or pick a chiro</option>"+copt+"</select></div>"+
+    "<div class=kpis>"+
+    "<div class=kpi><b>"+last4.i+"</b><span>intakes \u00b7 last 4 wks"+delta(last4.i,prev4.i)+"</span></div>"+
+    "<div class=kpi><b>"+last4.v+"</b><span>paid visits \u00b7 last 4 wks"+delta(last4.v,prev4.v)+"</span></div>"+
+    "<div class=kpi><b>"+(last4.pva==null?"\u2014":last4.pva)+"</b><span>PVA \u00b7 last 4 wks"+delta(last4.pva,prev4.pva)+"</span></div>"+
+    "<div class=kpi><b>"+(avgAll.pva?Math.round(10*avgAll.pva)/10:"\u2014")+"</b><span>avg PVA since 2025 (the benchmark for the colours)</span></div>"+
+    "</div>"+
     "<div class=card><table><thead><tr><th>Week of</th><th class=num>Intakes</th><th class=num>Paid visits</th><th class=num>PVA</th><th class=num>Cohort LTV (to date)</th></tr></thead><tbody>"+rows+
     "<tr class=tot><td>Total / avg</td><td class=num>"+T.i+"</td><td class=num>"+T.v+"</td><td class=num>"+(T.i?Math.round(10*T.v/T.i)/10:"\u2014")+"</td><td class=num>"+(T.n?("\u20ac"+Math.round(T.lv*d.price/T.n).toLocaleString('en-US')+"<div class=n>"+T.n+" pts</div>"):"\u2014")+"</td></tr>"+
-    "</tbody></table></div>"+
+    "</tbody></table>"+
+    (showAll? "<div style='margin-top:10px'><a href='/weekly-coach?scope="+encodeURIComponent(sel)+"' style='color:#2563EB;font-size:13px'>show recent 12 weeks</a></div>"
+            : (allWeeks.length>12? "<div style='margin-top:10px'><a href='/weekly-coach?scope="+encodeURIComponent(sel)+"&all=1' style='color:#2563EB;font-size:13px'>show all "+allWeeks.length+" weeks since 2025</a></div>" : ""))+
+    "</div>"+
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/ltv'>/ltv</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a> \u00b7 <a href='/chiro-monthly'>/chiro-monthly</a></p>"+
     "</body></html>");
 }catch(e){ res.status(500).send("weekly-coach error: "+e.message); } });
