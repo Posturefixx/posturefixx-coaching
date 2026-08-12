@@ -6648,22 +6648,22 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
   // scope averages + 4-week trend
   const pvaOf=(wk)=>{ const x=a[wk]; return (x&&x.i)? x.v/x.i : null; };
   const avgAll=(()=>{ let i=0,v=0; for(const wk of allWeeks){ const x=a[wk]; if(x){i+=x.i;v+=x.v;} } return { i:i/(allWeeks.length||1), v:v/(allWeeks.length||1), pva:(i? v/i : null) }; })();
-  const sum4=(arr)=>{ let i=0,v=0,n=0,lv=0; for(const wk of arr){ const x=a[wk]||{i:0,v:0}; i+=x.i; v+=x.v; const cc=(d.coh[sel]||{})[wk]; if(cc){n+=cc.n;lv+=cc.lv;} } return {i,v,pva:(i? Math.round(10*v/i)/10:null), ltv:(n? Math.round(lv*d.price/n + d.intakePrice):null)}; };
+  const sum4=(arr)=>{ let i=0,v=0,n=0,lv=0; for(const wk of arr){ const x=a[wk]||{i:0,v:0}; i+=x.i; v+=x.v; const cc=(d.coh[sel]||{})[wk]; if(cc){n+=cc.n;lv+=cc.lv;} } const p4=(i? Math.round(10*v/i)/10:null); return {i,v,pva:p4, ltv:(p4!=null? Math.round(p4*d.price):null)}; };
   const last4=sum4(allWeeks.slice(0,4)), prev4=sum4(allWeeks.slice(4,8));
-  const ltvAll=(()=>{ let n=0,lv=0; for(const wk of allWeeks){ const cc=(d.coh[sel]||{})[wk]; if(cc){n+=cc.n;lv+=cc.lv;} } return n? Math.round(lv*d.price/n + d.intakePrice) : null; })();
+  const ltvAll = avgAll.pva? Math.round(avgAll.pva*d.price) : null;
   const delta=(nw,ol)=>{ if(nw==null||ol==null||!ol) return ""; const p=Math.round(100*(nw-ol)/ol); const up=p>=0; return " <span style='color:"+(up?"#16a34a":"#dc2626")+";font-size:12px'>"+(up?"\u25b2":"\u25bc")+Math.abs(p)+"%</span>"; };
   const S=d.sub[sel]||{};
   const rows=weeks.map(wk=>{
     const aa=a[wk]||{i:0,v:0}; const cc=c[wk];
     const pva = aa.i? Math.round(10*aa.v/aa.i)/10 : null;
-    const ltv = (cc&&cc.n)? Math.round(cc.lv*d.price/cc.n + d.intakePrice) : null;
+    const ltv = (pva!=null)? Math.round(pva*d.price) : null;
     const lines=Object.keys(S).map(k=>{ const x=S[k][wk]; return (x&&(x.i||x.v))? {k, i:x.i, v:x.v, pva:(x.i? Math.round(10*x.v/x.i)/10 : null)} : null; })
       .filter(Boolean).sort((p,q)=>q.v-p.v);
     const subRows = lines.length>1 ? lines.map(l=>"<tr class=ln><td class=cl>\u21b3 "+l.k+"</td><td class=num>"+l.i+"</td><td class=num>"+l.v+"</td><td class=num>"+(l.pva==null?"\u2014":l.pva)+"</td><td class=num></td></tr>").join("") : "";
     const lbl = lines.length===1 ? " <span class=cl2>\u00b7 "+lines[0].k+"</span>" : "";
     return subRows+"<tr class=wt><td><b>"+wk+"</b>"+lbl+"</td><td class=num><b>"+aa.i+"</b></td><td class=num><b>"+aa.v+"</b></td>"+
       "<td class=num style='font-weight:700;"+(pva==null?"":("color:"+(avgAll.pva&&pva>=avgAll.pva?"#16a34a":(avgAll.pva&&pva<0.8*avgAll.pva?"#dc2626":"#d97706"))))+"'>"+(pva==null?"\u2014":pva)+"</td>"+
-      "<td class=num>"+(ltv==null?"\u2014":("<b>\u20ac"+ltv.toLocaleString('en-US')+"</b><div class=n>"+cc.n+" pts \u00b7 intake + "+(Math.round(10*cc.lv/cc.n)/10)+" visits</div>"))+"</td></tr>";
+      "<td class=num>"+(ltv==null?"\u2014":("<b>\u20ac"+ltv.toLocaleString('en-US')+"</b><div class=n>"+pva+" \u00d7 \u20ac"+d.price+"</div>"))+"</td></tr>";
   }).join("");
   const T=weeks.reduce((s,wk)=>{ const aa=a[wk]||{i:0,v:0}; const cc=c[wk]||{n:0,lv:0}; return {i:s.i+aa.i,v:s.v+aa.v,n:s.n+cc.n,lv:s.lv+cc.lv}; },{i:0,v:0,n:0,lv:0});
   res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Weekly coach \u2014 Posturefixx</title>"+
@@ -6680,7 +6680,7 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     "tr.ln td{color:#475569;border-bottom:0;padding-top:6px;padding-bottom:2px}.cl{padding-left:14px;color:#64748b}.cl2{color:#94a3b8;font-weight:400;font-size:12px}"+
     "tr.wt td{border-bottom:1px solid #eef2f7;padding-bottom:9px}a{color:#2563EB}</style></head><body>"+
     "<h1>Weekly coaching sheet \u2014 "+selLabel+"</h1>"+
-    "<div class=sub>One row per week (Monday date) since 2025. Intakes = processed regular intakes (telephone never counts). Visits = processed paid visits \u2014 afzeggingen, gemiste, evaluaties, ROF, progress, telephone and cancelled never count, intakes not included. PVA = visits \u00f7 intakes that week. Cohort LTV = what the patients whose <b>first intake fell in that week</b> are worth to date: the intake (\u20ac"+d.intakePrice+") + lifetime paid visits \u00d7 \u20ac"+d.price+" per patient \u2014 recent weeks are still maturing, so judge young weeks against older weeks at the same age. On a chiro\u2019s view each week splits per clinic (coverage shifts credited where they happened); on a clinic\u2019s view each week splits per chiro.</div>"+
+    "<div class=sub>One row per week (Monday date) since 2025. Intakes = processed regular intakes (telephone never counts). Visits = processed paid visits \u2014 afzeggingen, gemiste, evaluaties, ROF, progress, telephone and cancelled never count, intakes not included. PVA = visits \u00f7 intakes that week. LTV = that week's PVA \u00d7 \u20ac"+d.price+" \u2014 the value each new patient is worth at that week's conversion rate. It moves the moment PVA moves, so it's directly coachable week to week. On a chiro\u2019s view each week splits per clinic (coverage shifts credited where they happened); on a clinic\u2019s view each week splits per chiro.</div>"+
     "<div class=tabs>"+tabs+
     "<select onchange=\"if(this.value)location.href='/weekly-coach?scope='+this.value\">"+
     "<option value=''"+(sel.indexOf("chiro:")===0?"":" selected")+">\u2026 or pick a chiro</option>"+copt+"</select></div>"+
@@ -6689,10 +6689,10 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     "<div class=kpi><b>"+last4.v+"</b><span>paid visits \u00b7 last 4 wks"+delta(last4.v,prev4.v)+"</span></div>"+
     "<div class=kpi><b>"+(last4.pva==null?"\u2014":last4.pva)+"</b><span>PVA \u00b7 last 4 wks"+delta(last4.pva,prev4.pva)+"</span></div>"+
     "<div class=kpi><b>"+(avgAll.pva?Math.round(10*avgAll.pva)/10:"\u2014")+"</b><span>avg PVA since 2025 (the benchmark for the colours)</span></div>"+
-    "<div class=kpi><b>"+(last4.ltv==null?"\u2014":("\u20ac"+last4.ltv.toLocaleString('en-US')))+"</b><span>cohort LTV \u00b7 started last 4 wks (still maturing) \u00b7 all-time avg "+(ltvAll==null?"\u2014":("\u20ac"+ltvAll.toLocaleString('en-US')))+"</span></div>"+
+    "<div class=kpi><b>"+(last4.ltv==null?"\u2014":("\u20ac"+last4.ltv.toLocaleString('en-US')))+"</b><span>LTV \u00b7 last 4 wks (PVA \u00d7 \u20ac"+d.price+")"+delta(last4.ltv,prev4.ltv)+" \u00b7 all-time \u20ac"+(ltvAll==null?"\u2014":ltvAll.toLocaleString('en-US'))+"</span></div>"+
     "</div>"+
-    "<div class=card><b style='font-size:15px'>Weekly cohort LTV \u2014 "+selLabel+"</b><div style='height:220px;margin-top:10px'><canvas id=wcChart></canvas></div><div style='color:#64748b;font-size:12px;margin-top:8px'>One bar per week = what the patients started that week are worth to date. Amber = the last 8 weeks, still maturing \u2014 they will keep growing. Dashed line = all-time average (\u20ac"+(ltvAll==null?0:ltvAll)+").</div></div>"+
-    "<div class=card><table><thead><tr><th>Week of</th><th class=num>Intakes</th><th class=num>Paid visits</th><th class=num>PVA</th><th class=num>Cohort LTV (to date)</th></tr></thead><tbody>"+rows+
+    "<div class=card><b style='font-size:15px'>Weekly cohort LTV \u2014 "+selLabel+"</b><div style='height:220px;margin-top:10px'><canvas id=wcChart></canvas></div><div style='color:#64748b;font-size:12px;margin-top:8px'>One bar per week = that week's LTV (PVA \u00d7 \u20ac"+d.price+"): the value each new patient is worth at that week's conversion. Colours follow the PVA benchmark (green at/above the since-2025 average, red under 80% of it). Dashed line = all-time average (\u20ac"+(ltvAll==null?0:ltvAll)+").</div></div>"+
+    "<div class=card><table><thead><tr><th>Week of</th><th class=num>Intakes</th><th class=num>Paid visits</th><th class=num>PVA</th><th class=num>LTV (PVA \u00d7 \u20ac"+d.price+")</th></tr></thead><tbody>"+rows+
     "<tr class=tot><td>Total / avg</td><td class=num>"+T.i+"</td><td class=num>"+T.v+"</td><td class=num>"+(T.i?Math.round(10*T.v/T.i)/10:"\u2014")+"</td><td class=num>"+(T.n?("\u20ac"+Math.round(T.lv*d.price/T.n).toLocaleString('en-US')+"<div class=n>"+T.n+" pts</div>"):"\u2014")+"</td></tr>"+
     "</tbody></table>"+
     (showAll? "<div style='margin-top:10px'><a href='/weekly-coach?scope="+encodeURIComponent(sel)+"' style='color:#2563EB;font-size:13px'>show recent 12 weeks</a></div>"
@@ -6701,12 +6701,12 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/ltv'>/ltv</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a> \u00b7 <a href='/chiro-monthly'>/chiro-monthly</a></p>"+
     "<script>"+
     "var LBL="+JSON.stringify([...allWeeks].reverse())+";"+
-    "var LTV="+JSON.stringify([...allWeeks].reverse().map(wk=>{ const cc=(d.coh[sel]||{})[wk]; return (cc&&cc.n)? Math.round(cc.lv*d.price/cc.n + d.intakePrice) : null; }))+";"+
+    "var LTV="+JSON.stringify([...allWeeks].reverse().map(wk=>{ const p=pvaOf(wk); return p!=null? Math.round((Math.round(10*p)/10)*d.price) : null; }))+";"+"var PB="+(avgAll.pva?Math.round(10*avgAll.pva)/10:0)+"*"+d.price+";"+
     "var AVG="+(ltvAll==null?"null":ltvAll)+";"+
     "(function(){if(typeof Chart==='undefined')return;var n=LBL.length;"+
-    "var cols=LTV.map(function(v,i){return i>=n-8?'#f59e0b':'#2563eb';});"+
+    "var cols=LTV.map(function(v){if(v==null)return '#cbd5e1';if(PB&&v>=PB)return '#16a34a';if(PB&&v<0.8*PB)return '#dc2626';return '#d97706';});"+
     "var ds=[{label:'Cohort LTV (\u20ac)',data:LTV,backgroundColor:cols,borderRadius:3}];"+
-    "if(AVG!=null)ds.push({label:'All-time avg',type:'line',data:LBL.map(function(){return AVG;}),borderColor:'#94a3b8',borderDash:[6,5],pointRadius:0,fill:false});"+
+    "if(AVG!=null)ds.push({label:'All-time avg (avg PVA \u00d7 \u20ac"+d.price+")',type:'line',data:LBL.map(function(){return AVG;}),borderColor:'#94a3b8',borderDash:[6,5],pointRadius:0,fill:false});"+
     "new Chart(document.getElementById('wcChart'),{type:'bar',data:{labels:LBL,datasets:ds},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true}},scales:{y:{beginAtZero:true,title:{display:true,text:'\u20ac per patient'}},x:{ticks:{maxTicksLimit:16}}}}});})();"+
     "</script>"+
     "</body></html>");
