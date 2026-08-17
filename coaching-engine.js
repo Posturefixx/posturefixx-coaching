@@ -6468,6 +6468,7 @@ app.get("/chiro-monthly", gate, async (req,res)=>{ try{
 //  Heavy build (full 2025\u2192now history) \u2192 background build + holding page.
 // ============================================================================
 const LTV_INTAKE_PRICE = parseFloat(process.env.KPI_INTAKE_PRICE || "") || KPI_PRICE;
+const PVA_STANDARD = parseFloat(process.env.PVA_TARGET || "") || 12;   // minimum PVA — the benchmark everywhere
 const _ltvCache = { t:0, v:null, p:null, err:null };
 async function computeLTV(){
   if(_ltvCache.v && Date.now()-_ltvCache.t < 3600e3) return _ltvCache.v;
@@ -6662,7 +6663,7 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     const subRows = lines.length>1 ? lines.map(l=>"<tr class=ln><td class=cl>\u21b3 "+l.k+"</td><td class=num>"+l.i+"</td><td class=num>"+l.v+"</td><td class=num>"+(l.pva==null?"\u2014":l.pva)+"</td><td class=num></td></tr>").join("") : "";
     const lbl = lines.length===1 ? " <span class=cl2>\u00b7 "+lines[0].k+"</span>" : "";
     return subRows+"<tr class=wt><td><b>"+wk+"</b>"+lbl+"</td><td class=num><b>"+aa.i+"</b></td><td class=num><b>"+aa.v+"</b></td>"+
-      "<td class=num style='font-weight:700;"+(pva==null?"":("color:"+(avgAll.pva&&pva>=avgAll.pva?"#16a34a":(avgAll.pva&&pva<0.8*avgAll.pva?"#dc2626":"#d97706"))))+"'>"+(pva==null?"\u2014":pva)+"</td>"+
+      "<td class=num style='font-weight:700;"+(pva==null?"":("color:"+(pva>=PVA_STANDARD?"#16a34a":(pva<0.8*PVA_STANDARD?"#dc2626":"#d97706"))))+"'>"+(pva==null?"\u2014":pva)+"</td>"+
       "<td class=num>"+(ltv==null?"\u2014":("<b>\u20ac"+ltv.toLocaleString('en-US')+"</b><div class=n>"+pva+" \u00d7 \u20ac"+d.price+"</div>"))+"</td></tr>";
   }).join("");
   const T=weeks.reduce((s,wk)=>{ const aa=a[wk]||{i:0,v:0}; const cc=c[wk]||{n:0,lv:0}; return {i:s.i+aa.i,v:s.v+aa.v,n:s.n+cc.n,lv:s.lv+cc.lv}; },{i:0,v:0,n:0,lv:0});
@@ -6688,10 +6689,10 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     "<div class=kpi><b>"+last4.i+"</b><span>intakes \u00b7 last 4 wks"+delta(last4.i,prev4.i)+"</span></div>"+
     "<div class=kpi><b>"+last4.v+"</b><span>paid visits \u00b7 last 4 wks"+delta(last4.v,prev4.v)+"</span></div>"+
     "<div class=kpi><b>"+(last4.pva==null?"\u2014":last4.pva)+"</b><span>PVA \u00b7 last 4 wks"+delta(last4.pva,prev4.pva)+"</span></div>"+
-    "<div class=kpi><b>"+(avgAll.pva?Math.round(10*avgAll.pva)/10:"\u2014")+"</b><span>avg PVA since 2025 (the benchmark for the colours)</span></div>"+
+    "<div class=kpi><b>"+PVA_STANDARD+"</b><span>PVA standard \u2014 the minimum (benchmark for the colours) \u00b7 avg since 2025: "+(avgAll.pva?Math.round(10*avgAll.pva)/10:"\u2014")+"</span></div>"+
     "<div class=kpi><b>"+(last4.ltv==null?"\u2014":("\u20ac"+last4.ltv.toLocaleString('en-US')))+"</b><span>LTV \u00b7 last 4 wks (PVA \u00d7 \u20ac"+d.price+")"+delta(last4.ltv,prev4.ltv)+" \u00b7 all-time \u20ac"+(ltvAll==null?"\u2014":ltvAll.toLocaleString('en-US'))+"</span></div>"+
     "</div>"+
-    "<div class=card><b style='font-size:15px'>Weekly cohort LTV \u2014 "+selLabel+"</b><div style='height:220px;margin-top:10px'><canvas id=wcChart></canvas></div><div style='color:#64748b;font-size:12px;margin-top:8px'>One bar per week = that week's LTV (PVA \u00d7 \u20ac"+d.price+"): the value each new patient is worth at that week's conversion. Colours follow the PVA benchmark (green at/above the since-2025 average, red under 80% of it). Dashed line = all-time average (\u20ac"+(ltvAll==null?0:ltvAll)+").</div></div>"+
+    "<div class=card><b style='font-size:15px'>Weekly cohort LTV \u2014 "+selLabel+"</b><div style='height:220px;margin-top:10px'><canvas id=wcChart></canvas></div><div style='color:#64748b;font-size:12px;margin-top:8px'>One bar per week = that week's LTV (PVA \u00d7 \u20ac"+d.price+"): the value each new patient is worth at that week's conversion. Colours follow the PVA standard of "+PVA_STANDARD+" (green at/above it, red under 80% of it). Dashed line = the standard: "+PVA_STANDARD+" \u00d7 \u20ac"+d.price+" = \u20ac"+Math.round(PVA_STANDARD*d.price).toLocaleString('en-US')+".</div></div>"+
     "<div class=card><table><thead><tr><th>Week of</th><th class=num>Intakes</th><th class=num>Paid visits</th><th class=num>PVA</th><th class=num>LTV (PVA \u00d7 \u20ac"+d.price+")</th></tr></thead><tbody>"+rows+
     "<tr class=tot><td>Total / avg</td><td class=num>"+T.i+"</td><td class=num>"+T.v+"</td><td class=num>"+(T.i?Math.round(10*T.v/T.i)/10:"\u2014")+"</td><td class=num>"+(T.n?("\u20ac"+Math.round(T.lv*d.price/T.n).toLocaleString('en-US')+"<div class=n>"+T.n+" pts</div>"):"\u2014")+"</td></tr>"+
     "</tbody></table>"+
@@ -6701,16 +6702,74 @@ app.get("/weekly-coach", gate, async (req,res)=>{ try{
     "<p class=sub>Pages: <a href='/'>home</a> \u00b7 <a href='/ltv'>/ltv</a> \u00b7 <a href='/kpi-goal'>/kpi-goal</a> \u00b7 <a href='/chiro-monthly'>/chiro-monthly</a></p>"+
     "<script>"+
     "var LBL="+JSON.stringify([...allWeeks].reverse())+";"+
-    "var LTV="+JSON.stringify([...allWeeks].reverse().map(wk=>{ const p=pvaOf(wk); return p!=null? Math.round((Math.round(10*p)/10)*d.price) : null; }))+";"+"var PB="+(avgAll.pva?Math.round(10*avgAll.pva)/10:0)+"*"+d.price+";"+
-    "var AVG="+(ltvAll==null?"null":ltvAll)+";"+
+    "var LTV="+JSON.stringify([...allWeeks].reverse().map(wk=>{ const p=pvaOf(wk); return p!=null? Math.round((Math.round(10*p)/10)*d.price) : null; }))+";"+"var PB="+PVA_STANDARD+"*"+d.price+";"+
+    "var AVG="+Math.round(PVA_STANDARD*d.price)+";"+
     "(function(){if(typeof Chart==='undefined')return;var n=LBL.length;"+
     "var cols=LTV.map(function(v){if(v==null)return '#cbd5e1';if(PB&&v>=PB)return '#16a34a';if(PB&&v<0.8*PB)return '#dc2626';return '#d97706';});"+
     "var ds=[{label:'Cohort LTV (\u20ac)',data:LTV,backgroundColor:cols,borderRadius:3}];"+
-    "if(AVG!=null)ds.push({label:'All-time avg (avg PVA \u00d7 \u20ac"+d.price+")',type:'line',data:LBL.map(function(){return AVG;}),borderColor:'#94a3b8',borderDash:[6,5],pointRadius:0,fill:false});"+
+    "if(AVG!=null)ds.push({label:'Standard ("+PVA_STANDARD+" \u00d7 \u20ac"+d.price+")',type:'line',data:LBL.map(function(){return AVG;}),borderColor:'#94a3b8',borderDash:[6,5],pointRadius:0,fill:false});"+
     "new Chart(document.getElementById('wcChart'),{type:'bar',data:{labels:LBL,datasets:ds},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true}},scales:{y:{beginAtZero:true,title:{display:true,text:'\u20ac per patient'}},x:{ticks:{maxTicksLimit:16}}}}});})();"+
     "</script>"+
     "</body></html>");
 }catch(e){ res.status(500).send("weekly-coach error: "+e.message); } });
+
+// ============================================================================
+//  /cron/chiro-weekly — Monday morning SMS to every chiro with a phone set:
+//  their OWN last-week scorecard (per location), PVA vs their benchmark,
+//  LTV = PVA \u00d7 \u20acKPI_PRICE, the trend, and a link to their live sheet.
+//  ?dry=1 previews all messages without sending \u00b7 ?to=Lara sends only one.
+//  Schedule on cron-job.org: Mondays 08:00 Europe/Amsterdam (plus a 07:50
+//  warm-up ping to /weekly-coach so the data is already built).
+// ============================================================================
+app.get("/cron/chiro-weekly", async (req,res)=>{
+  if(!kpiCronOK(req)) return res.status(403).json({ok:false,error:"bad key"});
+  try{
+    const d = await computeWeeklyCoach();
+    // last COMPLETED week = the Monday before the current week's Monday
+    const curMon = wcMonday(new Date().toISOString().slice(0,10));
+    const wkD = new Date(curMon+"T00:00:00Z"); wkD.setUTCDate(wkD.getUTCDate()-7);
+    const wk = wkD.toISOString().slice(0,10);
+    const wkEndD = new Date(wkD); wkEndD.setUTCDate(wkEndD.getUTCDate()+6);
+    const fmt=(x)=>{ const dd=new Date(x); return dd.getUTCDate()+"/"+(dd.getUTCMonth()+1); };
+    const prevD = new Date(wkD); prevD.setUTCDate(prevD.getUTCDate()-7);
+    const prevWk = prevD.toISOString().slice(0,10);
+    const base = process.env.APP_URL || "https://posturefixx-coaching.onrender.com";
+    const dry = req.query.dry==="1";
+    const only = (req.query.to||"").toLowerCase();
+    const results=[];
+    for(const ch of CHIROS){
+      if(only && ch.n.toLowerCase()!==only) continue;
+      const full = d.chiros.find(nm => nm.toLowerCase().indexOf(ch.n.toLowerCase())>=0);
+      if(!full){ results.push({chiro:ch.n, skipped:"no PracticeHub match"}); continue; }
+      const scope="chiro:"+full;
+      const aa=(d.act[scope]||{})[wk];
+      if(!aa || (!aa.i && !aa.v)){ results.push({chiro:ch.n, skipped:"no activity in week "+wk}); continue; }
+      const pva = aa.i? Math.round(10*aa.v/aa.i)/10 : null;
+      const ltv = pva!=null? Math.round(pva*d.price) : null;
+      // benchmark: this chiro's own avg PVA since 2025
+      let bi=0,bv=0; const A=d.act[scope]||{};
+      for(const k of Object.keys(A)){ bi+=A[k].i; bv+=A[k].v; }
+      const avgPva = bi? Math.round(10*bv/bi)/10 : null;
+      const pa=(d.act[scope]||{})[prevWk];
+      const prevPva = (pa&&pa.i)? Math.round(10*pa.v/pa.i)/10 : null;
+      const S=d.sub[scope]||{};
+      const lines=Object.keys(S).map(cl=>{ const x=S[cl][wk]; return (x&&(x.i||x.v))? {cl, i:x.i, v:x.v, pva:(x.i? Math.round(10*x.v/x.i)/10 : null)} : null; })
+        .filter(Boolean).sort((p,q)=>q.v-p.v);
+      let msg = "Posturefixx weekly score \u2014 "+ch.n+" (wk "+fmt(wkD)+"\u2013"+fmt(wkEndD)+")\n";
+      for(const l of lines) msg += l.cl+": "+l.i+" intakes \u00b7 "+l.v+" visits"+(l.pva!=null?(" \u00b7 PVA "+l.pva):"")+"\n";
+      if(lines.length>1) msg += "Total: "+aa.i+" intakes \u00b7 "+aa.v+" visits\n";
+      msg += "PVA "+(pva==null?"\u2014":pva)+" (standard "+PVA_STANDARD+((pva!=null&&pva>=PVA_STANDARD)?" \u2713":"")+")"+(prevPva!=null?(" \u00b7 prev wk "+prevPva):"")+"\n";
+      if(ltv!=null) msg += "LTV "+pva+" \u00d7 \u20ac"+d.price+" = \u20ac"+ltv.toLocaleString("en-US")+" per new patient\n";
+      msg += "Your sheet: "+base+"/weekly-coach?scope="+encodeURIComponent(scope);
+      if(!ch.phone){ results.push({chiro:ch.n, skipped:"no phone (set PHONE_"+ch.n.toUpperCase()+")", preview:msg}); continue; }
+      if(dry){ results.push({chiro:ch.n, dry:true, to:ch.phone, chars:msg.length, text:msg}); continue; }
+      try{ const r=await sendSms(ch.smsClinic, ch.phone, ch.n, msg);
+        results.push({chiro:ch.n, sent:true, to:ch.phone, chars:msg.length, ghl:(r&&r.contactId)?{contactId:r.contactId}:undefined, text:msg });
+      }catch(e){ results.push({chiro:ch.n, error:e.message, text:msg}); }
+    }
+    res.json({ok:true, week:wk, dry, results});
+  }catch(e){ res.status(200).json({ok:false,error:e.message}); }
+});
 
 // Safety net: a single bad request should never take the whole site down (502).
 // Log it and keep serving every other page.
