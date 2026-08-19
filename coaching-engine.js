@@ -4461,8 +4461,49 @@ function svgYearLines(series, years){
   return '<svg viewBox="0 0 '+W+' '+H+'" width="100%">'+g+'</svg>';
 }
 
+// Live overlay for /marketing: monthly spend from AD_SPEND_SHEET + monthly lead
+// quality from the live lead feeds. Baked data stays as the historical base;
+// live months win wherever both exist. Cached 30 min; every failure degrades
+// to the snapshot instead of breaking the page.
+const _mktgLiveCache={t:0,v:null};
+async function mktgLive(){
+  if(_mktgLiveCache.v && Date.now()-_mktgLiveCache.t<1800e3) return _mktgLiveCache.v;
+  const out={ spendM:null, leads:{}, notes:[] };
+  if(AD_SPEND_SHEET){
+    try{ out.spendM = parseAdSpendByMonth(await mlFetchClinic(AD_SPEND_SHEET, [""])); }
+    catch(e){ out.notes.push("spend sheet unreadable: "+e.message); }
+    if(out.spendM && out.spendM._noMonth){ out.spendM=null; out.notes.push("spend sheet has no Month column \u2014 monthly overlay off"); }
+  } else out.notes.push("AD_SPEND_SHEET not set \u2014 spend shows the snapshot only");
+  const FEEDS={ Google: (typeof GOOGLE_LEAD_SHEETS!=="undefined")?GOOGLE_LEAD_SHEETS:{}, Meta: (typeof META_LEAD_SHEETS!=="undefined")?META_LEAD_SHEETS:{} };
+  for(const ch of Object.keys(FEEDS)){
+    for(const cl of Object.keys(FEEDS[ch])){
+      try{ const cfg=FEEDS[ch][cl]; const rows=await mlFetchClinic(cfg.id, cfg.gids||[""]);
+        const agg=mlAggregateRows(rows, cl);
+        ((out.leads[cl]=out.leads[cl]||{})[ch]=agg.months);
+      }catch(e){ out.notes.push(cl+" "+ch+" lead feed unreadable"); }
+    }
+  }
+  _mktgLiveCache.t=Date.now(); _mktgLiveCache.v=out; return out;
+}
+const MKTG_MM = {"Utrecht":{"Google":{"2026":[790,806,886,971,944,null,null,null,null,null,null,null],"2025":[752,822,821,766,838,868,888,869,875,913,900,799],"2024":[766,646,778,990,1011,841,703,654,724,923,951,782],"2023":[996,298,962,265,889,522,314,998,1135,631,742,709],"2022":[1000,2000,1500,1500,1343,1399,1619,758,1020,694,752,288],"2021":[null,null,null,null,250,700,1000,500,500,1000,497,1000]},"Meta":{"2026":[200,200,null,200,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,200,300,340,361,200],"2024":[1212,830,1239,1114,485,949,346,200,200,200,200,200],"2023":[656,366,434,228,131,34,1307,1230,1391,1141,1181,885],"2022":[218,244,330,573,817,516,452,702,492,530,678,1054],"2021":[null,null,null,50,11,11,279,260,279,207,394,445]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,null,333,605,1210,605,null],"2024":[1331,null,321,321,641,641,null,321,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,321]}},"Bussum":{"Google":{"2026":[266,287,261,266,287,null,null,null,null,null,null,null],"2025":[705,740,105,393,768,102,403,424,420,452,456,401],"2024":[340,370,390,810,813,886,818,784,819,862,876,721],"2023":[1080,813,116,566,494,330,199,205,150,337,584,420],"2022":[null,null,null,250,832,378,224,161,245,317,1037,157]},"Meta":{"2026":[200,200,200,400,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,350,300,null,200,200],"2024":[200,200,200,200,200,200,200,200,200,400,200,200],"2023":[780,374,452,486,775,308,1040,821,null,null,null,null],"2022":[null,null,null,null,1,null,null,null,null,null,null,907]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,605,1210,null,333,null,605,1210,605,null],"2024":[321,321,321,321,null,321,321,null,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,null]}},"Amstelveen":{"Google":{"2026":[773,864,709,683,730,null,null,null,null,null,null,null],"2025":[1255,1331,1191,1222,1204,822,1632,1280,1364,869,1018,809],"2024":[831,761,880,1574,967,1068,661,717,1573,1352,1356,1285],"2023":[null,null,null,null,null,null,null,457,226,964,808,778]},"Meta":{"2026":[900,1000,850,1150,700,null,null,null,null,null,null,null],"2025":[750,1200,1600,1300,1325,1300,1250,600,1450,1220,1050,650],"2024":[1050,300,700,1250,1280,800,700,850,600,950,1050,700],"2023":[null,null,null,null,null,null,200,581,1100,1350,800,600]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,333,null,605,1210,605,null],"2024":[null,321,641,321,321,null,321,321,641,null,null,null],"2023":[null,null,null,null,null,null,null,null,726,484,null,1506]}},"Rotterdam":{"Google":{"2026":[244,242,305,281,349,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,60,46,213,311]},"Meta":{"2026":[500,900,900,1250,850,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,null,340,650,675]},"Organic":{"2026":[321,681,null,null,null,null,null,null,null,null,null,null]}}};
 app.get("/marketing", gate, async (_req,res)=>{ try {
   const fmt=n=>"\u20ac"+Math.round(n||0).toLocaleString("en-US");
+  const live=await mktgLive();
+  const mmLive=JSON.parse(JSON.stringify(MKTG_MM));
+  if(live.spendM){ for(const cl of Object.keys(live.spendM)){ if(cl==="_noMonth") continue;
+    for(const ch of Object.keys(live.spendM[cl])){ for(const ym of Object.keys(live.spendM[cl][ch])){
+      const y=ym.slice(0,4), idx=+ym.slice(5,7)-1; if(!(idx>=0&&idx<12)) continue;
+      const node=((mmLive[cl]=mmLive[cl]||{})[ch]=mmLive[cl][ch]||{});
+      if(!node[y]) node[y]=[null,null,null,null,null,null,null,null,null,null,null,null];
+      node[y][idx]=Math.round(live.spendM[cl][ch][ym]);
+    } } } }
+  const CURY=String(new Date().getUTCFullYear());
+  const lastIdx=(c)=>{ let m=-1; for(const ch of ["Google","Meta","Organic"]){ const a=((mmLive[c]||{})[ch]||{})[CURY]||[];
+    for(let i=0;i<12;i++) if(a[i]!=null && i>m) m=i; } return m; };
+  const MOFULL=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const leadMonths=(c,ch)=> ((live.leads[c]||{})[ch])||null;
+  const lastLeadIdx=(c)=>{ let m=-1; for(const ch of ["Google","Meta"]){ const M=leadMonths(c,ch)||{};
+    for(const ym of Object.keys(M)){ if(ym.slice(0,4)===CURY){ const i=+ym.slice(5,7)-1; if((M[ym].leads||M[ym].paid||M[ym].care) && i>m) m=i; } } } return m; };
   const years=mktgYears();
   const adSpend=(c,y)=>(((MKTG_CLINIC[c]||{}).Google||{})[y]||0)+(((MKTG_CLINIC[c]||{}).Meta||{})[y]||0);
   const cmpSeries=MKTG_CLINICS.map(c=>({label:c,color:CLINIC_COLOR[c],pts:Object.fromEntries(years.map(y=>[y,adSpend(c,y)]).filter(p=>p[1]))}));
@@ -4472,16 +4513,33 @@ app.get("/marketing", gate, async (_req,res)=>{ try {
 
   const clinicPanels=MKTG_CLINICS.map(c=>{
     const ys=clinicYears(c), last=ys[ys.length-1];
-    const adS=adSpend(c,last), agency=((MKTG_CLINIC[c]||{}).Shoet||{})[last]||0;
+    const sumY=(ch)=> (((mmLive[c]||{})[ch]||{})[last]||[]).reduce((s,v)=>s+(v||0),0);
+    const adS=(last===CURY? (sumY("Google")+sumY("Meta")) : adSpend(c,last));
+    const agency=(last===CURY? sumY("Organic") : (((MKTG_CLINIC[c]||{}).Shoet||{})[last]||0)) || (((MKTG_CLINIC[c]||{}).Shoet||{})[last]||0);
+    const Lx=lastIdx(c); const cplEnd = Lx>=0? MOFULL[Lx] : "May";
     const ybtns=ys.map(y=>`<button data-mm="${c}" data-year="${y}" onclick='drawMktgMonth("${c}","${y}")' style="padding:5px 10px;margin:0 6px 6px 0;border:1px solid #e5e7eb;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;color:#6B7686">${y}${y==="2026"?" YTD":""}</button>`).join("");
-    const cp=MKTG_CPL[c]||{};
+    const cpBase=MKTG_CPL[c]||{};
+    const cp=JSON.parse(JSON.stringify(cpBase));
+    for(const ch of ["Google","Meta"]){
+      const sp=(((mmLive[c]||{})[ch]||{})[CURY]||[]).slice(0, Lx+1).reduce((s,v)=>s+(v||0),0);
+      const M=leadMonths(c,ch); let lead=null;
+      if(M){ lead=0; for(const ym of Object.keys(M)){ if(ym.slice(0,4)===CURY) lead+=(M[ym].leads||0); } if(!lead) lead=null; }
+      if(sp>0){ cp[ch]=cp[ch]||{}; cp[ch].spend=sp; if(lead!=null){ cp[ch].leads=lead; cp[ch].cpl=Math.round(sp/Math.max(1,lead)); } }
+    }
     const cplRow=(n,d)=> d&&d.cpl?`<tr><td>${n}</td><td class="num">${d.leads}</td><td class="num"><b>\u20ac${d.cpl}</b></td><td class="num">${fmt(d.spend)}</td></tr>`:(d?`<tr><td>${n}</td><td class="num">${d.leads||"\u2014"}</td><td class="num">\u2014</td><td class="num">${fmt(d.spend)}</td></tr>`:"");
-    const cplCard=`<div class="card" style="background:#f8fafc"><b>Cost per lead \u2014 2026 (Jan\u2013May)</b>
+    const cplCard=`<div class="card" style="background:#f8fafc"><b>Cost per lead \u2014 ${CURY} (Jan\u2013${cplEnd})</b>
       <table style="margin-top:6px"><thead><tr><th style="text-align:left">Channel</th><th>Leads</th><th>Cost/lead</th><th>Spend</th></tr></thead>
       <tbody>${cplRow("Google",cp.Google)}${cplRow("Meta",cp.Meta)}${cplRow("Organic",cp.Organic)}</tbody></table>
       <div class="legend">Cheapest cost-per-lead isn't the whole story \u2014 see the funnel below for which leads actually become patients.</div></div>`;
-    const lm=MKTG_LEADS_M[c]; const MO=["Jan","Feb","Mar","Apr","May"];
-    const funnel=lm?`<div class="card"><b>Lead quality by month \u2014 2026</b>
+    const gM=leadMonths(c,"Google"), mM=leadMonths(c,"Meta");
+    const liveL=lastLeadIdx(c);
+    let lm, MO;
+    if((gM||mM) && liveL>=0){
+      MO=MOFULL.slice(0, liveL+1);
+      const pull=(M,f)=>MO.map((_,i)=>{ const ym=CURY+"-"+String(i+1).padStart(2,"0"); return (M&&M[ym])? (M[ym][f]||0) : 0; });
+      lm={ Google:{intakes:pull(gM,"paid"), care:pull(gM,"care")}, Meta:{intakes:pull(mM,"paid"), care:pull(mM,"care")} };
+    } else { lm=MKTG_LEADS_M[c]; MO=["Jan","Feb","Mar","Apr","May"]; }
+    const funnel=lm?`<div class="card"><b>Lead quality by month \u2014 ${CURY}</b>
       <table style="margin-top:6px"><thead><tr><th style="text-align:left">Month</th><th>Google in</th><th>\u2192care</th><th>conv</th><th>Meta in</th><th>\u2192care</th><th>conv</th></tr></thead>
       <tbody>${MO.map((m,i)=>{const gi=lm.Google.intakes[i],gc=lm.Google.care[i],mi=lm.Meta.intakes[i],mc=lm.Meta.care[i];return `<tr><td style="text-align:left">${m}</td><td class="num">${gi}</td><td class="num">${gc}</td><td class="num">${gi?Math.round(100*gc/gi)+"%":"\u2014"}</td><td class="num">${mi}</td><td class="num">${mc}</td><td class="num">${mi?Math.round(100*mc/mi)+"%":"\u2014"}</td></tr>`;}).join("")}</tbody></table>
       <div class="legend">Per month, by channel: intakes \u2192 started care and the conversion. Google converts better than Meta nearly every month. 2022\u20132025 monthly leads fill in once those marketing sheets are added.</div></div>`:"";
@@ -4491,6 +4549,7 @@ app.get("/marketing", gate, async (_req,res)=>{ try {
         <div class="kpi"><b>${fmt(agency)}</b><span>${last} agency/organic (Shoet)</span></div>
         <div class="kpi"><b>${fmt(adS+agency)}</b><span>${last} total marketing</span></div>
       </div>
+      <div class="legend" style="margin:0 0 10px">Live status: spend data through <b>${Lx>=0?MOFULL[Lx]+" "+CURY:"\u2014"}</b>${live.spendM?"":" (snapshot \u2014 "+(live.notes[0]||"no live sheet")+")"} \u00b7 lead feeds through <b>${liveL>=0?MOFULL[liveL]+" "+CURY:"snapshot (Jan\u2013May)"}</b>. If a month is missing here, it is missing in the source sheet \u2014 fill it there and this page updates on the next load.</div>
       <div class="card"><b>${c} \u2014 monthly ad spend</b>
         <div style="margin:10px 0 4px">${ybtns}</div><div id="mm-${c}"></div>
         <div class="legend">Blue = Google, purple = Meta, grey = Organic (Shoet). Pick a year. Hover a point for the figure.</div></div>
@@ -4510,7 +4569,7 @@ a{color:#2563EB}</style></head><body>
 <div class="tabs" id="tabs"></div>${comparePanel}${clinicPanels}
 <p class="sub">Pages: <a href="/plan">/plan</a> \u00b7 <a href="/revenue">/revenue</a> \u00b7 <a href="/marketing">/marketing</a> \u00b7 <a href="/waste">/waste</a> \u00b7 <a href="/pva">/pva</a> \u00b7 <a href="/ca">/ca</a> \u00b7 <a href="/coach">/coach</a></p>
 <script>
-var MM={"Utrecht":{"Google":{"2026":[790,806,886,971,944,null,null,null,null,null,null,null],"2025":[752,822,821,766,838,868,888,869,875,913,900,799],"2024":[766,646,778,990,1011,841,703,654,724,923,951,782],"2023":[996,298,962,265,889,522,314,998,1135,631,742,709],"2022":[1000,2000,1500,1500,1343,1399,1619,758,1020,694,752,288],"2021":[null,null,null,null,250,700,1000,500,500,1000,497,1000]},"Meta":{"2026":[200,200,null,200,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,200,300,340,361,200],"2024":[1212,830,1239,1114,485,949,346,200,200,200,200,200],"2023":[656,366,434,228,131,34,1307,1230,1391,1141,1181,885],"2022":[218,244,330,573,817,516,452,702,492,530,678,1054],"2021":[null,null,null,50,11,11,279,260,279,207,394,445]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,null,333,605,1210,605,null],"2024":[1331,null,321,321,641,641,null,321,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,321]}},"Bussum":{"Google":{"2026":[266,287,261,266,287,null,null,null,null,null,null,null],"2025":[705,740,105,393,768,102,403,424,420,452,456,401],"2024":[340,370,390,810,813,886,818,784,819,862,876,721],"2023":[1080,813,116,566,494,330,199,205,150,337,584,420],"2022":[null,null,null,250,832,378,224,161,245,317,1037,157]},"Meta":{"2026":[200,200,200,400,null,null,null,null,null,null,null,null],"2025":[200,200,200,200,200,200,200,350,300,null,200,200],"2024":[200,200,200,200,200,200,200,200,200,400,200,200],"2023":[780,374,452,486,775,308,1040,821,null,null,null,null],"2022":[null,null,null,null,1,null,null,null,null,null,null,907]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,605,1210,null,333,null,605,1210,605,null],"2024":[321,321,321,321,null,321,321,null,321,null,321,null],"2023":[null,null,null,null,null,null,null,null,null,null,321,null]}},"Amstelveen":{"Google":{"2026":[773,864,709,683,730,null,null,null,null,null,null,null],"2025":[1255,1331,1191,1222,1204,822,1632,1280,1364,869,1018,809],"2024":[831,761,880,1574,967,1068,661,717,1573,1352,1356,1285],"2023":[null,null,null,null,null,null,null,457,226,964,808,778]},"Meta":{"2026":[900,1000,850,1150,700,null,null,null,null,null,null,null],"2025":[750,1200,1600,1300,1325,1300,1250,600,1450,1220,1050,650],"2024":[1050,300,700,1250,1280,800,700,850,600,950,1050,700],"2023":[null,null,null,null,null,null,200,581,1100,1350,800,600]},"Organic":{"2026":[null,681,null,null,null,null,null,null,null,null,null,null],"2025":[null,null,null,1210,605,null,333,null,605,1210,605,null],"2024":[null,321,641,321,321,null,321,321,641,null,null,null],"2023":[null,null,null,null,null,null,null,null,726,484,null,1506]}},"Rotterdam":{"Google":{"2026":[244,242,305,281,349,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,60,46,213,311]},"Meta":{"2026":[500,900,900,1250,850,null,null,null,null,null,null,null],"2025":[null,null,null,null,null,null,null,null,null,340,650,675]},"Organic":{"2026":[321,681,null,null,null,null,null,null,null,null,null,null]}}};
+var MM=${JSON.stringify(mmLive)};
 var cs=["Compare","Utrecht","Bussum","Amstelveen","Rotterdam"],el=document.getElementById("tabs");
 function show(c){Array.prototype.forEach.call(document.querySelectorAll("[data-clinic]"),function(s){s.style.display=s.getAttribute("data-clinic")===c?"":"none"});Array.prototype.forEach.call(el.children,function(b){b.className="tab"+(b.textContent===c?" on":"")})}
 cs.forEach(function(c){var b=document.createElement("div");b.className="tab";b.textContent=c;b.onclick=function(){show(c)};el.appendChild(b)});
