@@ -6830,6 +6830,106 @@ app.get("/cron/chiro-weekly", async (req,res)=>{
   }catch(e){ res.status(200).json({ok:false,error:e.message}); }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  /cron/ads-alert — daily Meta-spend vs GHL-leads watchdog → SMS to Alex.
+//  Deterministic rules only (mirrors the Ads Operating Rules doc). Counts REAL
+//  leads from GHL via Windsor — never Meta's own reported conversions.
+//
+//  PASTE: anywhere top-level after sendSms() is defined (e.g. right above the
+//  final process.on("unhandledRejection", ...) block at the bottom).
+//
+//  NEW ENV VAR (Render → Environment):
+//    WINDSOR_API_KEY   — Windsor Settings → API Access (the REGENERATED key)
+//  Reuses existing:  CRON_SECRET, PHONE_ALEX, GHL_TOKEN_ROTTERDAM/GHL_LOCATION_ROTTERDAM
+//
+//  SCHEDULE: point cron-job.org at  /cron/ads-alert?key=YOUR_CRON_SECRET
+//  daily at 07:30 Amsterdam.   TEST FIRST:  /cron/ads-alert?key=...&dry=1
+//  (dry=1 shows the SMS text in the browser without sending anything)
+// ─────────────────────────────────────────────────────────────────────────────
+const ADS_CAP_EUR = Number(process.env.ADS_DAILY_CAP_EUR || 85);
+const ADS_RULES = { spendNoLeads: 75, cplWarn: 50, zeroLeadMinSpend: 40 }; // keep in sync with the rules doc
+
+async function windsorGet(connector, fields, from, to){
+  const key = process.env.WINDSOR_API_KEY;
+  if (!key) throw new Error("WINDSOR_API_KEY not set (Render → Environment)");
+  const url = `https://connectors.windsor.ai/${connector}?api_key=${encodeURIComponent(key)}&date_from=${from}&date_to=${to}&fields=${fields.join(",")}&_renderer=json`;
+  const r = await withTimeout(fetch(url), 45000, "windsor "+connector);
+  if (!r.ok) throw new Error(`windsor ${connector} HTTP ${r.status}`);
+  const j = await r.json();
+  return j.data || (Array.isArray(j) ? j : []);
+}
+
+app.get("/cron/ads-alert", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.query.key !== secret) return res.status(403).json({ ok:false, error:"forbidden" });
+  const dry = req.query.dry === "1";
+  try {
+    const now = new Date(), iso = d => d.toISOString().slice(0,10);
+    const yday = iso(new Date(now - 864e5)), weekAgo = iso(new Date(now - 7*864e5)), today = iso(now);
+
+    // Meta spend, per campaign, last 7 days
+    const fb = await windsorGet("facebook", ["date","account_name","campaign","spend"], weekAgo, yday);
+    const spend7 = {}; let spendY = 0;
+    for (const r of fb) {
+      const k = (r.account_name || "?") + " | " + (r.campaign || "?");
+      const s = Number(r.spend || 0);
+      spend7[k] = (spend7[k] || 0) + s;
+      if (r.date === yday) spendY += s;
+    }
+
+    // Real leads: GHL contacts with Paid Social attribution (source of truth)
+    const ghl = await windsorGet("gohighlevel",
+      ["account_name","contact_date_added","contact_first_attribution_session_source","contact_first_attribution_campaign"],
+      weekAgo, today);
+    const leadsByCamp = {}; let leads7 = 0, leadsY = 0;
+    for (const c of ghl) {
+      if (c.contact_first_attribution_session_source !== "Paid Social") continue;
+      const added = String(c.contact_date_added || "").slice(0,10);
+      if (!added || added < weekAgo) continue;
+      leads7++;
+      const k = String(c.contact_first_attribution_campaign || "").toLowerCase();
+      if (k) leadsByCamp[k] = (leadsByCamp[k] || 0) + 1;
+      if (added === yday) leadsY++;
+    }
+
+    const totalSpend7 = Object.values(spend7).reduce((a,b)=>a+b, 0);
+    const cpl7 = leads7 ? totalSpend7 / leads7 : null;
+
+    // ── The four rules ──
+    const alerts = [];
+    if (spendY > ADS_CAP_EUR * 1.2)
+      alerts.push(`SPEND OVER CAP: \u20ac${spendY.toFixed(0)} yday (cap ${ADS_CAP_EUR}/d)`);
+    if (leadsY === 0 && spendY >= ADS_RULES.zeroLeadMinSpend)
+      alerts.push(`0 leads yday on \u20ac${spendY.toFixed(0)} spend \u2014 check tracking/funnels`);
+    for (const [camp, s] of Object.entries(spend7)) {
+      if (s < ADS_RULES.spendNoLeads) continue;
+      const cname = camp.split("|").pop().trim().toLowerCase();
+      const matched = Object.entries(leadsByCamp)
+        .reduce((n,[k,v]) => n + ((k && (k.includes(cname) || cname.includes(k))) ? v : 0), 0);
+      if (matched === 0) alerts.push(`RULE 5: "${camp}" \u20ac${s.toFixed(0)}/7d, 0 GHL leads \u2192 pause candidate`);
+    }
+    if (cpl7 != null && cpl7 > ADS_RULES.cplWarn)
+      alerts.push(`CPL HIGH: \u20ac${cpl7.toFixed(0)}/lead over 7d (target \u226425)`);
+
+    const dm = yday.slice(8,10)+"/"+yday.slice(5,7);
+    const text = alerts.length
+      ? "PF ADS ALERT "+dm+"\n"+alerts.slice(0,4).join("\n")
+      : `PF ads OK ${dm}: spend \u20ac${spendY.toFixed(0)}, leads ${leadsY} (7d: ${leads7} leads, CPL ${cpl7 ? "\u20ac"+cpl7.toFixed(0) : "n/a"})`;
+
+    const phone = process.env.PHONE_ALEX;
+    if (dry || !phone) return res.json({ ok:true, dry:true, wouldSend:text, phoneSet:!!phone, alerts });
+    const r2 = await sendSms("Rotterdam", phone, "Alex", text.slice(0,900));
+    res.json({ ok:true, sentTo:phone, alerts:alerts.length, text, ghl: r2 && r2.contactId ? { contactId:r2.contactId } : undefined });
+  } catch (e) {
+    // Text the failure too — silence must never look like "all good".
+    try {
+      if (process.env.PHONE_ALEX && req.query.dry !== "1")
+        await sendSms("Rotterdam", process.env.PHONE_ALEX, "Alex", "PF ads alert FAILED: " + String(e.message||e).slice(0,120));
+    } catch (_) {}
+    res.status(200).json({ ok:false, error: e.message });
+  }
+});
+
 // Safety net: a single bad request should never take the whole site down (502).
 // Log it and keep serving every other page.
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
