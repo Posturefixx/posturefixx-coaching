@@ -4474,30 +4474,6 @@ async function mktgLive(){
     catch(e){ out.notes.push("spend sheet unreadable: "+e.message); }
     if(out.spendM && out.spendM._noMonth){ out.spendM=null; out.notes.push("spend sheet has no Month column \u2014 monthly overlay off"); }
   } else out.notes.push("AD_SPEND_SHEET not set \u2014 spend shows the snapshot only");
-  // Live Meta spend straight from the Meta API, per clinic ad account (sheet wins where filled)
-  out.metaApi={};
-  const mtok=process.env.META_TOKEN;
-  if(mtok && typeof META_ACCTS!=="undefined"){
-    const CY=String(new Date().getUTCFullYear());
-    for(const cl of Object.keys(META_ACCTS)){
-      try{ const acctId=process.env[META_ACCTS[cl].env]||META_ACCTS[cl].id;
-        out.metaApi[cl]=await metaSpendMonthly(acctId, mtok, CY);
-      }catch(e){ out.notes.push(cl+" Meta API: "+e.message); }
-    }
-  } else if(!mtok) out.notes.push("META_TOKEN not set \u2014 Meta spend auto-updates from the Meta API once set");
-  // Live Google spend via Windsor (google_ads connector), account name mapped to clinic
-  out.googleApi={};
-  if(process.env.WINDSOR_API_KEY){
-    try{ const CY=String(new Date().getUTCFullYear());
-      const rows=await windsorGet("google_ads",["date","account_name","spend"], CY+"-01-01", new Date().toISOString().slice(0,10));
-      for(const r of rows){ const ym=String(r.date||"").slice(0,7); if(!/^\d{4}-\d{2}$/.test(ym)) continue;
-        const nm=String(r.account_name||"").toLowerCase(); let cl=null;
-        for(const c of ["Amstelveen","Bussum","Utrecht","Rotterdam"]) if(nm.indexOf(c.toLowerCase())>=0) cl=c;
-        if(!cl) continue;
-        ((out.googleApi[cl]=out.googleApi[cl]||{})[ym]=(out.googleApi[cl][ym]||0)+parseFloat(r.spend||0));
-      }
-    }catch(e){ out.notes.push("Windsor google_ads: "+e.message); }
-  } else out.notes.push("WINDSOR_API_KEY not set \u2014 Google spend auto-updates via Windsor once set");
   const FEEDS={ Google: (typeof GOOGLE_LEAD_SHEETS!=="undefined")?GOOGLE_LEAD_SHEETS:{}, Meta: (typeof META_LEAD_SHEETS!=="undefined")?META_LEAD_SHEETS:{} };
   for(const ch of Object.keys(FEEDS)){
     for(const cl of Object.keys(FEEDS[ch])){
@@ -4521,14 +4497,6 @@ app.get("/marketing", gate, async (_req,res)=>{ try {
       if(!node[y]) node[y]=[null,null,null,null,null,null,null,null,null,null,null,null];
       node[y][idx]=Math.round(live.spendM[cl][ch][ym]);
     } } } }
-  const apiSrc={ Meta: live.metaApi||{}, Google: live.googleApi||{} };
-  for(const ch of Object.keys(apiSrc)){ for(const cl of Object.keys(apiSrc[ch])){
-    for(const ym of Object.keys(apiSrc[ch][cl])){
-      const y=ym.slice(0,4), idx=+ym.slice(5,7)-1; if(!(idx>=0&&idx<12)) continue;
-      const node=((mmLive[cl]=mmLive[cl]||{})[ch]=mmLive[cl][ch]||{});
-      if(!node[y]) node[y]=[null,null,null,null,null,null,null,null,null,null,null,null];
-      if(node[y][idx]==null){ const v=Math.round(apiSrc[ch][cl][ym]); if(v>0) node[y][idx]=v; }
-    } } }
   const CURY=String(new Date().getUTCFullYear());
   const lastIdx=(c)=>{ let m=-1; for(const ch of ["Google","Meta","Organic"]){ const a=((mmLive[c]||{})[ch]||{})[CURY]||[];
     for(let i=0;i<12;i++) if(a[i]!=null && i>m) m=i; } return m; };
@@ -5271,7 +5239,6 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
   card("/chiro-costs","\ud83d\udcb6 Cost per chiro","What each chiropractor costs (matched from the bank per counterparty) next to what they bring in \u2014 ZZP full cost, employees grossed up, with a built-in wiring check."),
   card("/card-spend","\ud83d\udcb3 Card spend","All five Businesscards by vendor and month \u2014 GHL, PracticeHub, Meta-on-card, subscriptions, and a \u2018worth a look\u2019 list \u2014 reconciled to every statement total."),
-  card("/health","\ud83e\ude7a Data health","Is every source actually flowing? Sheets, PracticeHub, Meta, Windsor, bank files \u2014 with the exact fix when one stalls. The Monday cron texts you when anything goes red."),
   card("/chiro-monthly","\ud83d\udcc6 Chiro monthly","Per chiro, per month since 2025: visits and clean intakes, what they bring in (PracticeHub) and what the bank pays them \u2014 with cost as % of revenue."),
   card("/ltv","\ud83d\udc8e Lifetime value","LTV per patient cohort \u2014 by month of first intake, per clinic and per chiro, as clean tables. The value lens on top of the volume levers."),
   card("/weekly-coach","\ud83d\uddd3 Weekly coach sheet","One row per week since 2025 \u2014 intakes, paid visits, PVA and that week\u2019s cohort LTV \u2014 switchable per clinic and per chiro. The 1-on-1 sheet."),
@@ -6963,126 +6930,151 @@ app.get("/cron/ads-alert", async (req, res) => {
   }
 });
 
-// ============================================================================
-//  /health — is every data source actually flowing? One row per source with
-//  its latest data point, a status, and the exact fix when it stalls.
-//  /cron/health — the "never remind me" part: checks the same list and texts
-//  Alex ONLY when something is stale or broken (quiet when all green).
-//  Sources: ad-spend sheet · Meta API · Windsor (Google) · lead feeds ·
-//  doorplannen sheet · PracticeHub per clinic · MT940 bank files · key envs.
-// ============================================================================
-const _healthCache = { t:0, v:null, p:null, err:null };
-function hIsoWeek(d){ const x=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()));
-  const dn=(x.getUTCDay()+6)%7; x.setUTCDate(x.getUTCDate()-dn+3);
-  const f=new Date(Date.UTC(x.getUTCFullYear(),0,4));
-  return 1+Math.round(((x-f)/864e5-3+((f.getUTCDay()+6)%7))/7); }
-async function computeHealth(){
-  if(_healthCache.v && Date.now()-_healthCache.t < 900e3) return _healthCache.v;
-  const now=new Date(); const curYM=now.toISOString().slice(0,7);
-  const prevYM=(()=>{ const d=new Date(now); d.setUTCMonth(d.getUTCMonth()-1); return d.toISOString().slice(0,7); })();
-  const checks=[];
-  const add=(group,name,last,status,fix)=>checks.push({group,name,last:last||"\u2014",status,fix:fix||""});
-  const latestYM=(o)=>{ const ks=Object.keys(o||{}).filter(k=>/^\d{4}-\d{2}$/.test(k)).sort(); return ks[ks.length-1]||null; };
-  // ---- marketing sources (reuse the live overlay, already cached 30 min) ----
-  let live=null; try{ live=await mktgLive(); }catch(e){ add("Marketing","live overlay",null,"error","overlay failed: "+e.message); }
-  if(live){
-    if(live.spendM){ for(const cl of Object.keys(live.spendM)){ if(cl==="_noMonth") continue;
-        let last=null; for(const ch of Object.keys(live.spendM[cl])){ const l=latestYM(live.spendM[cl][ch]); if(l&&(!last||l>last)) last=l; }
-        add("Ad-spend sheet", cl, last, (last>=prevYM?"ok":"stale"), (last>=prevYM?"":"add rows for "+(last?("after "+last):"2026")+" in the AD_SPEND_SHEET"));
-      } }
-    else add("Ad-spend sheet","(all clinics)",null, process.env.AD_SPEND_SHEET?"error":"off", process.env.AD_SPEND_SHEET?"sheet unreadable \u2014 check sharing":"set AD_SPEND_SHEET in Render (template: /ad-spend-template)");
-    const metaCls=Object.keys(live.metaApi||{});
-    if(metaCls.length){ for(const cl of metaCls){ const l=latestYM(live.metaApi[cl]);
-        add("Meta API spend", cl, l, (l>=prevYM?"ok":"warn"), (l>=prevYM?"":"account had no spend since "+l+" \u2014 check campaigns")); } }
-    else add("Meta API spend","(all clinics)",null, process.env.META_TOKEN?"error":"off", process.env.META_TOKEN?"token set but no data \u2014 token may be expired":"set META_TOKEN in Render to auto-pull Meta spend");
-    const gCls=Object.keys(live.googleApi||{});
-    if(gCls.length){ for(const cl of gCls) add("Google spend (Windsor)", cl, latestYM(live.googleApi[cl]), "ok",""); }
-    else add("Google spend (Windsor)","(all clinics)",null, process.env.WINDSOR_API_KEY?"warn":"off", process.env.WINDSOR_API_KEY?"no google_ads rows \u2014 connect the Google Ads connector in Windsor":"set WINDSOR_API_KEY to auto-pull Google spend");
-    for(const cl of Object.keys(live.leads||{})){ for(const ch of Object.keys(live.leads[cl])){
-      const l=latestYM(live.leads[cl][ch]);
-      add("Lead feed ("+ch+")", cl, l, (l>=prevYM?"ok":"stale"), (l>=prevYM?"":"feed stopped after "+(l||"?")+" \u2014 check the no-PII feed sheet / its sync"));
-    } }
+// Safety net: a single bad request should never take the whole site down (502).
+// ─────────────────────────────────────────────────────────────────────────────
+//  /sms/inbound — read-only SMS command layer for ads status.
+//
+//  User texts a command → GHL Rotterdam workflow forwards it here → engine
+//  replies via the SAME Rotterdam location's sendSms.
+//
+//  READ-ONLY v1. No budget changes, no pauses, no exec actions. Whitelisted
+//  by phone number (PHONE_ALEX). Anyone else is silently ignored.
+//
+//  COMMANDS (all texts must start with "pf " prefix to be seen at all):
+//    pf status              → yesterday + 7d network summary
+//    pf today               → today's spend + leads so far
+//    pf <location>          → per-location 7d breakdown (utrecht/rotterdam/
+//                             bussum/amstelveen — first 3 letters also work)
+//    pf help                → list commands
+//  Any SMS without "pf " prefix is silently ignored (normal clinic chat stays
+//  clean). GHL trigger should also filter Message body starts with "pf ".
+//
+//  PASTE: at the bottom of coaching-engine.js, right before the
+//  process.on("unhandledRejection", ...) block. Requires the ads-alert
+//  route above it (reuses its windsorGet helper).
+//
+//  ─── GHL setup (Rotterdam location, ~5 min) ───────────────────────────────
+//  1. Automation → Create Workflow
+//  2. Trigger: "Inbound SMS" → filter: message received on Rotterdam number
+//  3. Action: "Webhook" (POST) to:
+//        https://posturefixx-coaching.onrender.com/sms/inbound?key=CRON_SECRET
+//     Body (JSON):
+//        {"from":"{{contact.phone}}","body":"{{message.body}}"}
+//  4. Publish.
+//
+//  No new env vars. Reuses CRON_SECRET, PHONE_ALEX, GHL_TOKEN_ROTTERDAM.
+//  ─────────────────────────────────────────────────────────────────────────────
+app.post("/sms/inbound", express.json(), async (req, res) => {
+  // Gate: same secret as cron routes, in the URL query
+  if (!process.env.CRON_SECRET || req.query.key !== process.env.CRON_SECRET) {
+    return res.status(403).json({ ok:false, error:"forbidden" });
   }
-  // ---- doorplannen sheet ----
-  try{ const r=await loadAllIntakes(); const meta=r&&r.meta?r.meta:{};
-    for(const cl of Object.keys(meta)){ const m=meta[cl];
-      let maxWk=0; const mm=String(m.weeks||"").match(/\d+/g)||[]; for(const x of mm) maxWk=Math.max(maxWk,+x);
-      const nowWk=hIsoWeek(now);
-      const st = m.err? "error" : (m.rows? ((maxWk>=nowWk-2)?"ok":"warn") : "warn");
-      add("Doorplannen sheet", cl, (m.rows||0)+" rows \u00b7 "+(m.weeks||"?"), st,
-        m.err? "tab unreadable" : (st==="warn"?"latest week "+maxWk+" vs now wk "+nowWk+" \u2014 CA sheet needs filling":""));
+  try {
+    const body = req.body || {};
+    const from = String(body.from || "").replace(/\D/g, ""); // digits only
+    const allowed = String(process.env.PHONE_ALEX || "").replace(/\D/g, "");
+    // Silent ignore for non-whitelisted senders (never reply to strangers)
+    if (!from || !allowed || from !== allowed) {
+      console.log("sms/inbound: ignored sender", from);
+      return res.status(200).json({ ok:true, ignored:true });
     }
-  }catch(e){ add("Doorplannen sheet","(all)",null,"error","sheet unreadable: "+e.message); }
-  // ---- PracticeHub per clinic (any appointments in the last 7 days) ----
-  { const f=d=>d.toISOString().slice(0,19).replace("T"," ");
-    const from=new Date(now); from.setUTCDate(from.getUTCDate()-7);
-    for(const cl of Object.keys(CLINICS)){
-      try{ const appts=await phubAll(cl, "/appointments", { start: "between:"+f(from)+","+f(now) });
-        add("PracticeHub", cl, (appts.length)+" appts \u00b7 7d", appts.length?"ok":"warn", appts.length?"":"no appointments returned \u2014 check API key / quiet week");
-      }catch(e){ add("PracticeHub", cl, null, "error", "API failed: "+e.message); }
-    } }
-  // ---- MT940 bank files ----
-  if(typeof MT940_ACCOUNTS!=="undefined"){
-    for(const cl of Object.keys(MT940_ACCOUNTS)){
-      try{ const txs=parseMT940Tx(await fetchMT940(MT940_ACCOUNTS[cl].fileId));
-        const latest=txs.reduce((m,t)=> t.date>m?t.date:m, "");
-        const ageD = latest? Math.round((now-new Date(latest))/864e5) : null;
-        add("MT940 bank file", cl, latest||null, (latest? (ageD<=40?"ok":"stale") : "error"),
-          latest? (ageD<=40?"":"last transaction "+ageD+" days old \u2014 export a fresh .940 to the same Drive file") : "file unreadable");
-      }catch(e){ add("MT940 bank file", cl, null, "error", "Drive fetch failed"); }
-    } }
-  // ---- key switches ----
-  add("Env","YUKI_LIVE + GL codes", (process.env.YUKI_LIVE==="1"?"on":"off")+((process.env.YUKI_GL_RENT||process.env.YUKI_GL_MARKETING)?" \u00b7 GLs set":""), (process.env.YUKI_LIVE==="1")?"ok":"off", (process.env.YUKI_LIVE==="1")?"":"set YUKI_LIVE=1 + YUKI_GL_* for booked-month auto-fill on /profit");
-  add("Env","CRON_SECRET", process.env.CRON_SECRET?"set":"missing", process.env.CRON_SECRET?"ok":"error", process.env.CRON_SECRET?"":"crons are unprotected/broken without it");
-  const issues=checks.filter(c=>c.status==="stale"||c.status==="error");
-  const v={ at:now.toISOString(), checks, issues };
-  _healthCache.t=Date.now(); _healthCache.v=v; _healthCache.p=null; return v;
-}
-app.get("/health", gate, async (req,res)=>{ try{
-  if(req.query.refresh==="1"){ _healthCache.t=0; _healthCache.v=null; }
-  const fresh=_healthCache.v && Date.now()-_healthCache.t<900e3;
-  if(!fresh){
-    if(!_healthCache.p){ _healthCache.p=computeHealth().catch(e=>{ _healthCache.err=e.message; _healthCache.p=null; }); }
-    if(_healthCache.err && !_healthCache.v){ const em=_healthCache.err; _healthCache.err=null;
-      return res.send("<!doctype html><meta charset=utf-8><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto'><h2>Health check failed</h2><p style='color:#64748b'>"+em+"</p><a href='/health' style='color:#2563EB'>retry</a></div>"); }
-    return res.send("<!doctype html><meta charset=utf-8><meta http-equiv='refresh' content='7'><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;text-align:center;color:#16202E'><h2>Checking every data source\u2026</h2><p style='color:#64748b;font-size:14px'>Sheets, PracticeHub, Meta, Windsor, bank files \u2014 up to a minute. Refreshes itself.</p></div>");
+
+    const raw = String(body.body || "").trim();
+    // Require "pf " prefix so normal SMS conversations (tikkie, clinic chat)
+    // never trigger a reply. Silent ignore if missing.
+    if (!/^pf\b/i.test(raw)) {
+      console.log("sms/inbound: no pf prefix, ignored");
+      return res.status(200).json({ ok:true, ignored:true, reason:"no-prefix" });
+    }
+    const text = raw.replace(/^pf\b\s*/i, "");
+    const cmd  = text.toLowerCase().split(/\s+/)[0] || "";
+    const now  = new Date(), iso = d => d.toISOString().slice(0,10);
+    const today = iso(now);
+    const yday  = iso(new Date(now - 864e5));
+    const weekAgo = iso(new Date(now - 7*864e5));
+
+    let reply = "";
+
+    // ── help ────────────────────────────────────────────────────────────
+    if (!cmd || cmd === "help" || cmd === "h" || cmd === "?") {
+      reply = "PF ads commands (prefix every text with 'pf '):\n"
+            + "pf status  \u2014 7d network summary\n"
+            + "pf today   \u2014 today's spend + leads\n"
+            + "pf <location> \u2014 utrecht/rotterdam/bussum/amstelveen\n"
+            + "pf help    \u2014 this list";
+    }
+
+    // ── status ──────────────────────────────────────────────────────────
+    else if (cmd === "status" || cmd === "s") {
+      const fb = await windsorGet("facebook", ["date","spend"], weekAgo, yday);
+      const ghl = await windsorGet("gohighlevel",
+        ["contact_date_added","contact_first_attribution_session_source"],
+        weekAgo, today);
+      const spend7 = fb.reduce((n,r)=>n + Number(r.spend||0), 0);
+      const spendY = fb.filter(r=>r.date===yday).reduce((n,r)=>n + Number(r.spend||0), 0);
+      const paid = ghl.filter(c => c.contact_first_attribution_session_source === "Paid Social");
+      const leads7 = paid.filter(c => String(c.contact_date_added||"").slice(0,10) >= weekAgo).length;
+      const leadsY = paid.filter(c => String(c.contact_date_added||"").slice(0,10) === yday).length;
+      const cpl = leads7 ? (spend7/leads7).toFixed(0) : "n/a";
+      const dm = yday.slice(8,10)+"/"+yday.slice(5,7);
+      reply = `PF status ${dm}: yday \u20ac${spendY.toFixed(0)}/${leadsY} leads. 7d: \u20ac${spend7.toFixed(0)}/${leads7} leads, CPL \u20ac${cpl}`;
+    }
+
+    // ── today ───────────────────────────────────────────────────────────
+    else if (cmd === "today" || cmd === "t") {
+      const fb = await windsorGet("facebook", ["date","spend"], today, today);
+      const ghl = await windsorGet("gohighlevel",
+        ["contact_date_added","contact_first_attribution_session_source"],
+        today, today);
+      const spend = fb.reduce((n,r)=>n + Number(r.spend||0), 0);
+      const leads = ghl.filter(c =>
+        c.contact_first_attribution_session_source === "Paid Social"
+        && String(c.contact_date_added||"").slice(0,10) === today
+      ).length;
+      reply = `PF today so far: \u20ac${spend.toFixed(0)} spend, ${leads} paid leads`;
+    }
+
+    // ── per-location (utrecht/rotterdam/bussum/amstelveen) ─────────────
+    else if (["utrecht","utr","rotterdam","rot","bussum","bus","amstelveen","ams"].includes(cmd)) {
+      const map = { utr:"Utrecht", rot:"Rotterdam", bus:"Bussum", ams:"Amstelveen" };
+      const key = cmd.slice(0,3);
+      const loc = map[key];
+      const fb = await windsorGet("facebook", ["account_name","spend"], weekAgo, yday);
+      const ghl = await windsorGet("gohighlevel",
+        ["account_name","contact_date_added","contact_first_attribution_session_source"],
+        weekAgo, today);
+      const spend7 = fb
+        .filter(r => String(r.account_name||"").toLowerCase().includes(loc.toLowerCase()))
+        .reduce((n,r)=>n + Number(r.spend||0), 0);
+      const leads7 = ghl.filter(c =>
+        c.contact_first_attribution_session_source === "Paid Social"
+        && String(c.account_name||"").toLowerCase().includes(loc.toLowerCase())
+        && String(c.contact_date_added||"").slice(0,10) >= weekAgo
+      ).length;
+      const cpl = leads7 ? (spend7/leads7).toFixed(0) : "n/a";
+      reply = `PF ${loc} 7d: \u20ac${spend7.toFixed(0)} spend, ${leads7} leads, CPL \u20ac${cpl}`;
+    }
+
+    // ── unknown ─────────────────────────────────────────────────────────
+    else {
+      reply = `Unknown command "${cmd}". Text "help" for options.`;
+    }
+
+    // Send reply via the Rotterdam location (same channel as the daily alert)
+    await sendSms("Rotterdam", process.env.PHONE_ALEX, "Alex", reply.slice(0, 900));
+    res.json({ ok:true, cmd, replied:reply });
+
+  } catch (e) {
+    // Never leave the user hanging silently — text back a short error
+    try {
+      if (process.env.PHONE_ALEX)
+        await sendSms("Rotterdam", process.env.PHONE_ALEX, "Alex",
+          "PF sms handler error: " + String(e.message||e).slice(0,120));
+    } catch (_) {}
+    res.status(200).json({ ok:false, error: e.message });
   }
-  const d=_healthCache.v;
-  const dot={ok:"#16a34a",warn:"#d97706",stale:"#dc2626",error:"#dc2626",off:"#94a3b8"};
-  const word={ok:"OK",warn:"check",stale:"STALE",error:"ERROR",off:"off"};
-  let lastG=""; const rows=d.checks.map(c=>{
-    const g=c.group!==lastG? "<tr><td colspan=4 style='padding-top:14px;color:#64748b;font-size:11px;text-transform:uppercase'>"+c.group+"</td></tr>":"";
-    lastG=c.group;
-    return g+"<tr><td>"+c.name+"</td><td>"+c.last+"</td><td><span style='color:"+dot[c.status]+";font-weight:700'>\u25cf "+word[c.status]+"</span></td><td style='color:#64748b'>"+c.fix+"</td></tr>";
-  }).join("");
-  res.send("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Data health \u2014 Posturefixx</title>"+
-    "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#16202E}h1{font-size:23px;margin:0 0 2px}"+
-    ".sub{color:#64748b;font-size:13px;margin:0 0 14px}table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}a{color:#2563EB}</style></head><body>"+
-    "<h1>Data health</h1><div class=sub>"+(d.issues.length? ("<b style='color:#dc2626'>"+d.issues.length+" source(s) need attention.</b>") : "<b style='color:#16a34a'>All sources flowing.</b>")+
-    " Checked "+d.at.slice(0,16).replace("T"," ")+" \u00b7 cached 15 min \u00b7 <a href='/health?refresh=1'>re-check now</a>. The Monday cron texts you automatically when anything here goes red.</div>"+
-    "<table><tbody>"+rows+"</tbody></table>"+
-    "<p class=sub style='margin-top:14px'>Pages: <a href='/'>home</a> \u00b7 <a href='/marketing'>/marketing</a> \u00b7 <a href='/bank'>/bank</a> \u00b7 <a href='/ca'>/ca</a></p></body></html>");
-}catch(e){ res.status(500).send("health error: "+e.message); } });
-app.get("/cron/health", async (req,res)=>{
-  if(!kpiCronOK(req)) return res.status(403).json({ok:false,error:"bad key"});
-  try{
-    const d=await computeHealth();
-    const always=req.query.always==="1", dry=req.query.dry==="1";
-    if(!d.issues.length && !always) return res.json({ok:true, quiet:true, issues:0});
-    const base=process.env.APP_URL||"https://posturefixx-coaching.onrender.com";
-    let msg="Posturefixx data health: "+(d.issues.length? d.issues.length+" issue(s)":"all green")+"\n";
-    for(const c of d.issues.slice(0,5)) msg += "\u2022 "+c.group+" \u2014 "+c.name+": "+(c.status==="error"?"broken":"stale ("+c.last+")")+"\n";
-    if(d.issues.length>5) msg += "\u2022 +"+(d.issues.length-5)+" more\n";
-    msg += "Fix list: "+base+"/health";
-    const me = CHIROS.find(c=>c.n==="Alex") || CHIROS.find(c=>c.phone);
-    if(!me || !me.phone) return res.json({ok:true, issues:d.issues.length, skipped:"no owner phone (PHONE_ALEX)", text:msg});
-    if(dry) return res.json({ok:true, dry:true, issues:d.issues.length, to:me.phone, text:msg});
-    const r=await sendSms(me.smsClinic, me.phone, me.n, msg);
-    res.json({ok:true, sent:true, issues:d.issues.length, to:me.phone, text:msg, ghl:(r&&r.contactId)?{contactId:r.contactId}:undefined});
-  }catch(e){ res.status(200).json({ok:false,error:e.message}); }
 });
 
-// Safety net: a single bad request should never take the whole site down (502).
 // Log it and keep serving every other page.
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
 process.on("uncaughtException",  (e) => console.error("uncaughtException:",  (e && e.message) || e));
