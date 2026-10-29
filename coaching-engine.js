@@ -7106,6 +7106,36 @@ app.post("/sms/inbound", express.json(), async (req, res) => {
 //  last month that all four bank files fully cover.
 //  Routes: /chiro-pl (page, login)  /chiro-pl.json  /chiro-pl.csv  (?refresh=1)
 // ============================================================================
+// ============================================================================
+//  /chiro-pl — PROFIT & LOSS PER CHIROPRACTOR, month by month since Jan 2025
+//
+//  Revenue + appointments: live from PracticeHub (all four clinics).
+//    Every processed, non-cancelled appointment counts as an appointment.
+//    Revenue = the price in the appointment type's name ("… €65"), which
+//    matched what PracticeHub actually charged on 99% of revenue in the
+//    Jan 2025–Oct 2026 transaction exports. Types without a € in the name use
+//    PL_TYPE_PRICES below, then the type's own price field, then KPI_PRICE.
+//  Pay:
+//    Contractors (Lara via Evolve Chiropractic, Nick, Holly, Courtney,
+//    Annefloor via AB Chiropractie) = the bank debits, booked to the month
+//    WORKED (paid on day 1–15 → previous month; later → same month).
+//    Matthew = contract brutto (bruttoMonthly) × EMPLOYER_CHARGES (default 1.18).
+//    Myles   = contract estimate from Apr 2026. Before that (Aug 2025–Mar 2026)
+//              he was paid via his wife Lina Morales's payroll (net × EMPLOYER_FACTOR)
+//              plus furniture + the moving truck (PL_MYLES_PAYOUTS), spread over
+//              those months by what he billed.
+//    Alex    = owner, €0 (the management fee to the holding is shown separately).
+//  Clinic overhead (from the four clinic MT940 files on Drive): rent, CA and
+//    staff wages (net × EMPLOYER_FACTOR, default 1.32), marketing, card spend,
+//    accounting, IT, insurance, utilities, travel, bank fees, training, refunds,
+//    other. Left out: intercompany + management fees, owner pay, tax transfers,
+//    loans, fit-out, table stock. Each clinic's month of overhead is split over
+//    the chiros by their share of that clinic's revenue that month; a month with
+//    costs but no revenue (e.g. Rotterdam before opening) is "not charged".
+//  Months: revenue/appointments through the current month; P&L only through the
+//  last month that all four bank files fully cover.
+//  Routes: /chiro-pl (page, login)  /chiro-pl.json  /chiro-pl.csv  (?refresh=1)
+// ============================================================================
 // === CHIRO P&L START ===
 const PL_START = "2025-01";
 const PL_CLINICS = ["Amstelveen", "Bussum", "Utrecht", "Rotterdam"];
@@ -7159,7 +7189,9 @@ function plParseTx(text){
 // Myles's pre-employment payout in kind, bought from the Amstelveen account (confirmed by Alex).
 // Add a line here if more turns up (e.g. on the business card).
 const PL_MYLES_PAYOUTS = [
-  ["2026-03-31", 425.00, /diks/i], ["2026-04-12", 2117.13, /sklum/i], ["2026-04-16", 708.84, /ikea/i], ["2026-04-16", 768.30, /sklum/i],
+  ["2025-09-07", 1250.00, /m drakes/i], ["2025-09-15", 1250.00, /m drakes/i], // private sale of a table to the clinic
+  ["2026-03-31", 425.00, /diks/i], ["2026-04-01", 1512.50, /iacop/i], // makelaar
+  ["2026-04-12", 2117.13, /sklum/i], ["2026-04-16", 708.84, /ikea/i], ["2026-04-16", 768.30, /sklum/i],
   ["2026-04-16", 169.00, /sharkninja/i], ["2026-04-20", 937.35, /ikea/i], ["2026-04-20", 483.99, /media markt/i], ["2026-04-20", 101.99, /bol\.com/i],
   ["2026-04-20", 107.97, /zarahome/i], ["2026-04-29", 118.95, /bol\.com/i],
 ];
@@ -7400,6 +7432,7 @@ draw();
 </script></body></html>`);
 }catch(e){ res.status(500).send("chiro-pl error: " + e.message); } });
 // === CHIRO P&L END ===
+
 
 // Log it and keep serving every other page.
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
