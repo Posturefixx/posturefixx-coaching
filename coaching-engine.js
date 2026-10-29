@@ -5239,6 +5239,7 @@ h1{font-size:24px;margin:0 0 2px}.sub{color:#64748b;font-size:14px;margin:0 0 22
   card("/bank","Bank \u2014 live cash edge","MT940 cash-in per clinic by month, read live from the .940 exports \u2014 the up-to-the-day edge ahead of Yuki\u2019s booked P&amp;L."),
   card("/chiro-costs","\ud83d\udcb6 Cost per chiro","What each chiropractor costs (matched from the bank per counterparty) next to what they bring in \u2014 ZZP full cost, employees grossed up, with a built-in wiring check."),
   card("/card-spend","\ud83d\udcb3 Card spend","All five Businesscards by vendor and month \u2014 GHL, PracticeHub, Meta-on-card, subscriptions, and a \u2018worth a look\u2019 list \u2014 reconciled to every statement total."),
+  card("/chiro-pl","\ud83d\udcca P&amp;L per chiro","Month by month since Jan 2025: appointments and what each chiro brought in (live PracticeHub), what they cost (bank), their share of clinic costs, and the company profit before and after your fee."),
   card("/chiro-monthly","\ud83d\udcc6 Chiro monthly","Per chiro, per month since 2025: visits and clean intakes, what they bring in (PracticeHub) and what the bank pays them \u2014 with cost as % of revenue."),
   card("/ltv","\ud83d\udc8e Lifetime value","LTV per patient cohort \u2014 by month of first intake, per clinic and per chiro, as clean tables. The value lens on top of the volume levers."),
   card("/weekly-coach","\ud83d\uddd3 Weekly coach sheet","One row per week since 2025 \u2014 intakes, paid visits, PVA and that week\u2019s cohort LTV \u2014 switchable per clinic and per chiro. The 1-on-1 sheet."),
@@ -7074,6 +7075,331 @@ app.post("/sms/inbound", express.json(), async (req, res) => {
     res.status(200).json({ ok:false, error: e.message });
   }
 });
+
+// ============================================================================
+//  /chiro-pl — PROFIT & LOSS PER CHIROPRACTOR, month by month since Jan 2025
+//
+//  Revenue + appointments: live from PracticeHub (all four clinics).
+//    Every processed, non-cancelled appointment counts as an appointment.
+//    Revenue = the price in the appointment type's name ("… €65"), which
+//    matched what PracticeHub actually charged on 99% of revenue in the
+//    Jan 2025–Oct 2026 transaction exports. Types without a € in the name use
+//    PL_TYPE_PRICES below, then the type's own price field, then KPI_PRICE.
+//  Pay:
+//    Contractors (Lara via Evolve Chiropractic, Nick, Holly, Courtney,
+//    Annefloor via AB Chiropractie) = the bank debits, booked to the month
+//    WORKED (paid on day 1–15 → previous month; later → same month).
+//    Matthew = contract brutto (bruttoMonthly) × EMPLOYER_CHARGES (default 1.18).
+//    Myles   = contract estimate from Apr 2026. Before that (Aug 2025–Mar 2026)
+//              he was paid via his wife Lina Morales's payroll (net × EMPLOYER_FACTOR)
+//              plus furniture + the moving truck (PL_MYLES_PAYOUTS), spread over
+//              those months by what he billed.
+//    Alex    = owner, €0 (the management fee to the holding is shown separately).
+//  Clinic overhead (from the four clinic MT940 files on Drive): rent, CA and
+//    staff wages (net × EMPLOYER_FACTOR, default 1.32), marketing, card spend,
+//    accounting, IT, insurance, utilities, travel, bank fees, training, refunds,
+//    other. Left out: intercompany + management fees, owner pay, tax transfers,
+//    loans, fit-out, table stock. Each clinic's month of overhead is split over
+//    the chiros by their share of that clinic's revenue that month; a month with
+//    costs but no revenue (e.g. Rotterdam before opening) is "not charged".
+//  Months: revenue/appointments through the current month; P&L only through the
+//  last month that all four bank files fully cover.
+//  Routes: /chiro-pl (page, login)  /chiro-pl.json  /chiro-pl.csv  (?refresh=1)
+// ============================================================================
+// === CHIRO P&L START ===
+const PL_START = "2025-01";
+const PL_CLINICS = ["Amstelveen", "Bussum", "Utrecht", "Rotterdam"];
+const PL_EMP_CHARGES = parseFloat(process.env.EMPLOYER_CHARGES || "1.18") || 1.18; // on contract brutto
+const PL_NET_FACTOR = parseFloat(process.env.EMPLOYER_FACTOR || "1.32") || 1.32;   // net wages → employer cost
+const PL_TYPE_PRICES = [ // for appointment types that don't carry a € price in their name
+  [/rof|report of findings|evaluatie|gratis|progress|telefon/i, 0],
+  [/nsa.*child.*intake/i, 65], [/nsa.*intake/i, 85], [/nsa.*losse/i, 75], [/nsa.*(pakket|behandeling)/i, 65],
+  [/child|travel intake/i, 55],
+];
+function plPrice(name, typeObj){
+  const m = [...String(name || "").matchAll(/€\s?(\d+(?:[.,]\d+)?)/g)];
+  if(m.length) return parseFloat(m[m.length - 1][1].replace(",", "."));
+  for(const [re, p] of PL_TYPE_PRICES) if(re.test(name || "")) return p;
+  const own = typeObj ? parseFloat(typeObj.price ?? typeObj.default_price ?? typeObj.cost) : NaN;
+  return isFinite(own) ? own : KPI_PRICE;
+}
+function plChiro(full){
+  const n = String(full || "").toLowerCase();
+  if(/alex(ander)?\s*yu/.test(n)) return "Alex";
+  if(/\blara\b|follmann/.test(n)) return "Lara";
+  if(/myles|drakes/.test(n)) return "Myles";
+  if(/matthew|horgan/.test(n)) return "Matthew";
+  if(/\bnick\b|bunger/.test(n)) return "Nick";
+  if(/holly|schonberger/.test(n)) return "Holly";
+  if(/annefloor|broekhuijsen/.test(n)) return "Annefloor";
+  if(/courtney|rokowski/.test(n)) return "Courtney";
+  return (String(full || "").trim().split(/\s+/)[0]) || "Other";
+}
+function plMonths(fromYm, toYm){ const out = []; let [y, m] = fromYm.split("-").map(Number); const [ty, tm] = toYm.split("-").map(Number);
+  while(y < ty || (y === ty && m <= tm)){ out.push(y + "-" + String(m).padStart(2, "0")); m++; if(m > 12){ m = 1; y++; } } return out; }
+function plWorkedMonth(iso){ const d = new Date(iso + "T12:00:00Z"); if(d.getUTCDate() <= 15) d.setUTCDate(0); return d.toISOString().slice(0, 7); }
+
+// MT940 → [{date, ym, amt (signed), name, remi}]. Continuation lines are joined
+// WITHOUT a space (ING wraps mid-word: "ING Commercia|l Cards").
+function plParseTx(text){
+  const out = []; if(!text || text.indexOf(":61:") < 0) return out;
+  const parts = String(text).replace(/\r/g, "").split(/\n:61:/).slice(1);
+  for(const p of parts){
+    const m = p.match(/^(\d{6})(\d{4})?(R?[CD])([\d,]+)/); if(!m) continue;
+    const amt = parseFloat(m[4].replace(",", ".")) * (m[3].endsWith("C") ? 1 : -1);
+    const i = p.indexOf(":86:"); let info = i >= 0 ? p.slice(i + 4) : "";
+    info = info.split(/\n:6[12]/)[0].replace(/\n/g, "");
+    const c = info.match(/\/CNTP\/([^/]*)\/([^/]*)\/([^/]*)\//);
+    const r = info.match(/\/REMI\/(?:USTD\/\/)?(.*?)(?:\/[A-Z]{4}\/|$)/);
+    const date = "20" + m[1].slice(0, 2) + "-" + m[1].slice(2, 4) + "-" + m[1].slice(4, 6);
+    out.push({ date, ym: date.slice(0, 7), amt, name: (c ? c[3] : "").trim(), remi: (r ? r[1] : info).slice(0, 160) });
+  }
+  return out;
+}
+// Myles's pre-employment payout in kind, bought from the Amstelveen account (confirmed by Alex).
+// Add a line here if more turns up (e.g. on the business card).
+const PL_MYLES_PAYOUTS = [
+  ["2026-03-31", 425.00, /diks/i], ["2026-04-12", 2117.13, /sklum/i], ["2026-04-16", 708.84, /ikea/i], ["2026-04-16", 768.30, /sklum/i],
+  ["2026-04-16", 169.00, /sharkninja/i], ["2026-04-20", 937.35, /ikea/i], ["2026-04-20", 483.99, /media markt/i], ["2026-04-20", 101.99, /bol\.com/i],
+  ["2026-04-20", 107.97, /zarahome/i], ["2026-04-29", 118.95, /bol\.com/i],
+];
+const PL_MYLES_EMPLOYED_FROM = "2026-04";
+// Same rules as the Jan 2025–Oct 2026 hand-built P&L (names first, then remittance).
+const PL_CAT = [
+  ["skip:intercompany", /posturefixx|notable corp|top chiropractie/i],
+  ["skip:owner", /alexander yu/i],
+  ["skip:tables", /fysiotech|alibaba|syntropy training/i],
+  ["Rent", /oorschot|van der heijde|mejoro|hegro|gemeente|gooise meren|bghu|^belasting$/i],
+  ["pay:Lara", /evolve/i], ["pay:Nick", /bunger/i], ["pay:Holly", /schonberger/i], ["pay:Courtney", /rokowski/i], ["pay:Annefloor", /ab chiropractie/i],
+  ["skip:spacer", /spacer/i],
+  ["skip:tax", /belastingdienst/i],
+  ["Marketing", /google ireland|facebook|meta platforms|ghiuta|hairgrowth|vistaprint|advancedfunnels|van de socials|shoetagency|dutchital|raven designs|fiverr|bizay|kirografiks|cvtotaal/i],
+  ["Accounting & advice", /bamboek|cappon|profinancials|jeroen lampe|penrose|exterus|sensum|pucciatti|digidentity|assist verzuim|flanderijn/i],
+  ["IT & software", /optima ?sea|moonflash|ledloket/i],
+  ["Insurance", /veldsink|asr|avero|saa verz|achmea/i],
+  ["Utilities", /eneco|kpn/i],
+  ["Travel", /ns groep|greenwheels|transavia|klm|booking|diks|adrem|uber/i],
+  ["Card spend", /ing commercial cards/i],
+  ["Bank fees", /^buckaroo$|sepay|buckaroo derdengelden|ing dd&c|gocardless/i],
+  ["skip:fitout", /urban made|ikea|sklum|all in glas|office ?city|beliani|mobili|ld elektro|westvaer|coolblue|media ?markt|bol\.?com|apple store|back market|123inkt|4ustore|amazon|livinn|theramas/i],
+  ["skip:loans", /santander|open bank|collin crowdfund|online payments foundation/i],
+  ["skip:chiro-employee", /matthew horgan|myles drakes|m drakes/i],
+  ["myles:lina", /lina morales/i],
+  ["CA & staff", /csaba|anne de heer|alexandra farkas|destree|archana|lina morales|vivian|dolly|renata|lativa|olivia|c a lijnch/i],
+  ["Training", /chiropractic federation|adifamily|tobian|trainmore/i],
+];
+function plCategory(t){
+  if(t.amt >= 0) return null;                                   // inflows are not costs
+  const n = t.name.toLowerCase(), rm = t.remi.toLowerCase();
+  if(!n) return /kosten zakelijk/.test(rm) ? "Bank fees" : "Card spend";
+  if(/loan agreement/.test(rm)) return "skip:staff-loan";
+  for(const [c, re] of PL_CAT) if(re.test(n)) return c;
+  if(/\d{4}-\d{1,2}-m\b|salar|salaris|holiday|\/p\d/.test(rm)) return "CA & staff";
+  if(/refund|return of|terug|teveel/.test(rm)) return "Refunds";
+  return "Other";
+}
+
+async function plActivity(){
+  const act = {};   // chiro -> clinic -> ym -> {appts, paid, rev}
+  const status = {};
+  const now = new Date(), f = (d) => d.toISOString().slice(0, 19).replace("T", " ");
+  for(const clinic of PL_CLINICS){
+    try{
+      const types = await phubAll(clinic, "/appointment_types", {});
+      const names = await allPractitionerMap(clinic);
+      const appts = await phubAll(clinic, "/appointments", { start: "between:2025-01-01 00:00:00," + f(now) });
+      const tById = {}; for(const t of types) tById[t.id] = t;
+      const byId = new Map();
+      for(const a of appts){ const prev = byId.get(a.id); const cancelled = a.status === "cancelled" || !!a.cancelDate;
+        if(!prev || (prev.cancelled && !cancelled)) byId.set(a.id, { ...a, cancelled }); }
+      let n = 0;
+      for(const a of byId.values()){
+        if(a.cancelled || a.status !== "processed") continue;
+        const ym = String(a.start || "").slice(0, 7); if(!/^20\d\d-\d\d$/.test(ym) || ym < PL_START) continue;
+        const t = tById[a.appointment_type_id]; const tn = (t && t.name) || "";
+        const who = plChiro(names[a.practitioner_id] || "");
+        const price = plPrice(tn, t);
+        const s = (((act[who] = act[who] || {})[clinic] = act[who][clinic] || {})[ym] = act[who][clinic][ym] || { appts: 0, paid: 0, rev: 0 });
+        s.appts++; if(price > 0) s.paid++; s.rev += price; n++;
+      }
+      status[clinic] = { ok: true, appts: n };
+    }catch(e){ status[clinic] = { ok: false, error: e.message }; }
+  }
+  return { act, status };
+}
+
+async function plBank(){
+  const tx = {}, status = {};
+  for(const clinic of PL_CLINICS){
+    let rows = [];
+    try{ rows = plParseTx(await fetchMT940(MT940_ACCOUNTS[clinic].fileId)); }catch(e){}
+    tx[clinic] = rows;
+    status[clinic] = { ok: rows.length > 0, latest: rows.reduce((m, t) => t.date > m ? t.date : m, "") };
+  }
+  return { tx, status };
+}
+
+const _plCache = { t: 0, v: null, p: null, err: null };
+async function computeChiroPL(){
+  if(_plCache.v && Date.now() - _plCache.t < 3600e3) return _plCache.v;
+  const [A, B] = await Promise.all([plActivity(), plBank()]);
+  const nowYm = new Date().toISOString().slice(0, 7);
+  const revMonths = plMonths(PL_START, nowYm);
+  // last month fully covered by every clinic's bank file
+  const latest = PL_CLINICS.map(c => B.status[c].latest).filter(Boolean).sort()[0] || "";
+  let plEnd = latest.slice(0, 7);
+  if(latest){ const d = new Date(latest + "T12:00:00Z"); const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    if(d.getUTCDate() < last){ const p = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0)); plEnd = p.toISOString().slice(0, 7); } }
+  const plMonthsList = plEnd ? plMonths(PL_START, plEnd) : [];
+
+  // revenue per chiro/clinic/month
+  const rev = {}, appts = {}, paid = {}, clinicRev = {};
+  for(const [ch, byC] of Object.entries(A.act)) for(const [cl, byM] of Object.entries(byC)) for(const [ym, s] of Object.entries(byM)){
+    const k = ch + "|" + ym;
+    rev[k] = (rev[k] || 0) + s.rev; appts[k] = (appts[k] || 0) + s.appts; paid[k] = (paid[k] || 0) + s.paid;
+    const ck = cl + "|" + ym; (clinicRev[ck] = clinicRev[ck] || {})[ch] = ((clinicRev[ck] || {})[ch] || 0) + s.rev;
+  }
+  // bank: contractor pay (month worked), overhead per clinic/month, management fee
+  const pay = {}, payBasis = {}, oh = {}, ohLine = {}, fee = {};
+  let mylesPre = 0;
+  for(const cl of PL_CLINICS) for(const t of B.tx[cl]){
+    if(cl === "Amstelveen" && t.amt < 0 && PL_MYLES_PAYOUTS.some(([d, a, re]) => d === t.date && Math.abs(-t.amt - a) < 0.01 && re.test(t.name))){ mylesPre += -t.amt; continue; }
+    const c = plCategory(t); if(!c) continue;
+    if(c === "myles:lina"){ mylesPre += -t.amt * PL_NET_FACTOR; continue; }
+    if(c.startsWith("pay:")){ const who = c.slice(4), ym = plWorkedMonth(t.date), k = who + "|" + ym; pay[k] = (pay[k] || 0) - t.amt; payBasis[k] = "invoices paid"; continue; }
+    if(c === "skip:intercompany" && /notable corp/i.test(t.name)){ fee[t.ym] = (fee[t.ym] || 0) - t.amt; continue; }
+    if(c.startsWith("skip:")) continue;
+    const v = (c === "CA & staff" ? PL_NET_FACTOR : 1) * -t.amt;
+    const k = cl + "|" + t.ym; oh[k] = (oh[k] || 0) + v; (ohLine[k] = ohLine[k] || {})[c] = ((ohLine[k] || {})[c] || 0) + v;
+  }
+  // employees + estimates
+  for(const ym of revMonths){
+    const n = Number(ym.slice(5));
+    const rM = rev["Matthew|" + ym] || 0;
+    if(rM && ym >= "2026-01"){ const b = bruttoMonthly("Matthew", rM, n); const pro = ym === "2026-01" ? 13 / 31 : 1;   // started 19 Jan 2026
+      pay["Matthew|" + ym] = (b.base * pro + b.holiday * pro + b.commission) * PL_EMP_CHARGES; payBasis["Matthew|" + ym] = "contract"; }
+    const rY = rev["Myles|" + ym] || 0;
+    if(rY && ym >= PL_MYLES_EMPLOYED_FROM){ const b = bruttoMonthly("Myles", rY, n); pay["Myles|" + ym] = b.total * PL_EMP_CHARGES; payBasis["Myles|" + ym] = "contract (estimate)"; }
+    if(rev["Alex|" + ym]){ pay["Alex|" + ym] = 0; payBasis["Alex|" + ym] = "owner"; }
+  }
+  // Myles before employment: everything paid via Lina + in kind, spread by his revenue
+  { const pre = revMonths.filter(ym => ym < PL_MYLES_EMPLOYED_FROM && rev["Myles|" + ym]);
+    const tot = pre.reduce((a, ym) => a + rev["Myles|" + ym], 0);
+    for(const ym of pre){ pay["Myles|" + ym] = tot ? mylesPre * rev["Myles|" + ym] / tot : 0; payBasis["Myles|" + ym] = "via Lina's payroll + furniture/truck (spread)"; } }
+  // allocate overhead by revenue share inside each clinic-month
+  const alloc = {}, unalloc = {};
+  for(const [k, cost] of Object.entries(oh)){
+    const [cl, ym] = k.split("|"); const shares = clinicRev[k] || {}; const tot = Object.values(shares).reduce((a, b) => a + b, 0);
+    if(tot <= 0){ unalloc[ym] = (unalloc[ym] || 0) + cost; continue; }
+    for(const [ch, r] of Object.entries(shares)){ const kk = ch + "|" + ym; alloc[kk] = (alloc[kk] || 0) + cost * r / tot; }
+  }
+  const order = ["Alex", "Lara", "Nick", "Myles", "Matthew", "Courtney", "Holly", "Annefloor"];
+  const chiros = [...new Set(Object.keys(rev).concat(Object.keys(pay)).map(k => k.split("|")[0]))]
+    .sort((a, b) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)));
+  const rows = [];
+  for(const ch of chiros) for(const ym of revMonths){
+    const k = ch + "|" + ym; const r = rev[k] || 0, p = pay[k] || 0;
+    if(!r && !p) continue;
+    const inPL = plMonthsList.includes(ym);
+    const o = inPL ? (alloc[k] || 0) : null;
+    rows.push({ chiro: ch, month: ym, appts: appts[k] || 0, paid_visits: paid[k] || 0, revenue: Math.round(r),
+      pay: inPL ? Math.round(p) : null, overhead: inPL ? Math.round(o) : null, profit: inPL ? Math.round(r - p - o) : null, pay_basis: payBasis[k] || (p ? "invoices paid" : "") });
+  }
+  const company = plMonthsList.map(ym => {
+    const rs = rows.filter(r => r.month === ym);
+    const revenue = rs.reduce((a, r) => a + r.revenue, 0), payT = rs.reduce((a, r) => a + (r.pay || 0), 0);
+    const ohT = rs.reduce((a, r) => a + (r.overhead || 0), 0), un = Math.round(unalloc[ym] || 0), f = Math.round(fee[ym] || 0);
+    const profit = revenue - payT - ohT - un;
+    return { month: ym, revenue, pay: payT, overhead: ohT, unallocated: un, profit, mgmt_fee: f, profit_after_fee: profit - f };
+  });
+  // check: PracticeHub revenue vs money into each clinic account
+  const recon = PL_CLINICS.map(cl => { const byM = {};
+    for(const t of B.tx[cl]) if(t.amt > 0 && /buckaroo|ing dd&c|geldmaat|gocardless/i.test(t.name)) byM[t.ym] = (byM[t.ym] || 0) + t.amt;
+    for(const t of B.tx[cl]) if(t.amt > 0 && !t.name) byM[t.ym] = (byM[t.ym] || 0) + t.amt;
+    const ph = {}; for(const [k, v] of Object.entries(clinicRev)){ const [c, ym] = k.split("|"); if(c === cl) ph[ym] = Object.values(v).reduce((a, b) => a + b, 0); }
+    return { clinic: cl, bank: byM, ph };
+  });
+  const v = { built: new Date().toISOString(), revMonths, plMonths: plMonthsList, plEnd, rows, company, recon,
+    ph: A.status, bank: B.status, factorNet: PL_NET_FACTOR, factorEmp: PL_EMP_CHARGES };
+  _plCache.t = Date.now(); _plCache.v = v; _plCache.p = null; return v;
+}
+function plGet(req){
+  if(req.query.refresh === "1"){ _plCache.t = 0; _plCache.v = null; }
+  if(_plCache.v && Date.now() - _plCache.t < 3600e3) return { v: _plCache.v };
+  if(!_plCache.p) _plCache.p = computeChiroPL().catch(e => { _plCache.err = e.message; _plCache.p = null; });
+  if(_plCache.err && !_plCache.v){ const e = _plCache.err; _plCache.err = null; return { err: e }; }
+  return { building: true, stale: _plCache.v };
+}
+
+app.get("/chiro-pl.json", gate, async (req, res) => {
+  const g = plGet(req);
+  if(g.err) return res.status(500).json({ ok: false, error: g.err });
+  if(g.building && !g.stale) return res.status(202).json({ ok: false, building: true });
+  res.json({ ok: true, ...(g.v || g.stale) });
+});
+app.get("/chiro-pl.csv", gate, async (req, res) => {
+  const g = plGet(req); const v = g.v || g.stale;
+  if(!v) return res.status(202).send("building, try again in a minute");
+  const cols = ["chiro", "month", "appts", "paid_visits", "revenue", "pay", "overhead", "profit", "pay_basis"];
+  const esc = (x) => x == null ? "" : (/[",\n]/.test(String(x)) ? '"' + String(x).replace(/"/g, '""') + '"' : String(x));
+  res.set("Content-Type", "text/csv; charset=utf-8").set("Content-Disposition", "attachment; filename=chiro-pl.csv")
+     .send([cols.join(",")].concat(v.rows.map(r => cols.map(c => esc(r[c])).join(","))).join("\n"));
+});
+app.get("/chiro-pl", gate, async (req, res) => { try{
+  const g = plGet(req);
+  if(g.err) return res.send("<!doctype html><meta charset=utf-8><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px'><h2>Couldn’t build the P&amp;L</h2><p style='color:#64748b'>" + String(g.err).replace(/</g, "&lt;") + "</p><a href='/chiro-pl' style='color:#2563EB'>try again</a></div>");
+  const v = g.v || g.stale;
+  if(!v) return res.send("<!doctype html><meta charset=utf-8><meta http-equiv='refresh' content='10'><div style='font-family:-apple-system,sans-serif;max-width:640px;margin:80px auto;padding:0 16px;color:#16202E'><h2>Building the P&amp;L…</h2><p style='color:#64748b'>Reading every appointment since January 2025 from all four PracticeHub accounts, and the four clinic bank files. The first build takes a few minutes; this page refreshes itself.</p></div>");
+  const data = JSON.stringify({ rows: v.rows, company: v.company, plEnd: v.plEnd }).replace(/</g, "\\u003c");
+  const st = PL_CLINICS.map(c => {
+    const p = v.ph[c] || {}, b = v.bank[c] || {};
+    return "<span style='margin-right:14px'><b>" + c + "</b> PracticeHub " + (p.ok ? "✓ " + (p.appts || 0).toLocaleString("en-US") + " appts" : "<span style='color:#b91c1c'>✗ " + String(p.error || "").replace(/</g, "&lt;").slice(0, 80) + "</span>") +
+      " · bank " + (b.ok ? "to " + b.latest : "<span style='color:#b91c1c'>✗ file missing</span>") + "</span>";
+  }).join("");
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chiro P&amp;L</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:1200px;margin:28px auto;padding:0 16px;color:#16202E;background:#F7F9FC}
+h1{font-size:22px;margin:0 0 4px}.sub{color:#64748b;font-size:13px;line-height:1.55;margin:0 0 14px;max-width:90ch}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}.card h2{font-size:15px;margin:0 0 4px}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th{font-size:11.5px;color:#64748b;font-weight:600;text-align:right;padding:6px 8px;border-bottom:1px solid #e5e7eb;white-space:nowrap}
+td{text-align:right;padding:6px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+tr.em td{font-weight:700}.neg{color:#b91c1c}.yr{display:flex;gap:8px;margin:0 0 14px}.yr button{padding:7px 14px;border-radius:8px;border:1px solid #e5e7eb;background:#fff;font-weight:600;cursor:pointer}
+.yr button.on{background:#16202E;color:#fff;border-color:#16202E}.st{font-size:12px;color:#64748b;margin:0 0 14px;line-height:1.8}</style></head><body>
+<h1>📊 Profit &amp; loss per chiropractor</h1>
+<p class="sub">Live from PracticeHub (appointments and what they're charged at) and the four clinic bank files. Revenue and appointments run to this month; the P&amp;L runs to <b>${v.plEnd || "—"}</b>, the last month every bank file fully covers. Your rows are before your management fee. Built ${v.built.slice(0, 16).replace("T", " ")} UTC · <a href="/chiro-pl?refresh=1">rebuild now</a> · <a href="/chiro-pl.csv">download CSV</a> · <a href="/">← home</a></p>
+<p class="st">${st}</p>
+<div class="yr" id="yr"></div>
+<div class="card"><h2>Company, month by month</h2><div class="tw"><table id="t-co"></table></div></div>
+<div class="card"><h2>What each chiro brought in</h2><p class="sub">What PracticeHub charges for their processed appointments, all clinics added together.</p><div class="tw"><table id="t-rev"></table></div></div>
+<div class="card"><h2>Processed appointments</h2><div class="tw"><table id="t-ap"></table></div></div>
+<div class="card"><h2>Profit or loss from each chiro's work</h2><p class="sub">Revenue minus their pay, minus their share of each clinic's costs (split by their share of that clinic's revenue that month).</p><div class="tw"><table id="t-pl"></table></div></div>
+<div class="card"><h2>Year summary</h2><div class="tw"><table id="t-yr"></table></div></div>
+<p class="sub">Pay: contractors are the bank payments (Lara through Evolve Chiropractic, Nick, Holly, Courtney, Annefloor through AB Chiropractie), booked to the month worked. Matthew is his contract brutto × ${v.factorEmp}; Myles is his estimated contract from April 2026; before that, Lina's payroll plus the furniture and moving truck, spread over those months by what he billed. CA wages are net × ${v.factorNet}. Set EMPLOYER_CHARGES and EMPLOYER_FACTOR in Render to Bamboek's exact figures. To update costs, replace the .940 files on Drive (same file, new version).</p>
+<script>
+var D=${data};var Y=String(new Date().getFullYear());
+var M=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function e(v){if(v==null||v==="")return"";v=Math.round(v);return(v<0?"\\u2212\\u20ac":"\\u20ac")+Math.abs(v).toLocaleString("en-US")}
+function n(v){return v==null?"":Number(v).toLocaleString("en-US")}
+function head(first){return"<tr><th>"+first+"</th>"+M.map(function(m){return"<th>"+m+"</th>"}).join("")+"<th>Total</th></tr>"}
+function mx(id,field,fmt,signed){var by={},ord=[];D.rows.forEach(function(r){if(r.month.slice(0,4)!==Y||r[field]==null)return;if(!by[r.chiro]){by[r.chiro]={};ord.push(r.chiro)}by[r.chiro][+r.month.slice(5)]=r[field]});
+ var h=head("Chiro");ord.forEach(function(c){var t=0;h+="<tr><td>"+c+"</td>";for(var i=1;i<=12;i++){var v=by[c][i];if(v!=null)t+=v;h+="<td class='"+(signed&&v<0?"neg":"")+"'>"+(v==null?"":fmt(v))+"</td>"}h+="<td class='"+(signed&&t<0?"neg":"")+"'><b>"+fmt(t)+"</b></td></tr>"});
+ document.getElementById(id).innerHTML=h}
+function co(){var L=[["Brought in","revenue",1],["Chiro pay","pay",-1],["Clinic overhead","overhead",-1],["Not charged to a chiro","unallocated",-1],["Profit before your fee","profit",1,1],["Your management fee","mgmt_fee",-1],["Profit after your fee","profit_after_fee",1,1]];
+ var rows=D.company.filter(function(r){return r.month.slice(0,4)===Y}),h=head("");
+ L.forEach(function(l){var t=0;h+="<tr class='"+(l[3]?"em":"")+"'><td>"+l[0]+"</td>";for(var i=1;i<=12;i++){var r=rows.filter(function(x){return +x.month.slice(5)===i})[0];if(!r){h+="<td></td>";continue}var v=r[l[1]]*l[2];t+=v;h+="<td class='"+(v<0?"neg":"")+"'>"+e(v)+"</td>"}h+="<td class='"+(t<0?"neg":"")+"'>"+e(t)+"</td></tr>"});
+ document.getElementById("t-co").innerHTML=h}
+function yr(){var by={},ord=[];D.rows.forEach(function(r){if(r.month.slice(0,4)!==Y)return;var s=by[r.chiro];if(!s){s=by[r.chiro]={a:0,r:0,p:0,o:0,pr:0,rp:0};ord.push(r.chiro)}s.a+=r.appts;s.r+=r.revenue;if(r.profit!=null){s.p+=r.pay;s.o+=r.overhead;s.pr+=r.profit;s.rp+=r.revenue}});
+ var h="<tr><th>Chiro</th><th>Appointments</th><th>Brought in</th><th>\\u20ac per appt</th><th>Their pay</th><th>Pay % of rev.</th><th>Clinic overhead</th><th>Profit / loss</th><th>Margin</th></tr>";
+ ord.forEach(function(c){var s=by[c];h+="<tr><td>"+c+"</td><td>"+n(s.a)+"</td><td>"+e(s.r)+"</td><td>"+(s.a?e(s.r/s.a):"")+"</td><td>"+e(s.p)+"</td><td>"+(s.rp?Math.round(100*s.p/s.rp)+"%":"")+"</td><td>"+e(s.o)+"</td><td class='"+(s.pr<0?"neg":"")+"'>"+e(s.pr)+"</td><td class='"+(s.pr<0?"neg":"")+"'>"+(s.rp?Math.round(100*s.pr/s.rp)+"%":"")+"</td></tr>"});
+ document.getElementById("t-yr").innerHTML=h}
+function draw(){co();mx("t-rev","revenue",e,false);mx("t-ap","appts",n,false);mx("t-pl","profit",e,true);yr();
+ Array.prototype.forEach.call(document.querySelectorAll("#yr button"),function(b){b.className=b.textContent.slice(0,4)===Y?"on":""})}
+var years=[...new Set(D.rows.map(function(r){return r.month.slice(0,4)}))].sort();if(years.indexOf(Y)<0)Y=years[years.length-1];
+years.forEach(function(y){var b=document.createElement("button");b.textContent=y;b.onclick=function(){Y=y;draw()};document.getElementById("yr").appendChild(b)});
+draw();
+</script></body></html>`);
+}catch(e){ res.status(500).send("chiro-pl error: " + e.message); } });
+// === CHIRO P&L END ===
 
 // Log it and keep serving every other page.
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e && e.message) || e));
